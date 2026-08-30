@@ -31,12 +31,14 @@
 | B6（前半） | search_gdc 首结果不对路就直接放弃整个 GDC 线 | 候选被证实存在时必须完成一次最小 formal 尝试 |
 | C2 / G4 | 发布后无界复核（gold1-r3 烧 79% token；gold4 试 58 调用撞同一堵墙 20 次才停） | **收敛界**：发布后核验预算 ≤N 调用；同一通道连续 2 次失败即止损并以 publication 事件为核验终点 |
 | E3 | 四个发现工具全激活零调用，向用户要本可自得的清单（PDB 子集/NCT） | **穷尽界**："请用户提供 X"前必须实际调用能拿到 X 的已激活工具并附证据 |
+| I1(模型半) | **可行方案不执行、上交待确认**：模型自己诊断出"拆三次独立 build"是正解且完全在其权限内（prepare/submit 自家工具），却写进"需要您的协助"第 3 条终止——因权限面 deny 经验（C1/D1）错误泛化为"改构建形态需请示"；63/240 轮即收尾 | **执行优先条款**：凡不超出已激活工具权限、不需要外部凭证的方案，进求助清单前必须本 run 内实际执行一次并报告成败；求助清单只放真正的用户输入（凭证/文件/口径决策） |
+| I4 | **单点探测失败即判整通道死**：gold7 对 `dbsnp.files.v1` 只试 1 个 rsID 空回就归因"provider 不可用"；无法区分"全灭 vs 该记录缺失"，也给框架立项报了过重的诊断 | 归因前 ≥2-3 个独立样本探测，终答按样本粒度报告失败率 |
 
 ### B 类：框架限制 → 需动代码
 
 | ID | 一句话病因 | 修复入口（立项建议） |
 |---|---|---|
-| B1 / D1 / D3 / E5 / G1 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道——gold4 实证烧 81% token 撞墙，gold2 因此把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ download→register 原子化 |
+| B1 / D1 / D3 / E5 / G1 / H4 / I3 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"（D3/H4/I3 三个入口实例）；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道（artifact_32hex/裸 digest/workspace 路径全不可达）——gold4 实证烧 81% token 撞墙，gold2 因此把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ 所有 download/acquire 工具落盘+登记同事务原子化 |
 | E1 / E2 / G2 | **变异/试验发现链缺失**：clinvar.files.v1 要逐条 VCV 但无 accession 发现工具；clinicaltrials provider 要具体 NCT 但无检索工具；`variant_evidence` 静态族无 live provider | 补 esearch 家族发现工具 + variant_evidence 接 live provider（同族合并） |
 | D2 / C4 | **表达能力缺口**：gene-level 映射在正式路线中不可表达（mapping_files 拒 workspace 路径、probe_long.v2 无 gene 维度）；无 SOFT 注释平台直接不可闭合 | gene_expression family 增加 crosswalk 支撑表（参照 gold10 taxon crosswalk 方案）+ mapping_files 支持 Core-acquired 绑定 |
 | B7 | **配置双轨**：PUT settings 只改显示层、registry active 记录才是执行层（r1 整场跑错模型计费）。硬编码 default 那半已修（`fix/no-hardcoded-model-defaults`） | 剩余：PUT/active 级联或冲突拒绝；GET /settings 回显 `resolveActiveConfig()` 真值 |
@@ -217,6 +219,7 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 | I1 | **Dynamic 单 projection 全表耦合（all-or-nothing）**：`studies` 表数据已全量核实（39,106+46,828+401,577 队列/平台/imputation），但同一 projection 内 `variant_genes` 空表把整个 build 拖死（`table 'variant_genes' must not be empty` 拒绝传导）→ studies 连带不能发布。模型提出"拆三次独立构建"的正确方案后**停手等确认**而非自行拆分重试（拆建完全在其权限内） | 框架（拓扑设计）+ 模型（穷尽界边缘） | submit seq476/609/652 序列；终答未完成项 1 | 框架：allow per-table partial publish 或明确提示"拆 build"路径；提示词：自己给出的可行方案应在本 run 内执行，不许上交待办 |
 | I2 | **`dbsnp.files.v1` Core 内返回空载荷**：rs6733839 的 refsnp JSON provider 未取回（工具面 `lookup_dbsnp` 历史正常，Core provider 形态空回）→ GRCh38 逐条核验与 gene 映射两项停在 staging | 框架（provider 缺陷） | 终答未完成项 2；attempt 记录 | 复现 `dbsnp.files.v1` egress/解析路径；与链 2 变异发现合并立项 |
 | I3 | **staging 资产命名空间割裂再现（D3/B1/E5 同族）**：`download_supplementary` 成功取回 27.6MB 官方 ZIP 落 `source_assets/`，`preview_core_asset` 报 "registered asset was not found"——下载即注册断链的**新实例**（这次连 execute 补登记的旁路都没触发，因为后续没再 execute 该载体） | 框架 | 终答未完成项 2 原话；asset_b2103d7d… 路径 | 链 1 修复时覆盖 `download_supplementary` 路径的登记原子性 |
+| I4 | **单点探测即判通道死**：`dbsnp.files.v1` 仅试 rs6733839 一个位点空回就归因"provider 不可用"（区分不了全灭 vs 单记录缺失），给框架报了偏重诊断 | 模型 | 终答未完成项 2 措辞 | 归因前 ≥2-3 个独立样本探测，按失败率报告 |
 
 - **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
 - 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
