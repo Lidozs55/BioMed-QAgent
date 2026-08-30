@@ -256,4 +256,24 @@ describe(".pi/skills manifest integrity", () => {
     expect(skill.body).toMatch(/cannot publish/i);
     expect(skill.body).toMatch(/exploratory/i);
   });
+
+  test("Gold6 closure guidance: frozen context is semantics, blockers replace workspace CSV", async () => {
+    const dataset = await readSkill("dataset-construction");
+    // The frozen execution context binds task semantics for a run but never
+    // grants publication authority or bypasses the protocol.
+    expect(dataset.body).toMatch(/frozen evaluation context/i);
+    expect(dataset.body).toMatch(/binding task semantics/i);
+    expect(dataset.body).toMatch(/never\s+publication\s+authority/i);
+    expect(dataset.body).toMatch(/current-run immutable Publication/i);
+
+    const chart = await readSkill("extract_chart_data_vlm");
+    expect(chart.body).toMatch(/frozen execution context/i);
+    expect(chart.body).toMatch(/never publication authority/i);
+    // Unavailable carrier, visual model, locator, or review must produce a
+    // structured blocker instead of a workspace CSV fallback.
+    expect(chart.body).toMatch(
+      /If a required carrier \(full-text XML, PDF, supplement\), the visual model, a\s+usable page locator, or the evidence-bound review is unavailable, return the\s+structured blocker/i,
+    );
+    expect(chart.body).toMatch(/workspace\s+CSV/);
+  });
 });

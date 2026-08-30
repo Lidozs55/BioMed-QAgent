@@ -43,6 +43,14 @@ Governed promotion:
 - Every VLM-derived chart point is estimated and pending; unclear axis or
   legend semantics yield an explicit unclear no-points series, never exact
   points.
+- The frozen execution context (system prompt) is binding task semantics for
+  which papers and tables are required, but it is never publication authority:
+  it does not replace registered carriers, review gates, or the Dataset Core
+  publication path.
+- If a required carrier (full-text XML, PDF, supplement), the visual model, a
+  usable page locator, or the evidence-bound review is unavailable, return the
+  structured blocker for that paper instead of falling back to a workspace
+  CSV.
 
 Exploratory staging:
 

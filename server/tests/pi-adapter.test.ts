@@ -94,10 +94,11 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /^\[Dataset completion contract\][\s\S]*\[Evidence integrity\][\s\S]*\[Trusted execution\][\s\S]*\[Dynamic publication mechanics\][\s\S]*\[Control and recovery\][\s\S]*$/,
     );
-    // 7_400 = former 7_000 budget plus the [Dynamic publication mechanics]
-    // section (~1.1k chars) that moves prepare/submit contract knowledge out of
-    // user prompts; still caps per-call system-prompt growth.
-    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(7_400);
+    // 8_000 = former 7_400 budget plus the [Dataset completion contract]
+    // execution-context line and the governed paper-chart route line in
+    // [Trusted execution] (Gold6 vision repair Task 8); still caps per-call
+    // system-prompt growth.
+    expect(PHASE1_SYSTEM_PROMPT.length).toBeLessThanOrEqual(8_000);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /completion is determined by task semantics, never by the requested file format/i,
     );
@@ -253,6 +254,28 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/preview_core_asset lists members/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never run python, shell, or workspace_exec extraction/i,
+    );
+  });
+
+  test("binds the frozen execution context as semantics and routes paper charts through governed extraction", () => {
+    // The frozen Gold6 execution context is task semantics, never a way to
+    // claim completion or publication authority.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Treat the frozen execution context \(system prompt\) as binding task semantics/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never as publication authority: only a current-run immutable Publication proves completion/i,
+    );
+    // Gold6-like work must go through registered carriers plus the governed
+    // extraction tool, with structured blockers instead of workspace CSV.
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /acquire registered full-text XML\/PDF\/supplement carriers through fixed Core acquisition/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /call extract_registered_paper_chart_evidence on task-owned asset ids/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV/i,
     );
   });
 });

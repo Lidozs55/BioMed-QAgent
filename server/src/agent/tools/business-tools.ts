@@ -83,6 +83,9 @@ export interface BusinessToolBundleContext {
   /** VLM config resolver, consulted per extraction call so settings changes
    * apply without restart; resolved keys stay in memory only. */
   resolveVlmConfig?: () => Promise<VlmConfig>;
+  /** Optional dedicated transport for governed visual-model calls (evaluation
+   * harnesses inject a fixture transport; default is the shared client). */
+  vlmHttpClient?: PublicHttpClient;
   /** Operational budgets snapshotted for this run. */
   limits?: RuntimeLimits;
   /** Warning surface (Python run_ctx.add_warning parity). */
@@ -306,7 +309,7 @@ export async function createBusinessToolBundle(
       ...shared,
       sourceAssetRegistry: context.sourceAssetRegistry,
       resolveVlmConfig: context.resolveVlmConfig,
-      httpClient: client,
+      httpClient: context.vlmHttpClient ?? client,
       approvalGate: context.approvalGate,
       hilGate: context.hilGate,
     }), "extract_chart_data_vlm");

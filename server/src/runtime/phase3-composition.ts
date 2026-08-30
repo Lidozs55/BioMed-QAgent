@@ -332,6 +332,13 @@ export interface Phase3RuntimeOptions {
    * apply without a restart. The resolved API key stays in memory only.
    */
   resolveVlmConfig?: () => Promise<VlmConfig>;
+  /**
+   * Transport for governed visual-model calls. Defaults to the shared policy
+   * client; composition hosts (evaluation harnesses) inject a fixture
+   * transport so the fake visual model stays behind the same URL policy
+   * without network access.
+   */
+  vlmHttpClient?: PublicHttpClient;
   /** Core-promoted browser parser registry shared by all task runs. */
   browserRecipeRegistry?: BrowserParserRecipeRegistry;
   /**
@@ -540,6 +547,7 @@ export async function createPhase3Runtime(
         hooks: toolHooks,
         runId: () => currentRunId,
         resolveVlmConfig: options.resolveVlmConfig,
+        vlmHttpClient: options.vlmHttpClient,
         limits,
         registrar,
         taskId,

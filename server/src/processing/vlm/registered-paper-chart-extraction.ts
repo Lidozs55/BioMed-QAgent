@@ -25,11 +25,13 @@ import { canonicalDigest } from "../../dataset/adapters/identity.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import {
   assertChartEvidenceCarrierRows,
+  assertChartEvidenceRows,
   type ChartConfidenceLevel,
   type ChartEvidenceRows,
   type ChartPaperInput,
   type ChartPointInput,
   type ChartReliabilityLevel,
+  type ChartReviewProvenance,
   type ChartSeriesInput,
   type ChartSourceInput,
   type ChartTransformProvenance,
@@ -161,6 +163,14 @@ export interface RegisteredPaperChartEvidenceResult {
     review?: RegisteredPaperChartCarrierReview;
   };
   warnings: string[];
+  /**
+   * Present only after the evidence-bound review resolved with accept or
+   * correct: the review-closed publication carrier (second content-addressed
+   * registration) whose rows pass the publication-stage review gate and which
+   * carries Core acquisition provenance for dynamic-route binding. The
+   * candidate carrier keeps its pending rows and is never bound for publication.
+   */
+  reviewed_carrier?: RegisteredPaperChartCarrierSummary;
 }
 
 /** Durable resolution of the one batched carrier review (T6). */
@@ -1203,6 +1213,59 @@ export async function extractRegisteredPaperChartEvidence(
     };
   }
 
+  // -- 10. Review-closed publication carrier (Gold6 T8). The candidate
+  // carrier keeps its pending rows and is never bound for publication; the
+  // deterministic review application derives a SECOND content-addressed
+  // carrier whose rows pass the publication-stage review gate, registered
+  // with Core acquisition provenance so the dynamic route can bind it as a
+  // task-owned formal source.
+  let reviewedCarrier: RegisteredPaperChartCarrierSummary | null = null;
+  if (carrierReview !== null && pointRows.length > 0) {
+    reviewedCarrier = await registerReviewedPublicationCarrier({
+      taskRoot: deps.taskRoot,
+      retrievedAt,
+      candidateCarrier: {
+        schema_version: "1.0",
+        carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
+        paper_id: paperId,
+        paper_id_namespace: paperNamespace,
+        extraction: {
+          implementation: REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
+          implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
+          prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+          model: { provider: providerHost, model: config.model, model_version: modelVersion },
+          source_assets: {
+            paper_xml_asset_id: xmlAssetId,
+            paper_pdf_asset_id: pdfAssetId,
+            supplementary_asset_ids: supplementIds,
+          },
+        },
+        paper_records: paperRecords,
+        experiment_records: experimentRecords,
+        activity_value_records: activityRecords,
+        supplementary_asset_records: supplementaryRecords,
+        chart_series: seriesRows,
+        chart_points: pointRows,
+        papers: chartRows.papers,
+        sources: chartRows.sources,
+      },
+      seriesRows,
+      pointRows,
+      derivedActivityIds,
+      review: {
+        request_id: carrierReview.request_id,
+        review_id: carrierReview.review_id,
+        action: carrierReview.action,
+        reviewer: carrierReview.reviewer,
+        reviewed_at: carrierReview.reviewed_at,
+        evidence_digest: carrierReview.evidence_digest,
+        reason: carrierReview.reason,
+        correction: carrierReview.correction,
+      },
+      sourceAssetRegistry: deps.sourceAssetRegistry,
+    });
+  }
+
   return {
     status: "ok",
     carrier: {
@@ -1233,5 +1296,189 @@ export async function extractRegisteredPaperChartEvidence(
       ...(carrierReview === null ? {} : { review: carrierReview }),
     },
     warnings: warnings.slice(0, MAX_WARNINGS),
+    ...(reviewedCarrier === null ? {} : { reviewed_carrier: reviewedCarrier }),
+  };
+}
+
+/**
+ * Deterministic evidence-bound review application (Gold6 T8): accept closes
+ * every estimate with review provenance, correct preserves the original
+ * values and appends a ``human_correction`` transform step, and the resulting
+ * rows must pass the strict publication-stage chart gate before the reviewed
+ * carrier is registered. The reviewed carrier carries Core acquisition
+ * provenance (provider ``registered_paper_chart_extraction.v1``) so a dynamic
+ * submission can bind it exactly like any other Core-acquired carrier.
+ */
+async function registerReviewedPublicationCarrier(options: {
+  taskRoot: string;
+  retrievedAt: string;
+  candidateCarrier: Record<string, unknown>;
+  seriesRows: ChartSeriesInput[];
+  pointRows: ChartPointInput[];
+  derivedActivityIds: ReadonlySet<string>;
+  review: RegisteredPaperChartCarrierReview;
+  sourceAssetRegistry: SourceAssetRegistry;
+}): Promise<RegisteredPaperChartCarrierSummary> {
+  const { review } = options;
+  if (review.reviewer !== "user") {
+    fail(
+      `carrier review ${review.review_id} was resolved by '${review.reviewer}'; ` +
+        "publication closure requires a human reviewer",
+    );
+  }
+  const reviewProvenance: ChartReviewProvenance = {
+    review_id: review.review_id,
+    status: review.action === "accept" ? "accepted" : "corrected",
+    reviewer: "user",
+    reviewed_at: review.reviewed_at,
+    evidence_digest: review.evidence_digest,
+    reason: review.reason !== null && review.reason.trim() !== ""
+      ? review.reason
+      : `estimates ${review.action === "accept" ? "accepted" : "corrected"} by human review`,
+  };
+  interface CorrectionEntry {
+    x_value?: string | number;
+    y_value?: string | number;
+  }
+  let corrections: Record<string, CorrectionEntry> | null = null;
+  if (review.action === "correct") {
+    const root = review.correction !== null && typeof review.correction === "object" && !Array.isArray(review.correction)
+      ? review.correction as Record<string, JsonValue>
+      : null;
+    const points = root === null || root.points === null || typeof root.points !== "object" || Array.isArray(root.points)
+      ? null
+      : root.points as Record<string, JsonValue>;
+    if (points === null) {
+      fail("correct review requires a structured correction.points object");
+    }
+    corrections = {};
+    for (const [pointId, entry] of Object.entries(points)) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+        fail(`correction for ${pointId} must be an object with optional x_value/y_value`);
+      }
+      const item = entry as Record<string, JsonValue>;
+      for (const field of ["x_value", "y_value"] as const) {
+        if (item[field] !== undefined && typeof item[field] !== "string" && typeof item[field] !== "number") {
+          fail(`correction ${field} for ${pointId} must be a numeric token`);
+        }
+      }
+      corrections[pointId] = {
+        ...(item.x_value === undefined ? {} : { x_value: item.x_value as string | number }),
+        ...(item.y_value === undefined ? {} : { y_value: item.y_value as string | number }),
+      };
+    }
+  }
+
+  const reviewedPoints: ChartPointInput[] = options.pointRows.map((point) => {
+    const provenance: ChartTransformProvenance = {
+      ...point.transform_provenance,
+      review: reviewProvenance,
+    };
+    if (review.action === "accept") {
+      return {
+        ...point,
+        review_status: "accepted" as const,
+        review_id: review.review_id,
+        transform_provenance: provenance,
+      };
+    }
+    const entry = corrections![point.point_id];
+    if (entry === undefined) {
+      fail(`correct review is missing a correction entry for ${point.point_id}`);
+    }
+    const originalX = point.x_value;
+    const originalY = point.y_value;
+    const correctedX = entry.x_value === undefined ? originalX : String(entry.x_value);
+    const correctedY = entry.y_value === undefined ? originalY : String(entry.y_value);
+    if (!Number.isFinite(Number(correctedX)) || !Number.isFinite(Number(correctedY))) {
+      fail(`correction for ${point.point_id} must keep finite numeric coordinates`);
+    }
+    const correctedFields = [
+      ...(correctedX !== originalX ? ["x_value"] : []),
+      ...(correctedY !== originalY ? ["y_value"] : []),
+    ];
+    const correctionStep: ChartTransformStep = {
+      step_id: `human_correction_${point.point_id}`,
+      operation: "human_correction",
+      implementation: "durable-hil-review",
+      implementation_version: "1.0.0",
+      parameters: { fields: correctedFields },
+      input_digest: sha256(Buffer.from(JSON.stringify({ x: originalX, y: originalY }), "utf8")),
+      output_digest: sha256(Buffer.from(JSON.stringify({ x: correctedX, y: correctedY }), "utf8")),
+    };
+    return {
+      ...point,
+      x_value: correctedX,
+      y_value: correctedY,
+      original_x_value: originalX,
+      original_y_value: originalY,
+      review_status: "corrected" as const,
+      review_id: review.review_id,
+      transform_provenance: { ...provenance, steps: [...provenance.steps, correctionStep] },
+    };
+  });
+
+  const reviewedRows: ChartEvidenceRows = {
+    chart_series: options.seriesRows,
+    chart_points: reviewedPoints,
+    papers: (options.candidateCarrier.papers as ChartPaperInput[]),
+    sources: (options.candidateCarrier.sources as ChartSourceInput[]),
+  };
+  try {
+    assertChartEvidenceRows(reviewedRows, options.derivedActivityIds);
+  } catch (error) {
+    throw new ChartExtractionError(
+      `reviewed publication rows rejected: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const reviewedCarrier = {
+    ...options.candidateCarrier,
+    chart_points: reviewedPoints,
+  };
+  const reviewedBytes = Buffer.from(JSON.stringify(reviewedCarrier), "utf8");
+  const reviewedDigest = sha256(reviewedBytes);
+  const reviewedRelativePath = `source_assets/paper_chart_evidence/reviewed_${reviewedDigest.slice(0, 12)}.json`;
+  const reviewedFinalPath = path.join(options.taskRoot, ...reviewedRelativePath.split("/"));
+  await mkdir(path.dirname(reviewedFinalPath), { recursive: true });
+  const reviewedTempPath = `${reviewedFinalPath}.${process.pid}.tmp`;
+  await writeFile(reviewedTempPath, reviewedBytes);
+  await rename(reviewedTempPath, reviewedFinalPath);
+  const reviewedReceipt = await options.sourceAssetRegistry.register({
+    sourceId: `paper_chart_evidence_reviewed_${reviewedDigest.slice(0, 12)}`,
+    relativePath: reviewedRelativePath,
+    role: "carrier",
+    mediaType: "application/json",
+  });
+  // Dynamic-route binding resolves carriers through the Core acquisition
+  // provenance ledger; the governed extraction records its own deterministic
+  // identity so the review-closed carrier is a first-class formal source.
+  const implementationDigest = sha256(Buffer.from(
+    `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+    "utf8",
+  ));
+  const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
+    carrier_asset_id: reviewedReceipt.asset_ref.asset_id,
+    review_id: review.review_id,
+    review_action: review.action,
+  }), "utf8"));
+  await options.sourceAssetRegistry.registerCoreAcquisitionProvenance(reviewedReceipt, {
+    provider_id: "registered_paper_chart_extraction.v1",
+    implementation_digest: implementationDigest,
+    request_identity_digest: requestIdentityDigest,
+    canonical_accession: typeof options.candidateCarrier.paper_id === "string"
+      ? options.candidateCarrier.paper_id
+      : null,
+    provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+  });
+  return {
+    asset_id: reviewedReceipt.asset_ref.asset_id,
+    receipt_id: reviewedReceipt.receipt_id,
+    sha256: reviewedReceipt.sha256,
+    size_bytes: reviewedReceipt.size_bytes,
+    media_type: reviewedReceipt.media_type,
+    relative_path: reviewedReceipt.relative_path,
+    role: reviewedReceipt.asset_ref.role,
+    registered_at: options.retrievedAt,
   };
 }
