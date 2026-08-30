@@ -55,6 +55,8 @@ export interface Http {
   request(url: string, init?: RequestInit): Promise<unknown>;
   /** Fetch that only checks the HTTP status (no body parsing). */
   requestVoid(url: string, init?: RequestInit): Promise<void>;
+  /** Fetch + error-mapped raw text body (task-file CSV downloads). */
+  requestText(url: string, init?: RequestInit): Promise<string>;
   /** Fetch + parse + runtime-validate with an endpoint parser. */
   requestJson<T>(url: string, init: RequestInit | undefined, parse: (body: unknown) => T): Promise<T>;
   /** POST with one retry for ambiguous network failures (admission path). */
@@ -95,6 +97,12 @@ export function createHttp(options: HttpOptions = {}): Http {
     if (!response.ok) throw new APIError(response.status, await errorDetail(response));
   };
 
+  const requestText = async (url: string, init?: RequestInit): Promise<string> => {
+    const response = await fetcher(url, init);
+    if (!response.ok) throw new APIError(response.status, await errorDetail(response));
+    return response.text();
+  };
+
   const postAdmission = async (url: string, body: string): Promise<unknown> => {
     const init: RequestInit = { method: "POST", headers: { "Content-Type": "application/json" }, body };
     let response: Response;
@@ -118,6 +126,7 @@ export function createHttp(options: HttpOptions = {}): Http {
     },
     request,
     requestVoid,
+    requestText,
     requestJson: <T,>(url: string, init: RequestInit | undefined, parse: (body: unknown) => T): Promise<T> =>
       request(url, init).then((body) => parse(body)),
     postAdmission,

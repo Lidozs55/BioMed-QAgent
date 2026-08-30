@@ -232,6 +232,7 @@ describe("BackgroundTaskNotifications", () => {
       deleteTask: vi.fn(),
       fetchArtifacts: vi.fn().mockResolvedValue([]),
       getArtifactUrl: vi.fn(),
+      fetchTaskFileText: vi.fn(),
       getCacheExportUrl: vi.fn(),
       fetchCacheDatasets: vi.fn().mockResolvedValue({ items: [] }),
       deleteCacheDataset: vi.fn().mockResolvedValue(undefined),

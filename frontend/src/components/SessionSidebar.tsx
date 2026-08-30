@@ -12,6 +12,7 @@ import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { TASK_STATUS_META } from "@/components/taskStatusMeta";
 import { taskOutcome } from "@/components/taskOutcome";
+import { SidebarChartPanel } from "@/components/SidebarChartPanel";
 import {
   Alert,
   AlertDescription,
@@ -357,6 +358,7 @@ export function SessionSidebar({
               )}
             </SidebarGroupContent>
           </SidebarGroup>
+          <SidebarChartPanel />
         </SidebarContent>
 
         <SidebarFooter>

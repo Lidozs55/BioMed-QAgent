@@ -47,6 +47,7 @@ import {
 } from "./task-repository.js";
 
 import { DurableHILStore, HILConflictError } from "./hil-store.js";
+import { readTaskTextFile } from "./task-file.js";
 import type { HILGatePreReview } from "./hil-pre-review.js";
 import { claimTasksRootExclusive } from "./host-lease.js";
 
@@ -1474,6 +1475,31 @@ export async function createDurableAgentRuntime(
           }
         });
         resolved.stream.pipe(response);
+        return;
+      }
+      const taskFile = /^\/api\/v1\/tasks\/([^/]+)\/file$/.exec(url.pathname);
+      if (request.method === "GET" && taskFile !== null) {
+        const taskId = decodeURIComponent(taskFile[1] ?? "");
+        if (await repository.getSnapshot(taskId) === null) {
+          sendJson(response, 404, { detail: "Task not found" });
+          return;
+        }
+        const relativePath = url.searchParams.get("path") ?? "";
+        const file = await readTaskTextFile(
+          workspaceManager.getPath(taskId),
+          relativePath,
+        );
+        if (!file.ok) {
+          const status =
+            file.code === "invalid_path" ? 400 : file.code === "too_large" ? 413 : 404;
+          sendJson(response, status, { detail: file.code });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": file.mediaType,
+          "content-length": String(Buffer.byteLength(file.content, "utf8")),
+        });
+        response.end(file.content);
         return;
       }
       const runs = /^\/api\/v1\/tasks\/([^/]+)\/runs$/.exec(url.pathname);
