@@ -20,6 +20,14 @@ WebSocket runtime；`<task_id>/events.jsonl` 是事实源，纯 reducer 重建 T
 重启时仍 active 的普通 Run 被确定性投影为 `run_interrupted`；存在未解决 durable
 HIL 的 `awaiting_user_input` Run 保持暂停，等待恢复协议继续。
 
+`GET /api/v1/tasks` 的列表路径使用按 stat 键失效的任务摘要缓存：以
+`state/task.json` 与 `events.jsonl` 的 mtime+size 组成失效键，未变化任务的
+TaskSummary 直接读取 `state/summary.json`（派生缓存，重启后仍有效）或内存副本，
+不解析事件日志；只有文件变化的任务（通常是运行中的那个）才重新 reduce 全部
+事件。修改 `task-reducer.ts` 的 TaskSummary 派生逻辑或 DTO 字段时，必须同步
+递增 `task-repository.ts` 的 `SUMMARY_CACHE_REDUCER_REVISION`，否则旧
+sidecar 会带着旧字段继续被当作有效缓存服务。
+
 `RunStatus` 生命周期：
 
 ```text
