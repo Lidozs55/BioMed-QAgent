@@ -14,6 +14,7 @@ export const EXTENDED_PROVIDER_IDS = Object.freeze({
   openfda: "openfda.files.v1",
   gwasCatalog: "gwas-catalog.associations.v1",
   europePmcSupplementary: "europepmc.supplementary.v1",
+  europePmcPdf: "europepmc.pdf.v1",
 });
 
 const IMPLEMENTATION_DIGESTS: Readonly<Record<keyof typeof EXTENDED_PROVIDER_IDS, string>> = Object.freeze({
@@ -24,11 +25,13 @@ const IMPLEMENTATION_DIGESTS: Readonly<Record<keyof typeof EXTENDED_PROVIDER_IDS
   openfda: "209eb79c902cafaa40295ee64da023599ca15e2dc26494b00909ab7671a4b4e1",
   gwasCatalog: "04c46c50d13b03b6920d75b8122370141c6a748b3deeed605991cf324c3741e0",
   europePmcSupplementary: "f87e4e571724fdcb8b22c52aac97164f195a7ad8ff64cfd760dd930e5e60134d",
+  europePmcPdf: "efccecd0d26cbf932f06c43228c90fc21fd18f01d98264add7d4f741a148ed17",
 });
 
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
 const MAX_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_DATASET_BYTES = 4096 * 1024 * 1024;
+const MAX_PDF_BYTES = 128 * 1024 * 1024;
 
 type Parameters = {
   source: string;
@@ -204,6 +207,20 @@ const DEFINITIONS: readonly Definition[] = Object.freeze([
         },
       },
     }),
+  },
+  {
+    key: "europePmcPdf", source: "europepmc_pdf", database: "pubmed",
+    identifierName: "PMCID", normalize: (value) => value.toUpperCase(), validate: (value) => /^PMC[1-9][0-9]*$/.test(value),
+    plan: (identifier) => {
+      const url = new URL("https://europepmc.org/api/getPdf");
+      url.searchParams.set("pmcid", identifier);
+      return {
+        url: url.toString(), title: `Europe PMC full-text PDF ${identifier}`, filename: `${identifier}.pdf`,
+        dataLevel: "repository_processed", maxBytes: MAX_PDF_BYTES,
+        expectedMediaTypes: new Set(["application/pdf"]), accept: "application/pdf",
+        allowedHosts: new Set(["europepmc.org"]), assetRole: "carrier",
+      };
+    },
   },
 ]);
 

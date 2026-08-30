@@ -16,6 +16,7 @@
  * output is the diagnostic value.
  */
 
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -176,5 +177,34 @@ describeLive("live:provider-smoke (supplementary xlsx extraction)", () => {
       csvTexts.push(Buffer.concat(chunks).toString("utf-8"));
     }
     expect(csvTexts.some((text) => text.includes("Supplementary Table"))).toBe(true);
+  });
+});
+
+describeLive("live:provider-smoke (Europe PMC PDF carrier)", () => {
+  it("registers the official full-text PDF with a %PDF- magic and intact receipt", { timeout: 180_000 }, async () => {
+    const fixture = await runtime(
+      (await import("../../src/dataset/acquisition/extended-providers.js")).createExtendedAcquisitionProviders()
+        .filter((provider) => provider.providerId === "europepmc.pdf.v1"),
+    );
+    const result = await fixture.runtime.acquire(request("europepmc.pdf.v1", "europepmc_pdf", "PMC9005347"));
+    expect(result.sourceAsset.role).toBe("carrier");
+    expect(result.attempts.at(-1)?.status).toBe("succeeded");
+    expect(result.sourceAsset.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+
+    // Receipt verification against the downloaded bytes; everything stays in
+    // the task temp dir removed by afterAll — nothing is stored in git.
+    const registry = new SourceAssetRegistry("task_provider_smoke", fixture.root);
+    const resolved = await registry.resolveCarrier(result.sourceAsset.asset_id);
+    const receipt = resolved.registration_receipt;
+    expect(receipt.media_type).toBe("application/pdf");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of resolved.content) chunks.push(Buffer.from(chunk));
+    const pdf = Buffer.concat(chunks);
+    expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(pdf.length).toBe(receipt.size_bytes);
+    const sha256 = createHash("sha256").update(pdf).digest("hex");
+    expect(receipt.sha256).toBe(sha256);
+    expect(result.sourceAsset.asset_id).toBe(`asset_${sha256}`);
   });
 });
