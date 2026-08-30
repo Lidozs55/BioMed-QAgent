@@ -12,6 +12,13 @@
 
 ## 数据族与 Gold 评测
 
+### Gold6 live 仍未形成正式 publication
+
+- **状态：** 2026-08-30 修复轮已按用户指令终止；所有监督 run 均为 `failed_or_cancelled` 或 `blocked_no_publication`。
+- **已修复：** 六表 profile/E2E、dynamic source entries、receipt-only submit、运行时 locator admission、SourceLocator wire 指导，以及已知 429/503/流中断恢复。
+- **仍阻塞：** provider 长时间 429/503、prepare receipt 非重启持久、VLM 轴估算假精度、SourceLocator live exact-match 尚未成功、credential HIL 重复、turn 预算与来源重复探索、closure `observed_commit=null`。
+- **证据与下一步：** 见 [`reports/2026-08-30-gold6-live-analysis.md`](reports/2026-08-30-gold6-live-analysis.md)。在真实 `publication_acceptance`、B3、Manifest 和 Artifact API hash 闭环前不得标记 Gold6 通过。
+
 ### gold7 trait association 请求没有形成正式 publication
 
 - **状态：** 2026-08-25 在 fresh run `task_ts_65211501-9abc-42c4-8f3b-178e104b8dc2` 再次复现，仍待 dynamic scaffold、supplementary extraction carrier 与终态门闭环。
