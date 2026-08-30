@@ -108,7 +108,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 2. **解析（Parse）**：按来源 Adapter 解析为 `DataBatch`；
 3. **归一化（Canonicalize / Normalize）**：字段映射、实体与单位规范化；字符串相似度
    只能产生 `proposed` 候选，必须经 Adapter / Schema Registry / 可信元数据 / 人工
-   批准才进入正式合并（ADR §字段映射）；
+   批准才进入正式合并（ADR §字段映射）。Agent 可用 `preflight_cleaning_rules` 获取
+   Core 重排的候选与注册规则预检；`inspect_source_coverage` 可消费已发布的
+   `source_coverage_report.json`，据声明绑定范围内的失败项决定补源，不能宣称全网查全；
 4. **兼容性门禁（Compatibility Gate）**：family / row granularity / key / measurement
    兼容，才允许合并；
 5. **整合（Integrate）**：确定性合并，含磁盘化去重（`node:sqlite` temp table + 资源上限）；

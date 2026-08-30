@@ -211,8 +211,8 @@ describe("Dataset Core HIL policy", () => {
     });
   });
 
-  it("fails closed when a registered unit formula is not a safe linear rule", async () => {
-    const profile = parseNormalizationProfile({
+  it("fails closed when a registered unit formula is not a safe linear rule", () => {
+    expect(() => parseNormalizationProfile({
       ...expressionNormalizationV1(),
       unit_conversions: [{
         rule_id: "unsafe",
@@ -221,13 +221,7 @@ describe("Dataset Core HIL policy", () => {
         formula: "model(value)",
         evidence: "Bad fixture",
       }],
-    });
-    await expect(reviewBatchForHIL({
-      batch: batch({ unit: "mystery" }),
-      profile,
-      gate: null,
-      requirementId: "build_1",
-    })).rejects.toThrow(/safe linear formula/);
+    })).toThrow(/safe finite linear formula/);
   });
 
   it("rejects arbitrary or non-finite unit correction formulas", async () => {

@@ -266,6 +266,12 @@ ID、一对一关系。相似度规则足以将看似相似、实际不同的字
 字段映射在 Schema Registry 中以状态机管理：`proposed` → `approved` /
 `rejected`。批准来源记录在案，便于审计与回滚。
 
+Agent 可通过 `preflight_cleaning_rules` 提交单位/字段映射提议；Core 会重新按
+注册 NormalizationProfile/Schema Registry 校验并稳定排序候选。只有唯一且命中
+Core 注册规则的项可标为 `accepted_registered_rule`；相似度-only、并列或近似并列
+候选仍保持 proposed 并进入 HIL。预检结果不是 execute 收据，未接入正式 execute
+的 proposal 不能改变 canonicalizer 行为。
+
 > 决策依据：ADR-009、ADR §21.6（踩坑）。
 
 ---
@@ -293,6 +299,11 @@ Core 在发布装配时确定性生成 `source_coverage_report.json`，以 `audi
 - 报告是审计证据，不是逐行 provenance，也不是主数据；
 - summary 由解析器强制与条目一致（汇总撒谎即拒绝）；
 - discovery 台账为审计输入，不参与构建的 authoritative identity digest。
+
+**Agent 消费与补源**：发布后的 Agent 可调用 `inspect_source_coverage`，读取经
+manifest/artifact SHA-256 校验的 Core 报告；只能依据声明绑定范围内的 failed /
+not_attempted 项决定独立补源，不能把报告表述为全网查全。Dynamic Family 当前
+没有规格绑定的 coverage artifact，必须显式报告 coverage unavailable。
 
 **路线覆盖与恢复**：V1 静态路线经 `validate_profile` 的 `auditPaths` 进入清单；
 V2 注册式路线在发布条目中追加；动态 Family 路线的发布层目前没有规格绑定与
