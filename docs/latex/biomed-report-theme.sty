@@ -343,19 +343,33 @@
   \thispagestyle{empty}
   \setlength{\parindent}{0pt}
 
-  \vspace*{8mm}
+  % 顶部横幅上移：左侧文件标题，右侧只留赛题方向与日期
+  % （团队/学校按要求移除，但仍保留在 metadata 中供 PDF 属性使用）
+  \vspace*{-12mm}
 
-  {\sffamily\Large\bfseries\color{ReportBlue}
-    阿里云赛事作品报告\par
-  }
+  \begin{minipage}[b]{0.58\textwidth}
+    {\sffamily\Large\bfseries\color{ReportBlue}
+      2026 挑战杯“揭榜挂帅”阿里云榜题\par
+    }
+    {\sffamily\large\bfseries\color{ReportBlue}
+      基于国产开源大模型的 AI Scientist 的研发与应用\par
+    }
+  \end{minipage}%
+  \hfill
+  \begin{minipage}[b]{0.38\textwidth}
+    {\raggedleft
+      {\sffamily\bfseries\color{ReportDark}赛题方向}\quad\ReportTrack\\[1.5mm]
+      {\sffamily\bfseries\color{ReportDark}日期}\quad\ReportDate\par
+    }
+  \end{minipage}
 
-  \vspace{4mm}
+  \vspace{3mm}
 
   {\color{ReportBlue}
     \rule{\textwidth}{1.2pt}\par
   }
 
-  \vspace{10mm}
+  \vspace{5mm}
 
   {\sffamily\bfseries
     \fontsize{24pt}{29pt}\selectfont
@@ -364,42 +378,29 @@
   }
 
   \ifstrempty{\ReportSubtitle}{}{%
-    \vspace{4mm}
+    \vspace{3mm}
 
     {\sffamily\large\color{ReportGray}
       \ReportSubtitle\par
     }
   }
 
-  \vspace{11mm}
-
-  {%
-    \renewcommand{\arraystretch}{1.15}
-
-    \begin{tabularx}
-      {\textwidth}
-      {@{}>{\bfseries\sffamily}p{28mm}X@{}}
-
-      赛题方向 & \ReportTrack  \\
-      团队名称 & \ReportTeam   \\
-      学校     & \ReportSchool \\
-      日期     & \ReportDate   \\
-
-    \end{tabularx}
-  }
+  \vspace{8mm}
 
   % 参赛信息表（作品名称/选题/简介/技术说明/链接）：
   % 原为“参赛作品简介”章，2026-08 应要求移到封面填充下部空白；
   % 内容单独成文件，本模板只负责装配。
-  \vspace{10mm}
-
   \input{chapters/ch00-submission-table}
 
-  \vfill
+  \vspace{8mm}
 
-  {\color{ReportBlue}
-    \rule{\textwidth}{1.2pt}\par
-  }
+  % 报名表扫描件（正式提交材料，figures/ 下生成物）；
+  % 不设收尾横线，避免内容溢出时多出一张只有横线的空尾页。
+  \begin{center}
+    \includegraphics[width=0.92\textwidth]{figures/registration.png}
+  \end{center}
+
+  \vfill
 
   \end{titlepage}
 }
