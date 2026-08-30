@@ -45,6 +45,10 @@
 | B6（后半） | search_gdc 查询 "breast cancer TCGA" 首结果 TCGA-LUAD | provider 查询→project 映射排序修复 |
 | H1 | **ChEMBL 发现→绑定断链**：`search_chembl` 拿到的真 CHEMBL ID 喂不进 `chembl.files.v1` 固定 provider 的 validity 门（~11 种参数形态全拒），gold5 题面 activity 数据结构性进不来 | 复现并修复 provider accession 校验门，接受自家发现工具的输出形态（链 2 合并立项） |
 | H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
+| I1 | **Dynamic 单 projection 全表耦合**：一张空表（variant_genes）拖死同 build 内数据已全部核实的 studies 表，gold7 因此 2/3 交付 | per-table partial publish，或拒绝信息直接指路"拆独立 build"；另：模型给出拆建方案后停手等确认——穷尽界提示词一并覆盖 |
+| I2 | `dbsnp.files.v1` Core provider 返回空载荷（工具面 lookup_dbsnp 正常）→ GRCh38 坐标核验进不了正式链 | 复现 provider egress/解析；并入链 2 变异发现立项 |
+| I3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"（链 1 断点的又一入口） | 链 1 修复时覆盖 download_supplementary 登记原子性 |
+| — | **wire 缺陷（gold7 新证）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代——stale-build 之外存在 stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容 |
 | — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
 | H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
@@ -195,7 +199,29 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - **正样本（显著成长）**：发布后自检仅 9 轮即止损——逐一试探 4 种 ID 命名空间、**主动修正自己上一条的 overstatement**（"Correction: … 那言过其实了"）、明确"没有读取路径我就不声称读过"；突变体处理给出专业判断（L858R/T790M 应为 assay 的 variant_context 列而非独立 target ID，并请用户确认口径）；候选药物 CID/InChIKey 全部真值留档不冒充已发布。
 
-## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
+## gold7 @ qwen3.8-flash（2026-08-30，main@9e90eb252089，task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1）
+
+> 题面依据 gold789-case-chapter §5.2 重建（无 prompts 文件）。历史死点（"GWAS family/Core provider 缺失，只能 workspace staging"）本次被**动态 Family 路线突破**：`pub_ad_gwas_risk_map_e76103f1b9751ace`（risk_loci 89 行正式发表，逐行 association_id+source_url 可溯）。
+> **本 run 同时是 H3 修正证据**：receipt-only submit 在全新构建下仍报 `Expected object at $projection`×3（seq294/314/388，模型入参顶层确为 `{schema_version, preflight_receipt}`），之后同型错误自行消失、进入实质迭代——**stale-build 不是该错误的唯一成因，wire 存在真缺陷**（疑与 stored-submission 重解析或 a98a151a proposal DTO 变更有关，待复现）。
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前（16×prepare+18×submit 迭代） | 56 | 425,951 | 90,496 | 6,031,360 | 6,547,807 | 1247s |
+> | 发布后 | 7 | 7,865 | 1,535 | 1,383,424 | 1,392,824 | 151s |
+> | 合计 | 63 | 433,816 | **92,031** | 7,414,784 | 7,940,631 | 1445s |
+>
+> 峰值上下文 200,214/256k（贴线未压缩）；0 压缩/停审/HIL；navigate_page×3+download_from_page×2 **浏览器通道首战全通**（今日 `npx playwright install chromium` 生效）。**output 92k 为七案最高——动态构建的结构性成本**：transform 源码整段重写 ×16+。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| I1 | **Dynamic 单 projection 全表耦合（all-or-nothing）**：`studies` 表数据已全量核实（39,106+46,828+401,577 队列/平台/imputation），但同一 projection 内 `variant_genes` 空表把整个 build 拖死（`table 'variant_genes' must not be empty` 拒绝传导）→ studies 连带不能发布。模型提出"拆三次独立构建"的正确方案后**停手等确认**而非自行拆分重试（拆建完全在其权限内） | 框架（拓扑设计）+ 模型（穷尽界边缘） | submit seq476/609/652 序列；终答未完成项 1 | 框架：allow per-table partial publish 或明确提示"拆 build"路径；提示词：自己给出的可行方案应在本 run 内执行，不许上交待办 |
+| I2 | **`dbsnp.files.v1` Core 内返回空载荷**：rs6733839 的 refsnp JSON provider 未取回（工具面 `lookup_dbsnp` 历史正常，Core provider 形态空回）→ GRCh38 逐条核验与 gene 映射两项停在 staging | 框架（provider 缺陷） | 终答未完成项 2；attempt 记录 | 复现 `dbsnp.files.v1` egress/解析路径；与链 2 变异发现合并立项 |
+| I3 | **staging 资产命名空间割裂再现（D3/B1/E5 同族）**：`download_supplementary` 成功取回 27.6MB 官方 ZIP 落 `source_assets/`，`preview_core_asset` 报 "registered asset was not found"——下载即注册断链的**新实例**（这次连 execute 补登记的旁路都没触发，因为后续没再 execute 该载体） | 框架 | 终答未完成项 2 原话；asset_b2103d7d… 路径 | 链 1 修复时覆盖 `download_supplementary` 路径的登记原子性 |
+
+- **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
+- 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
+
+## gold8–gold10 @ 复跑（待组员执行）
 
 
 
