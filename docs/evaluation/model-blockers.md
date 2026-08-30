@@ -13,7 +13,41 @@
 | - | ---- | ---- | ---- | -------------------- |
 ```
 
-归类：**prompt**（提示词可解）/ **产品**（需改代码或适配器）/ **接口陷阱**（工具行为反直觉）。
+归类：**模型面**（知识不足/奇怪想法/工具描述不清可提示词解）/ **框架面**（框架限制死需动代码）/ 源边界（非损失）。
+
+## 修复面分流（两分类总表，以此为准）
+
+各 run 表格里历史标注的"prompt/产品/接口陷阱"归类保留作记录，分流修复时**以本节为准**。
+
+### A 类：模型认知 & 工具描述不清 → 提示词可解
+
+| ID | 一句话病因 | 提示词切入点 |
+|---|---|---|
+| B2 / E4 | 动态路由零调用（想象复杂度/包装成"范围决策"） | **穷尽界**：blocked/上交前必须实际调用一次 dynamic preflight 并附结果 |
+| B3 | 幻觉外部时限（预算 240 只用 35 就"等用户指示"） | 提示词写明 turn 预算事实；禁止以"时间限制"作放弃理由 |
+| B4 / C5 / D5 | 同路重复撞墙；检索变体空转；不扩池就断言"唯一候选" | 同一约束重试 ≤2 次止损；断言池枯竭前 ≥N 个不同检索式 |
+| B5 | 未 activate 直接调用，吃 Tool-not-found（工具懒加载规则未学会） | 教学 skill→tool 映射与先激活后调用；工具报错文案内联激活用法 |
+| D4 | `scaffold_dataset_execution_spec` 空参调用 | 教学 schema 必填约束（工具描述不清属此面） |
+| B6（前半） | search_gdc 首结果不对路就直接放弃整个 GDC 线 | 候选被证实存在时必须完成一次最小 formal 尝试 |
+| C2 / G4 | 发布后无界复核（gold1-r3 烧 79% token；gold4 试 58 调用撞同一堵墙 20 次才停） | **收敛界**：发布后核验预算 ≤N 调用；同一通道连续 2 次失败即止损并以 publication 事件为核验终点 |
+| E3 | 四个发现工具全激活零调用，向用户要本可自得的清单（PDB 子集/NCT） | **穷尽界**："请用户提供 X"前必须实际调用能拿到 X 的已激活工具并附证据 |
+
+### B 类：框架限制 → 需动代码
+
+| ID | 一句话病因 | 修复入口（立项建议） |
+|---|---|---|
+| B1 / D1 / D3 / E5 / G1 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道——gold4 实证烧 81% token 撞墙，gold2 因此把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ download→register 原子化 |
+| E1 / E2 / G2 | **变异/试验发现链缺失**：clinvar.files.v1 要逐条 VCV 但无 accession 发现工具；clinicaltrials provider 要具体 NCT 但无检索工具；`variant_evidence` 静态族无 live provider | 补 esearch 家族发现工具 + variant_evidence 接 live provider（同族合并） |
+| D2 / C4 | **表达能力缺口**：gene-level 映射在正式路线中不可表达（mapping_files 拒 workspace 路径、probe_long.v2 无 gene 维度）；无 SOFT 注释平台直接不可闭合 | gene_expression family 增加 crosswalk 支撑表（参照 gold10 taxon crosswalk 方案）+ mapping_files 支持 Core-acquired 绑定 |
+| B7 | **配置双轨**：PUT settings 只改显示层、registry active 记录才是执行层（r1 整场跑错模型计费）。硬编码 default 那半已修（`fix/no-hardcoded-model-defaults`） | 剩余：PUT/active 级联或冲突拒绝；GET /settings 回显 `resolveActiveConfig()` 真值 |
+| C3 | basic_statistics 对大表字符串溢出（V8 单串上限） | 流式/分块解析或声明上限+抽样 |
+| G3 | literature_evidence provider 可靠性：Europe PMC `http_client_error` 双复现、BioC 空文档回 `invalid_input` 误导重试 | 复现对照 headers；空全文应回结构化 `no_fulltext` |
+| B6（后半） | search_gdc 查询 "breast cancer TCGA" 首结果 TCGA-LUAD | provider 查询→project 映射排序修复 |
+| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
+
+### 不属于两类（外部源边界，合理阻断）
+
+- E6：COSMIC 需登录/API key，按边界规则拒绝——非损失。
 
 ## gold1 @ qwen3.7-plus（2026-08-29，main@5ac29b1dbf7d，task_ts_374f1e07-7255-41c3-92b7-6357c04ff12d）
 
