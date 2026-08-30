@@ -1,9 +1,11 @@
 /**
  * Chart extraction orchestration (P5-08B, Python
- * ``extract_chart_data_vlm.py`` parity): three-tier degradation
+ * ``extract_chart_data_vlm.py`` parity): tiered degradation
  *
  * ```text
  * L1  Qwen-VL on the image / each embedded PDF page image
+ * L1' caption-guided page rendering (vector PDFs, pdf-pages.ts) — PDF only,
+ *     only when the embedded-raster tier produced no usable chart
  * L2  PDF table extraction (pdfjs)          — PDF sources only
  * L3  caption text from the PDF text layer  — PDF sources only
  * ```
@@ -33,7 +35,8 @@ import {
 } from "./chart-json.js";
 import { writeChartCsvs } from "./chart-csv.js";
 import { createVlmClient, DEFAULT_DASHSCOPE_BASE_URL, VL_MODEL_NAME, type VlmClient, type VlmConfig } from "./vlm-client.js";
-import { extractPdfImages, MAX_PDF_IMAGES_PER_FILE } from "./pdf-images.js";
+import { extractPdfImages, MAX_PDF_IMAGES_PER_FILE, type PdfPageRaster } from "./pdf-images.js";
+import { RENDER_DPI, renderPdfPages } from "./pdf-pages.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { JsonValue } from "@biomed/contracts";
 import { evaluateConfidence } from "../../dataset/confidence/evaluator.js";
@@ -350,9 +353,74 @@ interface PdfSourceContext {
   downloadTmp: string;
 }
 
+/** Extraction tier recorded for the page-rendering fallback (vector PDFs). */
+export const PAGE_RENDER_TIER = "L1_vlm_page_render";
+
+interface PageRasterExtraction {
+  chartRow: ChartRow;
+  pointRows: ChartPointRow[];
+  meta: VlmChartMeta;
+}
+
+/**
+ * One VLM call per page raster; failures are per-raster warnings (Python
+ * parity). Shared by the embedded-raster tier and the page-rendering tier.
+ */
+async function runVlmOnPageRasters(options: {
+  pdfPath: string;
+  rasters: readonly PdfPageRaster[];
+  sourceAssetId: string;
+  sourceLabel: string;
+  extractionTier: string;
+  vlm: VlmClient;
+  prompt: string;
+  taskRoot: string;
+  hooks: VlmToolHooks;
+  modelName: string;
+  signal?: AbortSignal;
+}): Promise<PageRasterExtraction[]> {
+  const extractions: PageRasterExtraction[] = [];
+  for (const raster of options.rasters) {
+    try {
+      const ensured = await ensureImageInFigures(raster.path, options.taskRoot);
+      const pageImageId = `asset_${ensured.sha}`;
+      const rawResponse = await options.vlm.call(ensured.figuresPath, options.prompt, options.signal);
+      const chartJson = parseVlmJson(rawResponse, `${options.sourceLabel} (page image ${raster.pageIndex})`);
+      const { chartRow, pointRows } = normalizeChartJson(
+        chartJson,
+        pageImageId,
+        raster.pageIndex,
+        `${options.sourceLabel} (page image ${raster.pageIndex})`,
+        options.modelName,
+        { pageNumber: String(raster.pageIndex), bbox: raster.bbox, extractionTier: options.extractionTier },
+      );
+      // Override source_asset_id to the PDF-level id (Python parity).
+      chartRow.source_asset_id = options.sourceAssetId;
+      extractions.push({
+        chartRow,
+        pointRows,
+        meta: {
+          source_asset_id: options.sourceAssetId,
+          sha256: ensured.sha,
+          tier: options.extractionTier,
+          was_copied: ensured.wasCopied,
+        },
+      });
+    } catch (error) {
+      console.warn(`L1 VLM failed for ${options.pdfPath} image ${raster.pageIndex}: ${error instanceof Error ? error.message : String(error)}`);
+      options.hooks.onWarning?.(
+        "warning",
+        `L1 VLM failed for ${path.basename(options.pdfPath)} image ${raster.pageIndex}: ${error instanceof Error ? error.message : String(error)}`,
+        "extract_chart_data_vlm",
+      );
+    }
+  }
+  return extractions;
+}
+
 /**
  * L1 for PDFs: extract embedded images into ``download_tmp`` and run VLM on
- * each; failures are per-image warnings (Python parity). Returns rows/meta.
+ * each; failures are per-image warnings (Python parity).
  */
 async function extractFromPdfL1(
   pdfPath: string,
@@ -364,55 +432,74 @@ async function extractFromPdfL1(
   hooks: VlmToolHooks,
   modelName: string,
   signal?: AbortSignal,
-): Promise<{ chartRows: ChartRow[]; pointRows: ChartPointRow[]; metas: VlmChartMeta[]; l1Failed: boolean }> {
-  const chartRows: ChartRow[] = [];
-  const pointRows: ChartPointRow[] = [];
-  const metas: VlmChartMeta[] = [];
-  let l1Failed = false;
-
+): Promise<{ extractions: PageRasterExtraction[]; l1Failed: boolean }> {
   let images: Awaited<ReturnType<typeof extractPdfImages>>;
   try {
     images = await extractPdfImages(pdfPath, context.downloadTmp);
   } catch (error) {
     console.warn(`L1 PDF image extraction failed for ${pdfPath}: ${error instanceof Error ? error.message : String(error)}`);
-    images = { images: [], skippedExtra: 0 };
-    l1Failed = true;
+    return { extractions: [], l1Failed: true };
   }
+  const extractions = await runVlmOnPageRasters({
+    pdfPath,
+    rasters: images.images,
+    sourceAssetId: context.sourceAssetId,
+    sourceLabel,
+    extractionTier: "L1_vlm",
+    vlm,
+    prompt,
+    taskRoot,
+    hooks,
+    modelName,
+    signal,
+  });
+  return { extractions, l1Failed: false };
+}
 
-  for (const image of images.images) {
-    try {
-      const ensured = await ensureImageInFigures(image.path, taskRoot);
-      const pageImageId = `asset_${ensured.sha}`;
-      const rawResponse = await vlm.call(ensured.figuresPath, prompt, signal);
-      const chartJson = parseVlmJson(rawResponse, `${sourceLabel} (page image ${image.pageIndex})`);
-      const { chartRow, pointRows: points } = normalizeChartJson(
-        chartJson,
-        pageImageId,
-        image.pageIndex,
-        `${sourceLabel} (page image ${image.pageIndex})`,
-        modelName,
-        { pageNumber: String(image.pageIndex), bbox: image.bbox, extractionTier: "L1_vlm" },
-      );
-      // Override source_asset_id to the PDF-level id (Python parity).
-      chartRow.source_asset_id = context.sourceAssetId;
-      chartRows.push(chartRow);
-      pointRows.push(...points);
-      metas.push({
-        source_asset_id: context.sourceAssetId,
-        sha256: ensured.sha,
-        tier: "L1_vlm",
-        was_copied: ensured.wasCopied,
-      });
-    } catch (error) {
-      console.warn(`L1 VLM failed for ${pdfPath} image ${image.pageIndex}: ${error instanceof Error ? error.message : String(error)}`);
-      hooks.onWarning?.(
-        "warning",
-        `L1 VLM failed for ${path.basename(pdfPath)} image ${image.pageIndex}: ${error instanceof Error ? error.message : String(error)}`,
-        "extract_chart_data_vlm",
-      );
-    }
-  }
-  return { chartRows, pointRows, metas, l1Failed };
+/**
+ * L1' page-rendering fallback (Gold6 task 7): when the embedded-raster tier
+ * produced no usable chart, render the caption-guided candidate pages and run
+ * VLM on the full-page rasters. Only pages that actually yielded data points
+ * count as recovered — a "not a chart" page answer keeps degrading to L2/L3
+ * exactly as before. Render failures/cancellation raise the typed
+ * ``ChartExtractionError`` (never a silent skip).
+ */
+async function extractFromRenderedPages(
+  pdfPath: string,
+  context: PdfSourceContext,
+  sourceLabel: string,
+  vlm: VlmClient,
+  prompt: string,
+  taskRoot: string,
+  hooks: VlmToolHooks,
+  modelName: string,
+  hint: string,
+  signal?: AbortSignal,
+): Promise<PageRasterExtraction[]> {
+  const rendered = await renderPdfPages(pdfPath, path.join(taskRoot, "download_tmp", "rendered_pages"), {
+    hint,
+    signal,
+  });
+  if (rendered.pages.length === 0) return [];
+  hooks.onWarning?.(
+    "info",
+    `no embedded raster was usable for ${sourceLabel}; rendering ${rendered.pages.length} candidate page(s) at ${RENDER_DPI} DPI (${rendered.selection} selection)`,
+    "extract_chart_data_vlm",
+  );
+  const extractions = await runVlmOnPageRasters({
+    pdfPath,
+    rasters: rendered.pages,
+    sourceAssetId: context.sourceAssetId,
+    sourceLabel,
+    extractionTier: PAGE_RENDER_TIER,
+    vlm,
+    prompt,
+    taskRoot,
+    hooks,
+    modelName,
+    signal,
+  });
+  return extractions.filter((extraction) => extraction.chartRow.data_point_count > 0);
 }
 
 /** L2: PDF tables as chart_type="table" rows (Python ``_try_pdfplumber_tables``). */
@@ -622,9 +709,33 @@ export function createVlmTools(options: {
             downloadTmp: path.join(taskRoot, "download_tmp"),
           };
           const l1 = await extractFromPdfL1(resolved, context, sourceLabel, vlm, prompt, taskRoot, hooks, config.model, signal);
-          chartRows.push(...l1.chartRows);
-          pointRows.push(...l1.pointRows);
-          metas.push(...l1.metas);
+          for (const extraction of l1.extractions) {
+            chartRows.push(extraction.chartRow);
+            pointRows.push(...extraction.pointRows);
+            metas.push(extraction.meta);
+          }
+
+          if (chartRows.length === 0) {
+            // L1' fallback: vector-only PDFs have no embedded raster to feed
+            // the visual model — render the caption-guided candidate pages.
+            const rendered = await extractFromRenderedPages(
+              resolved,
+              context,
+              sourceLabel,
+              vlm,
+              prompt,
+              taskRoot,
+              hooks,
+              config.model,
+              hint,
+              signal,
+            );
+            for (const extraction of rendered) {
+              chartRows.push(extraction.chartRow);
+              pointRows.push(...extraction.pointRows);
+              metas.push(extraction.meta);
+            }
+          }
 
           if (chartRows.length === 0) {
             const l2 = await tryPdfTables(resolved, context.sourceAssetId, sourceLabel);

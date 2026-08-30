@@ -21,8 +21,12 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-/** Directory holding pdf.js standard font data (silences the font warning). */
-const STANDARD_FONTS_URL = pathToFileURL(
+/**
+ * Directory holding pdf.js standard font data (silences the font warning).
+ * Shared by every pdfjs consumer, including the page renderer
+ * (``processing/vlm/pdf-pages.ts``).
+ */
+export const PDFJS_STANDARD_FONTS_URL = pathToFileURL(
   path.resolve(MODULE_DIR, "..", "..", "..", "node_modules", "pdfjs-dist", "standard_fonts"),
 ).href + "/";
 
@@ -242,7 +246,7 @@ export async function openPdf(bytes: Uint8Array): Promise<OpenPdf> {
   const loadingTask = pdfjs.getDocument({
     data: bytes,
     useSystemFonts: true,
-    standardFontDataUrl: STANDARD_FONTS_URL,
+    standardFontDataUrl: PDFJS_STANDARD_FONTS_URL,
   });
   const doc = await loadingTask.promise;
   const cache = new Map<number, Promise<InternalPageExtract>>();

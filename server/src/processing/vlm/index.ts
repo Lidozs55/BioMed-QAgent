@@ -32,7 +32,16 @@ export {
   MAX_PDF_IMAGES_PER_FILE,
   type ExtractedPdfImage,
   type PdfImageExtraction,
+  type PdfPageRaster,
 } from "./pdf-images.js";
+export {
+  MAX_PDF_PAGES_PER_FILE,
+  RENDER_DPI,
+  renderPdfPages,
+  type PdfPageRendering,
+  type RenderedPdfPage,
+  type RenderPdfPagesOptions,
+} from "./pdf-pages.js";
 export {
   createVlmTools,
   ensureImageInFigures,
