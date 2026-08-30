@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -8,10 +9,24 @@ import { createApplicationHost, type ApplicationHost } from "../src/app/create-a
 import { LifecycleRegistry } from "../src/app/lifecycle.js";
 
 const hosts: ApplicationHost[] = [];
+const servers: Server[] = [];
 
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map((host) => host.close()));
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  })));
 });
+
+async function occupyEphemeralPort(): Promise<{ port: number; server: Server }> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  servers.push(server);
+  return { port: (server.address() as AddressInfo).port, server };
+}
 
 function requestUrl(host: ApplicationHost, path: string): string {
   const address = host.server.address() as AddressInfo;
@@ -240,6 +255,76 @@ describe("application host (Phase 8: no legacy proxy, no experimental Pi)", () =
     await creating;
     const ready = await fetch(`http://127.0.0.1:${actualPort}/api/v1/tasks`);
     expect(await ready.text()).toBe("native tasks");
+  });
+
+  test("falls back to an OS-assigned port when the preferred port is occupied", async () => {
+    const occupied = await occupyEphemeralPort();
+    const onListening = vi.fn();
+    const host = await createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: occupied.port,
+      onListening,
+      frontend: async () => ({
+        middleware: (_request, response) => response.end("frontend"),
+        close: async () => undefined,
+      }),
+    });
+    hosts.push(host);
+
+    const actualPort = (host.server.address() as AddressInfo).port;
+    expect(actualPort).not.toBe(occupied.port);
+    expect(actualPort).toBeGreaterThan(0);
+    expect(onListening).toHaveBeenCalledOnce();
+    expect(onListening).toHaveBeenCalledWith(expect.objectContaining({ port: actualPort }));
+    expect(await (await fetch(requestUrl(host, "/"))).text()).toBe("frontend");
+  });
+
+  test("does not retry non-address-conflict listen errors or initialize resources", async () => {
+    const listenError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const listenPublic = vi.fn(async () => { throw listenError; });
+    const initializeLifecycle = vi.fn();
+    const formalRuntime = vi.fn();
+    const frontend = vi.fn(async () => ({
+      middleware: (_request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => response.end(),
+      close: async () => undefined,
+    }));
+
+    await expect(createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: 5173,
+      initializeLifecycle,
+      formalRuntime,
+      frontend,
+    }, { listenPublic })).rejects.toBe(listenError);
+
+    expect(listenPublic).toHaveBeenCalledOnce();
+    expect(initializeLifecycle).not.toHaveBeenCalled();
+    expect(formalRuntime).not.toHaveBeenCalled();
+    expect(frontend).not.toHaveBeenCalled();
+  });
+
+  test("closes the fallback port when initialization fails", async () => {
+    const occupied = await occupyEphemeralPort();
+    let fallbackPort = 0;
+
+    await expect(createApplicationHost({
+      publicHost: "127.0.0.1",
+      publicPort: occupied.port,
+      onListening: (address) => { fallbackPort = address.port; },
+      initializeLifecycle: async () => { throw new Error("bootstrap failed"); },
+      frontend: async () => ({
+        middleware: (_request, response) => response.end(),
+        close: async () => undefined,
+      }),
+    })).rejects.toThrow("bootstrap failed");
+
+    expect(fallbackPort).toBeGreaterThan(0);
+    const rebound = createServer();
+    servers.push(rebound);
+    await new Promise<void>((resolve, reject) => {
+      rebound.once("error", reject);
+      rebound.listen(fallbackPort, "127.0.0.1", resolve);
+    });
   });
 
   test("startup failure after listen closes earlier resources", async () => {

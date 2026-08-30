@@ -329,7 +329,7 @@ export class DurableTaskRepository {
     const operation = previous.then(async () => {
       let sequence = this.latestSequence.get(taskId);
       if (sequence === undefined) {
-        sequence = (await this.readAllEvents(taskId)).at(-1)?.sequence ?? 0;
+        sequence = (await this.readAllEventsUnlocked(taskId)).at(-1)?.sequence ?? 0;
       }
       const timestamp = this.now().toISOString();
       const events = payloads.map((payload, index) => ({
@@ -640,7 +640,21 @@ export class DurableTaskRepository {
     return readJsonFileOrNull<DurableTaskMetadata>(this.metadataPath(taskId));
   }
 
-  private async readAllEvents(taskId: string): Promise<EventEnvelope[]> {
+  private readAllEvents(taskId: string): Promise<EventEnvelope[]> {
+    const previous = this.pending.get(taskId) ?? Promise.resolve();
+    const operation = previous.then(
+      () => this.readAllEventsUnlocked(taskId),
+      () => this.readAllEventsUnlocked(taskId),
+    );
+    this.pending.set(taskId, operation);
+    const cleanup = (): void => {
+      if (this.pending.get(taskId) === operation) this.pending.delete(taskId);
+    };
+    void operation.then(cleanup, cleanup);
+    return operation;
+  }
+
+  private async readAllEventsUnlocked(taskId: string): Promise<EventEnvelope[]> {
     let fileSize: number;
     try {
       fileSize = (await stat(this.eventsPath(taskId))).size;

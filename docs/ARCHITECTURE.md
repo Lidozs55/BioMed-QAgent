@@ -125,6 +125,12 @@ Dataset Construction Runtime（服务端固定构建骨架）
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
 可编排 DAG，也不形成数据集级 Recipe。
 
+**Host 启动边界**（ADR-042）：Host 首选配置端口（默认 5173），只有实际绑定返回
+`EADDRINUSE` 时才以 `port 0` 让操作系统原子选择可用端口；实际入口由启动日志
+`BIOMED_QAGENT_URL` 公布。`pnpm start` / `--static` 在端口与资源初始化前持有每用户
+生产实例租约，第二次启动正常退出且不创建 Host；开发模式不持有产品级租约，但同一
+data root 的 durable writer 独占租约在所有模式下仍然生效。
+
 **可靠性内核**（见 §4）：SourceAsset、DownloadAttempt、内容 hash、
 Attempt 输入/参数/输出摘要、任务锁、checkpoint、timeout/cancel、durable event、
 durable evidence-bound HIL、staging、Validation Gate、原子发布、fixture/live 区分。

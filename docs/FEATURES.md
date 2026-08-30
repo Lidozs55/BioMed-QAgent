@@ -197,6 +197,10 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 
 - 正式分发为**跨平台源码包**（`frontend/dist` + `server/dist` + `database/` +
   `.pi/skills`），由 TS Host 静态托管（`pnpm start`）；
+- 静态生产入口按 OS 用户持有唯一实例租约：已有实例时第二次 `pnpm start` 正常
+  no-op，不创建第二个 Host；开发入口仍允许使用不同端口和 data root 的隔离实例；
+- Host 首选 5173；端口被占用时由操作系统原子分配替代端口，实际地址通过
+  `BIOMED_QAGENT_URL=<url>` 启动行公布；
 - GitHub Actions 在推 `v*` 标签时构建并上传 bundle（不再使用 PyInstaller 单文件）。
 
 ---
