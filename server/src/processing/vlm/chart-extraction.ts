@@ -38,6 +38,10 @@ import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { JsonValue } from "@biomed/contracts";
 import { evaluateConfidence } from "../../dataset/confidence/evaluator.js";
 import {
+  analyzeDigitAnomaly,
+  type DigitAnomalyResult,
+} from "../../dataset/confidence/digit-anomaly.js";
+import {
   CONFIDENCE_ARTIFACT_FILE,
   writeConfidenceArtifact,
 } from "../../dataset/confidence/artifact.js";
@@ -235,30 +239,57 @@ async function chartDataDir(taskRoot: string): Promise<string> {
   return dir;
 }
 
-async function writeChartConfidenceArtifact(
+/** First number token of a chart value string (commas stripped), else null. */
+function parseChartNumericValue(value: string): number | null {
+  const match = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i.exec(
+    value.replace(/,/g, "").trim(),
+  );
+  if (match === null) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export async function writeChartConfidenceArtifact(
   outputDir: string,
   chartRows: readonly ChartRow[],
   pointRows: readonly ChartPointRow[],
 ): Promise<string> {
   const charts = new Map(chartRows.map((chart) => [chart.chart_id, chart]));
+  // Fixed-code anti-fabrication screen on the measured (y) values of each
+  // chart; a flagged verdict downgrades the whole chart's confidence.
+  const digitAnomalyByChart = new Map<string, DigitAnomalyResult>();
+  for (const chart of chartRows) {
+    const yValues = pointRows
+      .filter((point) => point.chart_id === chart.chart_id)
+      .map((point) => parseChartNumericValue(point.y_value))
+      .filter((value): value is number => value !== null);
+    digitAnomalyByChart.set(chart.chart_id, analyzeDigitAnomaly(yValues));
+  }
   const deterministicBatches = chartRows
     .filter((chart) => chart.extraction_tier === "L2_tables")
-    .map((chart) => ({
-      schema_version: "1.0" as const,
-      batch_id: chart.chart_id,
-      record_count: pointRows.filter((point) => point.chart_id === chart.chart_id).length,
-      level: "medium" as const,
-      channel: "deterministic_pdf_table",
-      components: {
+    .map((chart) => {
+      const anomaly = digitAnomalyByChart.get(chart.chart_id);
+      const reasons = ["deterministic PDF table extraction from a literature source"];
+      if (anomaly !== undefined && anomaly.verdict === "flagged") {
+        reasons.push(...anomaly.reasons);
+      }
+      return {
         schema_version: "1.0" as const,
-        source_reliability: "medium" as const,
-        extraction_reliability: "high" as const,
-        mapping_reliability: "not_applicable" as const,
-        cross_source_consistency: "not_checked" as const,
-        human_review_state: "not_required" as const,
-      },
-      reasons: ["deterministic PDF table extraction from a literature source"],
-    }));
+        batch_id: chart.chart_id,
+        record_count: pointRows.filter((point) => point.chart_id === chart.chart_id).length,
+        level: anomaly?.verdict === "flagged" ? ("low" as const) : ("medium" as const),
+        channel: "deterministic_pdf_table",
+        components: {
+          schema_version: "1.0" as const,
+          source_reliability: "medium" as const,
+          extraction_reliability: "high" as const,
+          mapping_reliability: "not_applicable" as const,
+          cross_source_consistency: "not_checked" as const,
+          human_review_state: "not_required" as const,
+        },
+        reasons,
+      };
+    });
   const recordOverrides = pointRows.flatMap((point) => {
     const chart = charts.get(point.chart_id);
     if (chart?.extraction_tier !== "L1_vlm" || point.confidence_level === "not_applicable") {
@@ -277,6 +308,7 @@ async function writeChartConfidenceArtifact(
         human_review_state: point.human_review_state,
       },
       reasons: [point.confidence_reason],
+      digitAnomaly: digitAnomalyByChart.get(point.chart_id),
     })];
   });
   return writeConfidenceArtifact(outputDir, {
