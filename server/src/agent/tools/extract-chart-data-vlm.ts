@@ -70,14 +70,18 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     name: EXTRACT_CHART_DATA_VLM_TOOL_NAME,
     label: "Extract chart data via Qwen-VL",
     description:
-      "Extract structured chart data (chart_type, axes, data_points, legend) " +
-      "from a paper figure image or PDF using the Qwen-VL visual model. " +
-      "Accepts PNG/JPG/WEBP/GIF images (e.g., from capture_web_page) or PDF " +
-      "files (e.g., from download_supplementary). For PDFs, extracts embedded " +
-      "images and runs VLM on each (up to 10 per file). Writes chart_data.csv " +
-      "and chart_data_points.csv to parsed/chart_data/. Falls back to PDF " +
-      "tables (L2) then caption text (L3) if VLM fails. Returns an error if " +
-      "all tiers fail.",
+      "Exploratory chart data extraction (chart_type, axes, data_points, " +
+      "legend) from a paper figure image or PDF using the configured visual " +
+      "model. This tool is for exploratory workspace CSV staging only and " +
+      "CANNOT publish: its outputs are preparation material. Formal paper " +
+      "chart promotion must use extract_registered_paper_chart_evidence, " +
+      "which is the only governed path and registers evidence through the " +
+      "task SourceAssetRegistry. Accepts PNG/JPG/WEBP/GIF images (e.g., from " +
+      "capture_web_page) or PDF files (e.g., from download_supplementary). " +
+      "For PDFs, extracts embedded images and runs VLM on each (up to 10 per " +
+      "file). Writes chart_data.csv and chart_data_points.csv to " +
+      "parsed/chart_data/. Falls back to PDF tables (L2) then caption text " +
+      "(L3) if VLM fails. Returns an error if all tiers fail.",
     parameters: {
       type: "object",
       properties: {

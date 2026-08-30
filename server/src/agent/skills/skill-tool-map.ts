@@ -228,10 +228,10 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
   mapping(
     "extract_chart_data_vlm",
     "processing",
-    ["extract_chart_data_vlm", "vlm", "chart_extraction"],
-    "Extract structured chart data from paper figures or PDFs using the Qwen-VL visual model.",
-    "Use only for genuine charts or figures. Outputs are staging; estimated or uncertain points require evidence-bound human review before any formal publication.",
-    ["extract_chart_data_vlm"],
+    ["extract_chart_data_vlm", "extract_registered_paper_chart_evidence", "vlm", "chart_extraction"],
+    "Extract structured chart data from paper figures or PDFs with the visual model; registered paper evidence is the only promotion path.",
+    "Use only for genuine charts or figures. extract_chart_data_vlm is exploratory staging and cannot publish. Formal promotion runs only through extract_registered_paper_chart_evidence on registered paper assets; points stay pending evidence-bound review.",
+    ["extract_chart_data_vlm", "extract_registered_paper_chart_evidence"],
   ),
   mapping(
     "analysis",

@@ -47,6 +47,7 @@ import { createReactomeTools } from "./reactome.js";
 import { createLocalCacheTools } from "./local-cache.js";
 import { createPdfTools } from "./pdf.js";
 import { createChartDataVlmTool } from "./extract-chart-data-vlm.js";
+import { createRegisteredPaperChartEvidenceTool } from "./extract-registered-paper-chart-evidence.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { ToolApprovalGate, ToolHooks, ToolServiceDeps } from "./tool-hooks.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
@@ -297,6 +298,20 @@ export async function createBusinessToolBundle(
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,
   }), "extract_chart_data_vlm");
+  // Governed paper chart evidence (Gold6 T5): requires the task-owned
+  // SourceAssetRegistry; without it the promotion path stays explicitly
+  // unavailable instead of degrading to path-based inputs.
+  if (context.sourceAssetRegistry !== undefined) {
+    register(createRegisteredPaperChartEvidenceTool({
+      ...shared,
+      sourceAssetRegistry: context.sourceAssetRegistry,
+      resolveVlmConfig: context.resolveVlmConfig,
+      httpClient: client,
+      approvalGate: context.approvalGate,
+    }), "extract_chart_data_vlm");
+  } else {
+    unavailable.add("extract_registered_paper_chart_evidence");
+  }
 
   // Analysis tools (P5-09): Welch/BH/correlation/clustering with scipy
   // numeric parity; outputs confined to staging/analysis/<runId> (P5-D5).

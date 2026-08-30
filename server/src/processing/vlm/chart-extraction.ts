@@ -352,6 +352,7 @@ async function extractFromPdfL1(
   prompt: string,
   taskRoot: string,
   hooks: VlmToolHooks,
+  modelName: string,
   signal?: AbortSignal,
 ): Promise<{ chartRows: ChartRow[]; pointRows: ChartPointRow[]; metas: VlmChartMeta[]; l1Failed: boolean }> {
   const chartRows: ChartRow[] = [];
@@ -379,7 +380,7 @@ async function extractFromPdfL1(
         pageImageId,
         image.pageIndex,
         `${sourceLabel} (page image ${image.pageIndex})`,
-        VL_MODEL_NAME,
+        modelName,
         { pageNumber: String(image.pageIndex), bbox: image.bbox, extractionTier: "L1_vlm" },
       );
       // Override source_asset_id to the PDF-level id (Python parity).
@@ -524,6 +525,7 @@ async function extractFromImage(
   vlm: VlmClient,
   prompt: string,
   taskRoot: string,
+  modelName: string,
   signal?: AbortSignal,
 ): Promise<{ chartRows: ChartRow[]; pointRows: ChartPointRow[]; meta: VlmChartMeta }> {
   const ensured = await ensureImageInFigures(imagePath, taskRoot);
@@ -535,7 +537,7 @@ async function extractFromImage(
     sourceAssetId,
     chartIdxOffset,
     sourceLabel,
-    VL_MODEL_NAME,
+    modelName,
   );
   return {
     chartRows: [chartRow],
@@ -598,7 +600,7 @@ export function createVlmTools(options: {
 
       try {
         if (IMAGE_EXTENSIONS.has(extension)) {
-          const result = await extractFromImage(resolved, sourceLabel, 1, vlm, prompt, taskRoot, signal);
+          const result = await extractFromImage(resolved, sourceLabel, 1, vlm, prompt, taskRoot, config.model, signal);
           chartRows.push(...result.chartRows);
           pointRows.push(...result.pointRows);
           metas.push(result.meta);
@@ -609,7 +611,7 @@ export function createVlmTools(options: {
             sourceAssetId: `asset_${pdfSha}`,
             downloadTmp: path.join(taskRoot, "download_tmp"),
           };
-          const l1 = await extractFromPdfL1(resolved, context, sourceLabel, vlm, prompt, taskRoot, hooks, signal);
+          const l1 = await extractFromPdfL1(resolved, context, sourceLabel, vlm, prompt, taskRoot, hooks, config.model, signal);
           chartRows.push(...l1.chartRows);
           pointRows.push(...l1.pointRows);
           metas.push(...l1.metas);

@@ -242,4 +242,18 @@ describe(".pi/skills manifest integrity", () => {
     expect(dataset.body).toMatch(/descriptor digest is\s+server-bound/i);
     expect(dataset.body).toMatch(/do not repeat a failure-driven descriptor handshake/i);
   });
+
+  test("chart extraction names the registered promotion path and bounds the exploratory tool", async () => {
+    const mapping = new Map(SKILL_TOOL_MAP.map((entry) => [entry.name, entry]))
+      .get("extract_chart_data_vlm");
+    expect(mapping).toBeDefined();
+    expect(mapping?.tools).toContain("extract_chart_data_vlm");
+    expect(mapping?.tools).toContain("extract_registered_paper_chart_evidence");
+
+    const skill = await readSkill("extract_chart_data_vlm");
+    expect(skill.body).toContain("extract_registered_paper_chart_evidence");
+    expect(skill.body).toMatch(/only\s+`extract_registered_paper_chart_evidence`/i);
+    expect(skill.body).toMatch(/cannot publish/i);
+    expect(skill.body).toMatch(/exploratory/i);
+  });
 });

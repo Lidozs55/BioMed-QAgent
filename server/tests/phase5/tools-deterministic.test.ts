@@ -178,6 +178,9 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       expect(names.has(name) || bundle.unavailableTools.has(name), `tool ${name} missing from the bundle`).toBe(true);
     }
     // Browser-less/DB-less bundle marks the unavailable capability groups.
+    // extract_registered_paper_chart_evidence is registry-gated: without the
+    // task SourceAssetRegistry the governed promotion path is explicitly
+    // unavailable instead of degrading to path-based inputs.
     expect(bundle.unavailableTools).toEqual(new Set([
       "navigate_page",
       "download_from_page",
@@ -190,6 +193,7 @@ describe("business tool bundle (P5-02/P5-12)", () => {
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
       "scaffold_dataset_execution_spec",
+      "extract_registered_paper_chart_evidence",
     ]));
     // Analysis tools register with the full bundle.
     for (const name of [

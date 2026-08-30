@@ -29,6 +29,12 @@ const CONTENT_ASSET_ID = /^asset_[0-9a-f]{64}$/;
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T/;
 const REVIEW_STATUSES = ["not_required", "pending", "accepted", "corrected", "rejected"] as const;
 const REVIEWED = new Set<ChartReviewStatus>(["accepted", "corrected"]);
+/**
+ * Evidence stages for the rows. ``carrier`` rows are fresh VLM candidate
+ * evidence registered before any human review; ``publication`` rows are the
+ * review-closed rows admitted into a PublicationCandidate.
+ */
+export type ChartEvidenceStage = "carrier" | "publication";
 const AXIS_STATUSES = ["clear", "unclear", "human_validated"] as const;
 const LEGEND_STATUSES = ["clear", "unclear", "human_validated"] as const;
 const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
@@ -104,10 +110,30 @@ function imageLocator(value: unknown, name: string, assetId?: string): ImageBBox
   return parsed;
 }
 
+/**
+ * Source carriers may be PDFs or XML full text, so the sources table accepts
+ * any SourceLocator 2.0 that resolves to its content-addressed asset. Visual
+ * rows (series/points) keep the strict image_bbox rule via ``imageLocator``.
+ */
+function sourceCarrierLocator(value: unknown, name: string, assetId?: string): void {
+  let parsed: ReturnType<typeof parseSourceLocator>;
+  try {
+    parsed = parseSourceLocator(value);
+  } catch (error) {
+    fail(`${name} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!("locator_version" in parsed) || parsed.locator_version !== "2.0") {
+    fail(`${name} must be a SourceLocator 2.0`);
+  }
+  if (!CONTENT_ASSET_ID.test(parsed.asset_id)) fail(`${name}.asset_id must be content addressed`);
+  if (assetId !== undefined && parsed.asset_id !== assetId) fail(`${name}.asset_id does not match source_asset_id`);
+}
+
 function assertProvenance(
   provenance: ChartTransformProvenance,
   owner: ChartSeriesInput | ChartPointInput,
   name: string,
+  stage: ChartEvidenceStage,
 ): void {
   if (provenance.schema_version !== "1.0") fail(`${name}.schema_version must be 1.0`);
   text(provenance.model_name, `${name}.model_name`);
@@ -154,6 +180,9 @@ function assertProvenance(
     REVIEW_STATUSES,
     `${name}.review_status`,
   );
+  if (stage === "carrier" && REVIEWED.has(reviewStatus)) {
+    fail(`${name} carrier-stage rows must remain pending evidence-bound review`);
+  }
   if (REVIEWED.has(reviewStatus) &&
       owner.extraction_reliability !== provenance.extraction_reliability_at_extraction) {
     fail(`${name} human review must not upgrade extraction reliability`);
@@ -177,7 +206,7 @@ function assertProvenance(
   }
 }
 
-function assertSeries(series: ChartSeriesInput): void {
+function assertSeries(series: ChartSeriesInput, stage: ChartEvidenceStage): void {
   safeId(series.chart_series_id, "chart_series_id");
   safeId(series.paper_id, "paper_id");
   text(series.paper_id_namespace, "paper_id_namespace");
@@ -203,10 +232,10 @@ function assertSeries(series: ChartSeriesInput): void {
   text(series.model_version, "model_version");
   if (series.extraction_method !== "vlm") fail("extraction_method must be vlm");
   if (series.human_review_status === "rejected") fail(`series ${series.chart_series_id} was rejected`);
-  assertProvenance(series.transform_provenance, series, `series ${series.chart_series_id} provenance`);
+  assertProvenance(series.transform_provenance, series, `series ${series.chart_series_id} provenance`, stage);
 }
 
-function assertPoint(point: ChartPointInput, series: ChartSeriesInput): void {
+function assertPoint(point: ChartPointInput, series: ChartSeriesInput, stage: ChartEvidenceStage): void {
   safeId(point.point_id, "point_id");
   safeId(point.chart_series_id, "chart_series_id");
   safeId(point.activity_id, "activity_id");
@@ -229,10 +258,13 @@ function assertPoint(point: ChartPointInput, series: ChartSeriesInput): void {
     fail(`point ${point.point_id} locator does not match its chart figure`);
   }
   if (point.review_status === "rejected") fail(`point ${point.point_id} was rejected`);
-  if (point.estimated_or_exact === "estimated" && !REVIEWED.has(point.review_status)) {
+  if (stage === "carrier" && point.estimated_or_exact !== "estimated") {
+    fail(`carrier-stage point ${point.point_id} must be estimated, never exact`);
+  }
+  if (stage === "publication" && point.estimated_or_exact === "estimated" && !REVIEWED.has(point.review_status)) {
     fail(`estimated point ${point.point_id} requires accepted or corrected review`);
   }
-  if (point.extraction_confidence === "low" && !REVIEWED.has(point.review_status)) {
+  if (stage === "publication" && point.extraction_confidence === "low" && !REVIEWED.has(point.review_status)) {
     fail(`low-confidence primary point ${point.point_id} requires review`);
   }
   if (point.estimated_or_exact === "exact" &&
@@ -249,12 +281,58 @@ function assertPoint(point: ChartPointInput, series: ChartSeriesInput): void {
       (point.original_x_value !== null || point.original_y_value !== null)) {
     fail(`accepted point ${point.point_id} must not claim corrected original values`);
   }
-  assertProvenance(point.transform_provenance, point, `point ${point.point_id} provenance`);
+  assertProvenance(point.transform_provenance, point, `point ${point.point_id} provenance`, stage);
 }
 
 export function assertChartEvidenceRows(
   rows: ChartEvidenceRows,
   activityIds: ReadonlySet<string>,
+): void {
+  assertChartEvidenceRowsForStage(rows, activityIds, "publication");
+}
+
+/**
+ * Carrier-stage gate for freshly extracted VLM evidence: everything except
+ * the review closure is enforced, and rows must be pending + estimated so a
+ * registered carrier can never masquerade as review-closed publication rows.
+ */
+export function assertChartEvidenceCarrierRows(
+  rows: ChartEvidenceRows,
+  activityIds: ReadonlySet<string>,
+): void {
+  assertChartEvidenceRowsForStage(rows, activityIds, "carrier");
+}
+
+export function evaluateChartEvidenceCarrierRows(
+  rows: ChartEvidenceRows,
+  activityIds: ReadonlySet<string>,
+): ChartEvidencePublicationResult {
+  try {
+    assertChartEvidenceCarrierRows(rows, activityIds);
+    return {
+      publishable: true,
+      checks: [{
+        check_id: "chart_evidence_carrier_gate",
+        passed: true,
+        detail: "chart evidence carrier is provenance-closed and pending review",
+      }],
+    };
+  } catch (error) {
+    return {
+      publishable: false,
+      checks: [{
+        check_id: "chart_evidence_carrier_gate",
+        passed: false,
+        detail: error instanceof Error ? error.message : String(error),
+      }],
+    };
+  }
+}
+
+function assertChartEvidenceRowsForStage(
+  rows: ChartEvidenceRows,
+  activityIds: ReadonlySet<string>,
+  stage: ChartEvidenceStage,
 ): void {
   if (rows.chart_series.length === 0) fail("chart_series must not be empty");
   if (rows.papers.length === 0) fail("papers must not be empty");
@@ -265,7 +343,7 @@ export function assertChartEvidenceRows(
     safeId(source.source_id, "source source_id");
     if (sources.has(source.source_id)) fail(`duplicate source_id ${source.source_id}`);
     if (!CONTENT_ASSET_ID.test(source.source_asset_id)) fail("source source_asset_id must be content addressed");
-    imageLocator(source.source_locator, "source source_locator", source.source_asset_id);
+    sourceCarrierLocator(source.source_locator, "source source_locator", source.source_asset_id);
     if (!ISO_DATETIME.test(source.retrieved_at) || Number.isNaN(Date.parse(source.retrieved_at))) {
       fail("source retrieved_at must be ISO 8601");
     }
@@ -285,7 +363,7 @@ export function assertChartEvidenceRows(
 
   const seriesById = new Map<string, ChartSeriesInput>();
   for (const series of rows.chart_series) {
-    assertSeries(series);
+    assertSeries(series, stage);
     if (seriesById.has(series.chart_series_id)) fail(`duplicate chart_series_id ${series.chart_series_id}`);
     if (!papers.has(`${series.paper_id}\u001f${series.paper_id_namespace}`)) {
       fail(`series ${series.chart_series_id} references missing paper`);
@@ -302,7 +380,7 @@ export function assertChartEvidenceRows(
   for (const point of rows.chart_points) {
     const series = seriesById.get(point.chart_series_id);
     if (series === undefined) fail(`point ${point.point_id} references missing chart series`);
-    assertPoint(point, series);
+    assertPoint(point, series, stage);
     if (pointIds.has(point.point_id)) fail(`duplicate point_id ${point.point_id}`);
     if (!activityIds.has(point.activity_id)) fail(`point ${point.point_id} references missing primary activity`);
     pointIds.add(point.point_id);
