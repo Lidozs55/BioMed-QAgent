@@ -109,7 +109,7 @@
 \newcommand{\ReportDate}{\today}
 
 % 页眉左/右内容（默认：参赛编号 / 作品编码）
-\newcommand{\ReportLeftHeader}{XH-202619}
+\newcommand{\ReportLeftHeader}{XH-202619 赛道二 方向 1A}
 \newcommand{\ReportRightHeader}{作品编码 611186}
 
 \newcommand{\reporttitle}[1]{\renewcommand{\ReportTitle}{#1}}
