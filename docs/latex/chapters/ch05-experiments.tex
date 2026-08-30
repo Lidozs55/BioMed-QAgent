@@ -1,34 +1,52 @@
 \chapter{实验与案例}
 
-本项目整理了 10 份参考输入输出样例，用于检验模型能力。完整问题列表如下：
-\begin{xltabular}{\linewidth}{LLLLL}
+本项目整理了 10 份参考输入输出样例，覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。完整问题列表如下：
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.1\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.1\hsize}L}
 \caption{Gold 案例总览（案例 1--10）}\label{tab:gold-overview}\\
 \toprule
-\textbf{案例 ID} & \textbf{研究主题} & \textbf{主要来源} & \textbf{Gold 规模（目标表）} & \textbf{主要难点} \\
+\textbf{案例 ID} & \textbf{研究主题} & \textbf{主要来源} & \textbf{主要难点} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例 ID} & \textbf{研究主题} & \textbf{主要来源} & \textbf{Gold 规模（目标表）} & \textbf{主要难点} \\
+\textbf{案例 ID} & \textbf{研究主题} & \textbf{主要来源} & \textbf{主要难点} \\
 \midrule
 \endhead
-1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & NCBI GEO /\allowbreak{} E-utilities +\allowbreak{} GPL 平台注释 & datasets、samples、expression\_\allowbreak{}long、probe\_\allowbreak{}gene\_\allowbreak{}mapping & 探针→基因映射、缺失、冲突、单位/\allowbreak{}尺度 \\
-2 & LUAD EGFR 突变表达的基因/\allowbreak{}探针双粒度整合 & GEO +\allowbreak{} 临床与 EGFR 突变注释 & study\_\allowbreak{}records、sample\_\allowbreak{}annotations、egfr\_\allowbreak{}variant\_\allowbreak{}records、probe\_\allowbreak{}expression、gene\_\allowbreak{}expression & probe→gene 双粒度、临床表型字段对齐 \\
-3 & EGFR NSCLC 靶点多源证据整合 & UniProt、NCBI Gene、ClinVar、RCSB PDB、PubChem、ChEMBL、ClinicalTrials.gov、COSMIC & gene\_\allowbreak{}protein、variant、structure、drug、clinical\_\allowbreak{}trial、entity\_\allowbreak{}crosswalk & 跨数据库 identity 冲突与 crosswalk \\
-4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & NCBI、UniProt、RCSB PDB、PubMed、Europe PMC & viral\_\allowbreak{}protein、spike\_\allowbreak{}variant、structure、interface、paper & 派生行不得冒充来源行、结构版本与 interface \\
-5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & ChEMBL、PubChem & target、compound、assay、activity、compound\_\allowbreak{}crosswalk & compound crosswalk、单位、identity 冲突 \\
-6 & EGFR 突变体抑制实验与论文图表提取 & PubMed /\allowbreak{} PMC /\allowbreak{} Europe PMC（PDB 仅校验） & paper、experiment、activity\_\allowbreak{}value、chart\_\allowbreak{}series、chart\_\allowbreak{}points、supplementary\_\allowbreak{}asset & 低置信度图表点阻断至人工、轴/\allowbreak{}图例校验、图表提取 \\
-7 & 阿尔茨海默病 GWAS 风险位点多源整合 & GWAS Catalog +\allowbreak{} Bellenguez 2022 补充材料 +\allowbreak{} dbSNP GRCh38 & study、variant、variant\_\allowbreak{}gene\_\allowbreak{}mapping & 补充材料 75 风险位点解析、坐标版本 \\
-8 & 药物性肝损伤（DILI）风险药物证据整合 & FDA DILIrank 2.0、LiverTox、openFDA FAERS & drug、livertox、faers\_\allowbreak{}report\_\allowbreak{}count、drug\_\allowbreak{}crosswalk & 外部来源失效（DILIrank 404）、来源切换策略 \\
-9 & 原发性免疫缺陷基因-疾病-表型整合 & Orphadata、HGNC、ClinVar、ClinGen & gene、disease、association、cross\_\allowbreak{}source & 疾病归一、跨源证据分级 \\
-10 & 肠道微生物组-疾病关联整合（T2D/\allowbreak{}IBD/\allowbreak{}CRC） & MGnify、GMRepo、病例对照论文、NCBI Taxonomy & study、taxon、differential\_\allowbreak{}abundance、reference\_\allowbreak{}prevalence & 动态路线闭合、分类学术语归一 \\
+1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & NCBI GEO /\allowbreak{} E-utilities +\allowbreak{} GPL 平台注释 & 探针→基因映射、缺失、冲突、单位/\allowbreak{}尺度 \\
+2 & LUAD EGFR 突变表达的基因/\allowbreak{}探针双粒度整合 & GEO +\allowbreak{} 临床与 EGFR 突变注释 & probe→gene 双粒度、临床表型字段对齐 \\
+3 & EGFR NSCLC 靶点多源证据整合 & UniProt、NCBI Gene、ClinVar、RCSB PDB、PubChem、ChEMBL、ClinicalTrials.gov、COSMIC & 跨数据库 identity 冲突与 crosswalk \\
+4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & NCBI、UniProt、RCSB PDB、PubMed、Europe PMC & 派生行不得冒充来源行、结构版本与 interface \\
+5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & ChEMBL、PubChem & compound crosswalk、单位、identity 冲突 \\
+6 & EGFR 突变体抑制实验与论文图表提取 & PubMed /\allowbreak{} PMC /\allowbreak{} Europe PMC（PDB 仅校验） & 低置信度图表点阻断至人工、轴/\allowbreak{}图例校验、图表提取 \\
+7 & 阿尔茨海默病 GWAS 风险位点多源整合 & GWAS Catalog +\allowbreak{} Bellenguez 2022 补充材料 +\allowbreak{} dbSNP GRCh38 & 补充材料 75 风险位点解析、坐标版本 \\
+8 & 药物性肝损伤（DILI）风险药物证据整合 & FDA DILIrank 2.0、LiverTox、openFDA FAERS & 外部来源失效（DILIrank 404）、来源切换策略 \\
+9 & 原发性免疫缺陷基因-疾病-表型整合 & Orphadata、HGNC、ClinVar、ClinGen & 疾病归一、跨源证据分级 \\
+10 & 肠道微生物组-疾病关联整合（T2D/\allowbreak{}IBD/\allowbreak{}CRC） & MGnify、GMRepo、病例对照论文、NCBI Taxonomy & 动态路线闭合、分类学术语归一 \\
 \bottomrule
 \end{xltabular}
-以下展开第 7–9 条案例（gold7 /\allowbreak{} gold8 /\allowbreak{} gold9）。三者均在同一冻结代码提交（\code{e8d03589}）、单一 Host、同一评测协议下完成，分别代表三类典型难点：动态多表拓扑闭环（gold7）、外部来源失效下的部分维度发布与结构化阻断（gold8）、多源多表整合与跨源证据（gold9）。
+十案例中，gold7–gold9 在同一冻结代码提交（\code{e8d03589}）、单一 Host、同一评测协议下完成并重点展开，分别代表三类典型难点：动态多表拓扑闭环（gold7）、外部来源失效下的部分维度发布与结构化阻断（gold8）、多源多表整合与跨源证据（gold9）；gold10（肠道微生物组）在独立冻结提交下亦达成四表正式发布。gold1–6 为参考样例，覆盖表达/\allowbreak{}变异/\allowbreak{}靶点/\allowbreak{}结构/\allowbreak{}活性/\allowbreak{}图表六类场景，未纳入本轮冻结评测协议。各正式执行案例的声明宇宙与结局总览见表~\ref{tab:gold-outcome}。
+
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.0\hsize}L>{\hsize=1.1\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.2\hsize}L}
+\caption{正式执行案例的声明宇宙与结局总览}\label{tab:gold-outcome}\\
+\toprule
+\textbf{案例} & \textbf{声明宇宙} & \textbf{对宇宙覆盖} & \textbf{对参考集} & \textbf{模型} & \textbf{终态} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{案例} & \textbf{声明宇宙} & \textbf{对宇宙覆盖} & \textbf{对参考集} & \textbf{模型} & \textbf{终态} \\
+\midrule
+\endhead
+gold7 & Bellenguez 2022 补充材料 +\allowbreak{} GWAS Catalog \code{GCST90027158}，dbSNP 核验坐标 & Catalog 89 条关联与补充材料 75 位点表全部解析，落表 1/\allowbreak{}88/\allowbreak{}127 行 & 覆盖 3,109 参考 locus 行的 2.8\%（单研究绑定，边界 4） & deepseek-v4-flash & 正式发布 \\
+gold8 & 9 个已验证药物 ×\allowbreak{} 8 肝毒性 PT（可达维度） & 68/72 行落表；4 行官方确无词条、未零填充 & 请求约 50 药中正式化 9 药（DILIrank/\allowbreak{}LiverTox 不可达，边界 2） & deepseek-v4-flash；qwen3.8-27B 亦有同类发布 & 可达维度正式发布 +\allowbreak{} 不可达维度结构化阻断 \\
+gold9 & Orphadata ×\allowbreak{} HGNC 四表，ClinVar/\allowbreak{}ClinGen 证据列 & 四表全交付（213/\allowbreak{}269/\allowbreak{}241/\allowbreak{}241 行），结构校验 67/67 & 四源中两源数值落表；证据列留空（边界 3） & deepseek-v4-flash & 正式发布 \\
+gold10 & IBD 表型：MGnify、GMRepo、文献补充差异表、NCBI Taxonomy & 四表全交付（1/\allowbreak{}30/\allowbreak{}19/\allowbreak{}598 行），校验 63/63，溯源覆盖 1.0 & 参考 3 表型/\allowbreak{}1,887 差异行的 IBD 子集；T2D/\allowbreak{}CRC 差异表源均不可达、显式标注 & deepseek-v4-flash & 正式发布 \\
+\bottomrule
+\end{xltabular}
+“声明宇宙”指该次执行实际声明的目标范围，由 TOPIC 与 Agent 的路线决策共同确定；对参考集的差距及其原因统一见 \ref{sec:boundaries} 节。
 
 \section{案例评测协议与总览}\label{sec:eval-protocol}
 
-为保证结果可复核，三个案例遵循同一评测协议：Agent 的输入只有案例 \code{TOPIC.txt} 原文（数百字节的研究需求描述，不含任何参考答案或人工整理数据）；代码冻结在单一提交；由一个有界外部监督程序（\code{scripts/\allowbreak{}gold-formal-supervisor.mjs}）驱动任务、把事件流持久化落盘、对发布产物逐件重新下载并重算字节与 SHA-256，最终给出终态分类（\code{succeeded\_\allowbreak{}publication} /\allowbreak{} \code{blocked\_\allowbreak{}no\_\allowbreak{}publication} /\allowbreak{} \code{failed\_\allowbreak{}or\_\allowbreak{}cancelled}）。评测模型为 DeepSeek-V4-Flash（上下文窗口 1,000,000、最大输出 32,768、温度 0.2）——选择一个非 Qwen 的国产模型是为了验证系统的模型无关性。Qwen 侧能力并非空白：此前 gold8 已在同链路上取得 Qwen3.8-27B 的同类正式发布（\code{pub\_\allowbreak{}dili\_\allowbreak{}benchmark\_\allowbreak{}faers\_\allowbreak{}counts\_\allowbreak{}852d6a0a4bcd531c}，2026-08-28），Qwen-VL 承担图表理解链路（\ref{subsec:chart-vlm} 节），全模型谱系的行为分层见 \ref{sec:multimodel} 节。另需澄清一处时间线：三案例的代码冻结提交 \code{e8d03589}（2026-08-28）早于占位符筛查落地提交 \code{22d87d15}（2026-08-29），三案例产物此后经监督程序逐件 SHA-256 重验，与参考集的结构对照见 \ref{sec:ref-compare} 节。
-\begin{xltabular}{\linewidth}{LLLLLL}
+为保证结果可复核，重点案例遵循同一评测协议：Agent 的输入只有案例 \code{TOPIC.txt} 原文（数百字节的研究需求描述，不含任何参考答案或人工整理数据）；代码冻结在单一提交；由一个有界外部监督程序（\code{scripts/\allowbreak{}gold-formal-supervisor.mjs}）驱动任务、把事件流持久化落盘、对发布产物逐件重新下载并重算字节与 SHA-256，最终给出终态分类（\code{succeeded\_\allowbreak{}publication} /\allowbreak{} \code{blocked\_\allowbreak{}no\_\allowbreak{}publication} /\allowbreak{} \code{failed\_\allowbreak{}or\_\allowbreak{}cancelled}）。评测模型为 DeepSeek-V4-Flash（上下文窗口 1,000,000、最大输出 32,768、温度 0.2）——选择一个非 Qwen 的国产模型是为了验证系统的模型无关性。Qwen 侧能力并非空白：此前 gold8 已在同链路上取得 Qwen3.8-27B 的同类正式发布（\code{pub\_\allowbreak{}dili\_\allowbreak{}benchmark\_\allowbreak{}faers\_\allowbreak{}counts\_\allowbreak{}852d6a0a4bcd531c}，2026-08-28），Qwen-VL 承担图表理解链路（\ref{subsec:chart-vlm} 节），全模型谱系的行为分层见 \ref{sec:multimodel} 节。另需澄清一处时间线：gold7–9 的代码冻结提交 \code{e8d03589}（2026-08-28）早于占位符筛查落地提交 \code{22d87d15}（2026-08-29），三案例产物此后经监督程序逐件 SHA-256 重验，与参考集的结构对照见 \ref{sec:ref-compare} 节。
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.0\hsize}L>{\hsize=1.4\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.2\hsize}L}
 \caption{Gold7--9 正式发布与校验结果}\label{tab:gold789-result}\\
 \toprule
 \textbf{案例} & \textbf{研究主题} & \textbf{正式发布（Publication）} & \textbf{交付物} & \textbf{校验} & \textbf{上下文峰值} \\
@@ -38,17 +56,17 @@
 \textbf{案例} & \textbf{研究主题} & \textbf{正式发布（Publication）} & \textbf{交付物} & \textbf{校验} & \textbf{上下文峰值} \\
 \midrule
 \endhead
-gold7 & 阿尔茨海默 GWAS 风险位点多源整合 & \code{pub\allowbreak{}\_\allowbreak{}ad\allowbreak{}\_\allowbreak{}gwas\allowbreak{}\_\allowbreak{}risk\allowbreak{}\_\allowbreak{}loci\allowbreak{}\_\allowbreak{}integration\allowbreak{}\_\allowbreak{}b51fdc25…} & study /\allowbreak{} locus /\allowbreak{} variant\_\allowbreak{}gene\_\allowbreak{}mapping 三表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估 & 逐件 SHA-256 通过 & 766,326 /\allowbreak{} 1M（76.6\%） \\
-gold8 & DILI 风险药物证据整合 & \code{pub\allowbreak{}\_\allowbreak{}REQ\allowbreak{}\_\allowbreak{}DILI\allowbreak{}\_\allowbreak{}FAERS\allowbreak{}\_\allowbreak{}COUNTS\allowbreak{}\_\allowbreak{}fd56dd6f…} & faers\_\allowbreak{}reaction\_\allowbreak{}counts 主表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估（4 件） & 逐件 SHA-256 通过 & 380,287 /\allowbreak{} 1M（38.0\%） \\
-gold9 & 原发性免疫缺陷基因-疾病-表型整合 & \code{pub\allowbreak{}\_\allowbreak{}iei\allowbreak{}\_\allowbreak{}pid\allowbreak{}\_\allowbreak{}v1\allowbreak{}\_\allowbreak{}bafb191e…} & gene /\allowbreak{} disease /\allowbreak{} gene\_\allowbreak{}disease /\allowbreak{} crosswalk 四表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估（7 件） & 逐件 SHA-256 通过；结构校验 67/\allowbreak{}67 & 750,739 /\allowbreak{} 1M（75.1\%） \\
+gold7 & 阿尔茨海默 GWAS 风险位点多源整合 & \code{pub\_\allowbreak{}ad\_\allowbreak{}gwas\_\allowbreak{}…\_\allowbreak{}b51fdc25…} & study /\allowbreak{} locus /\allowbreak{} variant\_\allowbreak{}gene\_\allowbreak{}mapping 三表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估 & 逐件 SHA-256 通过 & 766,326 /\allowbreak{} 1M（76.6\%） \\
+gold8 & DILI 风险药物证据整合 & \code{pub\_\allowbreak{}REQ\_\allowbreak{}DILI\_\allowbreak{}…\_\allowbreak{}fd56dd6f…} & faers\_\allowbreak{}reaction\_\allowbreak{}counts 主表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估（4 件） & 逐件 SHA-256 通过 & 380,287 /\allowbreak{} 1M（38.0\%） \\
+gold9 & 原发性免疫缺陷基因-疾病-表型整合 & \code{pub\_\allowbreak{}iei\_\allowbreak{}pid\_\allowbreak{}…\_\allowbreak{}bafb191e…} & gene /\allowbreak{} disease /\allowbreak{} gene\_\allowbreak{}disease /\allowbreak{} crosswalk 四表 +\allowbreak{} schema +\allowbreak{} provenance +\allowbreak{} 评估（7 件） & 逐件 SHA-256 通过；结构校验 67/\allowbreak{}67 & 750,739 /\allowbreak{} 1M（75.1\%） \\
 \bottomrule
 \end{xltabular}
-三例全程零 shell /\allowbreak{} 网络绕路、零权限暂停（权限面的停审-拒绝-恢复链路在更早轮次已单独验证）；上下文峰值均远低于窗口，未触发任何压缩。全部事件流、发布清单与重验记录保留在 \code{data/\allowbreak{}gold/\allowbreak{}} 评测证据目录中（gold7：\code{gold7\_\allowbreak{}alzheimer\_\allowbreak{}gwas}；gold8：\code{gold8\_\allowbreak{}dili\_\allowbreak{}drug\_\allowbreak{}safety}；gold9：\code{gold9\_\allowbreak{}iei\_\allowbreak{}gene\_\allowbreak{}phenotype}），每目录包含 TOPIC 原文、原始与中间产物、\code{provenance.json} 及 \code{runs-log.md} 逐 run 日志；监督程序的逐 run 事件日志见 \code{data/\allowbreak{}e2e-gold7-004…009-monitor.log}、\code{e2e-gold8-001-monitor.log} 与 \code{e2e-gold9-001-monitor.log}。
+三例全程零 shell /\allowbreak{} 网络绕路、零权限暂停；上下文峰值均远低于窗口，未触发压缩。全部事件流、发布清单与重验记录（TOPIC 原文、中间产物、\code{provenance.json}、\code{runs-log.md} 逐 run 日志与监督程序逐 run 事件日志）保留在 \code{data/\allowbreak{}gold/\allowbreak{}} 评测证据目录中，可按案例目录名（如 \code{gold7\_\allowbreak{}alzheimer\_\allowbreak{}gwas}）逐案核查复现。
 
 \section{案例 gold7：阿尔茨海默 GWAS 风险位点整合（动态 Family 全链闭环）}\label{sec:gold7}
 
 \textbf{输入（TOPIC 摘要）}：以 Bellenguez 2022（PMID 35379992）等来源整合 AD GWAS 风险位点，输出研究、位点、变异-基因映射三张表，要求补充材料 75 位点表解析与 GRCh38 坐标核验。
-\textbf{过程要点}：Agent 首步调用路线检查（\code{inspect\_\allowbreak{}dataset\_\allowbreak{}execution\_\allowbreak{}routes}），确认静态注册表无任何数据家族能表达该三表拓扑后选择动态路线；随后经治理工具完成采集——GWAS Catalog REST 返回 GCST90027158 的 89 条全基因组显著关联；Europe PMC 官方补充通道取得 27,656,649 字节归档（SHA-256 逐字节登记后作为任务资产），Core 提取器将 XLSX 成员逐工作表转为溯源绑定的 UTF-8 CSV 资产；dbSNP 工具核验 GRCh38 坐标。正式发布前，动态预检拒绝了 11 次规格提交（角色映射、输入闭包、外键策略、字段形状等），每次均给出可操作的错误信息；Agent 修正后发布 v1，又自行发现 v1 的 GWAS 统计列未填充与解析缺陷，发布修正版 v2 并以替代关系保留 v1 历史——这一"自检-修正-换版"行为是完成契约与显式终态约束下的 Agent 自检闭环样本（人工反馈闭环机制见 \ref{sec:hil} 节）。
+\textbf{过程要点}：Agent 首步调用路线检查（\code{inspect\_\allowbreak{}dataset\_\allowbreak{}execution\_\allowbreak{}routes}），确认静态注册表无任何数据家族能表达该三表拓扑后选择动态路线；随后经治理工具完成采集——GWAS Catalog REST 返回 GCST90027158 的 89 条全基因组显著关联；Europe PMC 官方补充通道取得 27,656,649 字节归档（SHA-256 逐字节登记后作为任务资产），Core 提取器将 XLSX 成员逐工作表转为溯源绑定的 UTF-8 CSV 资产；dbSNP 工具核验 GRCh38 坐标。正式发布前，动态预检拒绝了 11 次规格提交（角色映射、输入闭包、外键策略、字段形状等），每次均给出可操作的错误信息；Agent 修正后发布 v1，又自行发现 v1 的 GWAS 统计列未填充与解析缺陷，发布修正版 v2 并以替代关系保留 v1 历史——这一“自检-修正-换版”行为是完成契约与显式终态约束下的 Agent 自检闭环样本（人工反馈闭环机制见 \ref{sec:hil} 节）。
 \textbf{输出结构（v2，\code{study.csv} 1 行、\code{locus.csv} 88 行、\code{variant\_\allowbreak{}gene\_\allowbreak{}mapping.csv} 127 行）}：\code{locus.csv} 24 列，含双坐标基准对照（\code{position\_\allowbreak{}grch38} 与补充材料 \code{position\_\allowbreak{}grch38\_\allowbreak{}supp}）、分层统计（\code{stage1/\allowbreak{}stage2/\allowbreak{}stage12} 的 OR 与 p 值）、异质性（\code{i2}/\allowbreak{}\code{phet}）与来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}、\code{dbsnp\_\allowbreak{}variant\_\allowbreak{}type}）。真实样例行：
 \begin{xltabular}{\linewidth}{LL}
 \caption{Gold7 locus 真实样例行（v2）}\label{tab:gold7-locus-sample}\\
@@ -74,49 +92,30 @@ i2 /\allowbreak{} phet /\allowbreak{} in\_\allowbreak{}supp\_\allowbreak{}75\_\a
 
 \textbf{输入（TOPIC 摘要）}：针对 DILIrank 2.0 vMost 药物整合三类证据——DILIrank 标签注释、LiverTox 专论、openFDA FAERS 肝毒性 PT 报告计数，约 50 种代表药、四表交付。
 
-\textbf{关键难点与行为}：DILIrank 2.0 官方文件（\code{fda.gov/\allowbreak{}media/\allowbreak{}113052/\allowbreak{}download}）持续 404，LiverTox 无药物级结构化导出。系统的处理展示了赛题"自动识别缺失数据……完成修正或寻求人类建议"加分项的完整链路：第一轮运行在发现阶段确认官方来源不可达后\textbf{未编造任何行}，以工作区暂存 +\allowbreak{} 结构化阻断收尾，明确请求"提供官方文件或注册 Core 资产"；第二轮定向续跑把可达维度（FAERS 计数）正式化——9 个已验证药物各经一条 \code{openfda.files.v1} Core 采集绑定\textbf{重新获取}（发现阶段的查询输出不被当作正式载体），以动态数据家族发布。
+\textbf{关键难点与行为}：DILIrank 2.0 官方文件（\code{fda.gov/\allowbreak{}media/\allowbreak{}113052/\allowbreak{}download}）持续 404，LiverTox 无药物级结构化导出。系统的处理展示了赛题“自动识别缺失数据……完成修正或寻求人类建议”加分项的完整链路：第一轮运行在发现阶段确认官方来源不可达后\textbf{未编造任何行}，以工作区暂存 +\allowbreak{} 结构化阻断收尾，明确请求“提供官方文件或注册 Core 资产”；第二轮定向续跑把可达维度（FAERS 计数）正式化——9 个已验证药物各经一条 \code{openfda.files.v1} Core 采集绑定\textbf{重新获取}（发现阶段的查询输出不被当作正式载体），以动态数据家族发布。
 
-这一"核实不可达 → 显式阻断 → 定向续跑 → 正式化可达维度"的降级链，把提案加分项"自动识别缺失数据并完成修正或寻求人类建议"落在数据链路的每个环节；不可达维度的替代源自动发现（从文献补充或其他官方通道补 DILI 证据，并把尝试过程计入覆盖证据）已列入改进项。
+这一“核实不可达 → 显式阻断 → 定向续跑 → 正式化可达维度”的降级链，正是提案加分项“自动识别缺失数据并完成修正或寻求人类建议”在数据链路上的落地；不可达维度的替代源自动发现为已识别的改进方向（\ref{sec:boundaries} 节边界 2）。
 
 \textbf{输出结构}：\code{faers\_\allowbreak{}reaction\_\allowbreak{}counts.csv} 68 行 × 5 列（\code{drug\_\allowbreak{}name, reaction\_\allowbreak{}pt, report\_\allowbreak{}count, retrieval\_\allowbreak{}method, source\_\allowbreak{}url}）。请求的 9 药 × 8 肝毒性 PT = 72 行中，4 行因官方聚合响应确无该 PT 词条而\textbf{未零填充}，逐条列出（如 azathioprine–HEPATOCELLULAR INJURY）；其余 68 行与发现阶段 openFDA 计数逐条一致（如 acetaminophen ACUTE HEPATIC FAILURE = 3297）。校验 16/\allowbreak{}16 通过（0 坏行、0 重复主键）、溯源 9/\allowbreak{}9 载体满足、\code{product\_\allowbreak{}status=publishable}。每行 \code{source\_\allowbreak{}url} 直接给出可复核的官方 API 查询串；\code{report\_\allowbreak{}count} 的语义为 MedDRA PT 报告次数（非去重患者、非因果证据），已在终答与溯源中注明。
-不可达的 DILIrank vMost 名册与 LiverTox 维度不进入正式发布，仅保留为明确标注暂存的工作区文件——"部分维度正式发布 +\allowbreak{} 不可达维度结构化阻断"是该上游条件下唯一诚实的完成形态，也是 \ref{sec:stage7-validate} 节显式终态语义的一次实战兑现。其余边界见 \ref{sec:boundaries} 节。
+不可达的 DILIrank vMost 名册与 LiverTox 维度不进入正式发布，仅保留为明确标注暂存的工作区文件——“部分维度正式发布 +\allowbreak{} 不可达维度结构化阻断”是该上游条件下的完成形态，也是 \ref{sec:stage7-validate} 节显式终态语义的一次实战兑现。其余边界见 \ref{sec:boundaries} 节。
 
 \section{案例 gold9：原发性免疫缺陷基因-疾病整合（多源四表与跨源证据）}\label{sec:gold9}
 
 \textbf{输入（TOPIC 摘要）}：从 Orphadata 筛选免疫缺陷相关罕见病及基因关联，经 HGNC 归一为现行符号，整合 ClinVar 致病性变异计数与 ClinGen 有效性分类，输出基因、疾病、基因-疾病关联、跨源证据四表，以 \code{hgnc\_\allowbreak{}symbol}/\allowbreak{}\code{orphacode} 关联，ClinGen Refuted/\allowbreak{}Disputed 冲突单独标记。
 
-\textbf{过程要点}：Orphadata 两个大型 XML（en\_\allowbreak{}product1 54,026,799 字节、en\_\allowbreak{}product6 22,612,034 字节）经任务内容缓存命中（先前由同一官方端点获取并逐字节验证，摘要一致），零网络重取；HGNC、ClinVar、ClinGen 为本 run 真实网络采集。前两轮 run 因基础设施缺陷（浏览器渲染超大文件导致资源耗尽、会话取消路径无界等待）中断——两个缺陷均被定位并修复（渲染资源闸门、强制取消），续测一次通过，本身即 \ref{sec:hil} 节与 \ref{sec:design-goals} 节"可恢复性"目标的工程实证。
+\textbf{过程要点}：Orphadata 两个大型 XML（en\_\allowbreak{}product1 54,026,799 字节、en\_\allowbreak{}product6 22,612,034 字节）经任务内容缓存命中（先前由同一官方端点获取并逐字节验证，摘要一致），零网络重取；HGNC、ClinVar、ClinGen 为本 run 真实网络采集。前两轮 run 因基础设施缺陷（浏览器渲染超大文件导致资源耗尽、会话取消路径无界等待）中断——两个缺陷均被定位并修复（渲染资源闸门、强制取消），续测一次通过，本身即 \ref{sec:hil} 节与 \ref{sec:design-goals} 节“可恢复性”目标的工程实证。
 
-\textbf{输出结构（四表）}：
-
-\begin{xltabular}{\linewidth}{LLL}
-    \caption{Gold9 输出四表结构}\label{tab:gold9-tables}\\
-    \toprule
-\textbf{表} & \textbf{行数} & \textbf{字段（语义）} \\
-\midrule
-\endfirsthead
-\toprule
-\textbf{表} & \textbf{行数} & \textbf{字段（语义）} \\
-\midrule
-\endhead
-\code{gene\_\allowbreak{}records.csv} & 213 & hgnc\_\allowbreak{}symbol、hgnc\_\allowbreak{}id、gene\_\allowbreak{}name、alias\_\allowbreak{}symbols、previous\_\allowbreak{}symbols、locus\_\allowbreak{}group、locus\_\allowbreak{}type、status（HGNC 归一后的现行身份） \\
-\code{disease\_\allowbreak{}records.csv} & 269 & orphacode、disease\_\allowbreak{}name、synonyms、disease\_\allowbreak{}type、disorder\_\allowbreak{}group \\
-\code{gene\_\allowbreak{}disease\_\allowbreak{}records.csv} & 241 & orphacode、hgnc\_\allowbreak{}symbol、orphanet\_\allowbreak{}gene\_\allowbreak{}symbol、gene\_\allowbreak{}name、association\_\allowbreak{}type、source（主表） \\
-\code{gene\_\allowbreak{}evidence\_\allowbreak{}crosswalk.csv} & 241 & hgnc\_\allowbreak{}symbol、orphacode、clingen\_\allowbreak{}classification（+\allowbreak{}日期/\allowbreak{}疾病标签）、clinvar\_\allowbreak{}count（+\allowbreak{}查询串）、conflict\_\allowbreak{}flag、conflict\_\allowbreak{}detail \\
-\bottomrule
-\end{xltabular}
-
-关联样例（\code{gene\_\allowbreak{}disease\_\allowbreak{}records}）：\code{567, TBX1, TBX1, "T-box transcription factor 1", "Disease-causing germline mutation(s) in; Role in the phenotype of", Orphanet en\_\allowbreak{}product6}。结构校验 67/\allowbreak{}67 通过（候选引用闭合、逐表 schema 契约、主键唯一、外键关系、溯源覆盖等），\code{product\_\allowbreak{}status=publishable}。
+\textbf{输出结构（四表）}：\code{gene\_\allowbreak{}records.csv} 213 行（HGNC 现行身份，含别名与历史符号）、\code{disease\_\allowbreak{}records.csv} 269 行、\code{gene\_\allowbreak{}disease\_\allowbreak{}records.csv} 241 行（主表，保留 \code{orphanet\_\allowbreak{}gene\_\allowbreak{}symbol} 原写法）、\code{gene\_\allowbreak{}evidence\_\allowbreak{}crosswalk.csv} 241 行（ClinGen 有效性分类 +\allowbreak{} ClinVar 计数 +\allowbreak{} 冲突标记）。关联样例（\code{gene\_\allowbreak{}disease\_\allowbreak{}records}）：\code{567, TBX1, TBX1, "T-box transcription factor 1", "Disease-causing germline mutation(s) in; Role in the phenotype of", Orphanet en\_\allowbreak{}product6}。结构校验 67/\allowbreak{}67 通过（候选引用闭合、逐表 schema 契约、主键唯一、外键关系、溯源覆盖等），\code{product\_\allowbreak{}status=publishable}。
 
 \textbf{来源清单（五个正式载体，溯源逐条登记回执、请求身份摘要与官方端点快照）}：en\_\allowbreak{}product1（54,026,799 B，\code{df8d562a…}）、en\_\allowbreak{}product6（22,612,034 B，\code{f1c039f7…}）、HGNC current（16,948,051 B）、ClinVar gene-esearch（460 B）、ClinGen current（1,119,208 B）。
 
-本例闭合的是 Orphadata×HGNC 两源四表与完整的发布、溯源、验证链，而非 TOPIC 全部四源的数值级整合：crosswalk 中 ClinVar/\allowbreak{}ClinGen 数值列在发布表中为空——两个载体已获取并绑定，但数据变换未将值落入交叉表，而结构校验不检查可选列填充率，因此照常通过。团队复核后已将此偏差记入案例档案；该边界的定性、机理与改进项见 \ref{sec:boundaries} 节。
+本例闭合的是 Orphadata×HGNC 两源四表与完整的发布、溯源、验证链；crosswalk 的 ClinVar/\allowbreak{}ClinGen 数值列留空（两个载体已获取绑定，但值未落入交叉表），该偏差的机理与处置见 \ref{sec:boundaries} 节边界 3。
 
 \section{多模型对抗性验证与能力分层}\label{sec:multimodel}
 
-三案例由单一模型完成。为回答"换用 Qwen 系模型（含更低档位）时正式发布全链路是否可用、失败是否落在正确拦截层"两个问题，我们在 gold7 同一 TOPIC 上开展了一轮 10+ 次的多模型直问验证（2026-08-29）：以真实研究问题直接建任务，用户消息只含数百字节的研究需求原文，机制与约束全部属于系统提示词与工具描述，由监督程序逐轮记录结局、首要失败模式与拦截层（表~\ref{tab:run-matrix}）。
+重点案例由单一模型完成。为回答“换用 Qwen 系模型（含更低档位）时正式发布全链路是否可用、失败是否落在正确拦截层”两个问题，我们在 gold7 同一 TOPIC 上开展了一轮 10+ 次的多模型直问验证（2026-08-29）：以真实研究问题直接建任务，用户消息只含数百字节的研究需求原文，机制与约束全部属于系统提示词与工具描述，由监督程序逐轮记录结局、首要失败模式与拦截层（表~\ref{tab:run-matrix}）。
 
-\begin{xltabular}{\linewidth}{LLLLLL}
+\begin{xltabular}{\linewidth}{>{\hsize=0.5\hsize}L>{\hsize=0.8\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.5\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.4\hsize}L}
 \caption{gold7 多模型直问验证运行矩阵（按时间序，2026-08-29）}\label{tab:run-matrix}\\
 \toprule
 \textbf{轮次} & \textbf{模型} & \textbf{结局} & \textbf{首要失败模式} & \textbf{拦截层} & \textbf{随后落地的修复} \\
@@ -135,14 +134,14 @@ r6 & qwen3.8-flash & blocked & 三类拒绝循环不收敛（35 prepare /\allowb
 隔离1 & deepseek-v4-flash & blocked & 首次 prepare 墙前放弃，转工作区 & supervisor（诚实分类） & 提出温度假设（0.2 vs 0.7） \\
 隔离2 & deepseek-v4-flash & 拦停 & 直接转 python 解 zip & supervisor & 证伪温度杠杆 → 确认数据可见性缺口 \\
 直问1 & qwen3.7-flash & 拦停 & 盲写 transform 触沙箱拒绝后转 python & supervisor & 沙箱方言进系统提示词 \\
-直问2 & qwen3.7-flash & blocked & 零正式尝试即交"临时结果 +\allowbreak{} 假阻塞" & supervisor 诚实分类 & end-of-run publication gate（在办） \\
+直问2 & qwen3.7-flash & blocked & 零正式尝试即交“临时结果 +\allowbreak{} 假阻塞” & supervisor 诚实分类 & end-of-run 发布闸门 \\
 直问3 & qwen3.7-flash & 拦停 & 发布评估拒绝后转 python & supervisor & receipt-only 绑定修复 +\allowbreak{} 拒绝携带 check 详情 \\
 \bottomrule
 \end{xltabular}
 
-矩阵给出两个结论。其一，护栏纵深有效：十一轮中每一次错误都落在对应拦截层——preflight 逐字段校验拦自造 digest、quarantine 拦表头与占位符、supervisor 拦越权读盘与 shell、终态分类拦伪阻塞——没有任何编造行进入过受验发布；唯一穿透（r4 占位符空壳发布）当日立案，并以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 准入筛查修复。因此"阻断率"应读作护栏纵深的证据而非系统弱点：每个未拦住的失败模式都转化为一条产品修复（receipt-only submit、机制系统提示词、prepare 键差点名报错等），全部已在主线落地。其二，模型能力分层清晰（表~\ref{tab:model-tiering}）：多数"模型失败"实为产品可观测性与工效缺口（数据不可见、错误不点名、逃生门太顺手），已按此顺序修复；Qwen 非 flash 档的正式发布案例列为在办项，取得后在表~\ref{tab:model-tiering} 补行。
+矩阵给出两个结论。其一，护栏纵深有效：十一轮中每一次错误都落在对应拦截层——preflight 逐字段校验拦自造 digest、quarantine 拦表头与占位符、supervisor 拦越权读盘与 shell、终态分类拦伪阻塞——没有任何编造行进入过受验发布；唯一穿透（r4 占位符空壳发布）当日立案，并以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 准入筛查修复。每个未拦住的失败模式都转化为一条产品修复（receipt-only submit、机制系统提示词、prepare 键差点名报错等），绝大多数已落地主线。其二，模型能力分层清晰（表~\ref{tab:model-tiering}）：多数“模型失败”实为产品可观测性与工效缺口（数据不可见、错误不点名、逃生门太顺手），已按此顺序修复。
 
-\begin{xltabular}{\linewidth}{LLL}
+\begin{xltabular}{\linewidth}{>{\hsize=0.7\hsize}L>{\hsize=1.3\hsize}L>{\hsize=1.0\hsize}L}
 \caption{模型能力分层（runs-log 2026-08-25--29）}\label{tab:model-tiering}\\
 \toprule
 \textbf{模型} & \textbf{观测表现} & \textbf{定位} \\
@@ -152,19 +151,19 @@ r6 & qwen3.8-flash & blocked & 三类拒绝循环不收敛（35 prepare /\allowb
 \textbf{模型} & \textbf{观测表现} & \textbf{定位} \\
 \midrule
 \endhead
-DeepSeek-V4-Flash & 08-28 零脚手架首跑自收敛；gold7/8/9 三案例正式发布（\ref{sec:eval-protocol}--\ref{sec:gold9} 节） & 评测主力，验证模型无关性 \\
+DeepSeek-V4-Flash & 08-28 零脚手架首跑自收敛；gold7/8/9/10 四案例正式发布（\ref{sec:eval-protocol}--\ref{sec:gold9} 节、表~\ref{tab:gold-outcome}） & 评测主力，验证模型无关性 \\
 qwen3.8-27B & gold8 正式发布（2026-08-28） & Qwen 中档可闭环 \\
 Qwen-VL & 图表理解链路生产组件（\ref{subsec:chart-vlm} 节） & 赛题图形侧的 Qwen 支点 \\
 qwen flash 档（3.7 / 3.8） & 十一轮直问零正式发布；六种失败模式，最佳轮次推进至发布评估最后一级（直问3） & 能力边界如实分层 \\
-qwen3.7-plus & gold7 早期多轮失败：不走正式路线、三轮谎报"整合完成"（\code{build\_\allowbreak{}result} 为 null）、Catalog 端点 404 & 高档位正式发布案例在办，取得后补行 \\
+qwen3.7-plus & gold7 早期多轮失败：不走正式路线、三轮谎报“整合完成”（\code{build\_\allowbreak{}result} 为 null）、Catalog 端点 404 & 高档位正式发布尚未取得 \\
 \bottomrule
 \end{xltabular}
 
 \section{与参考集的对照}\label{sec:ref-compare}
 
-Gold 案例配有参考输入输出，但正式发布的范围由 Agent 在证据约束下实际闭合的部分决定，可能窄于参考全集。表~\ref{tab:reference-comparison} 冻结三案例的参考集规模与正式发布规模对照。口径说明：参考行数取自 runs-log 各轮 Reference structure 记录，发布行数取自发布清单；本表为手工冻结的先行版，行级覆盖率、字段命中率与数值一致性的脚本化对照评测在办，完成后补充精确量化数字。
+Gold 案例配有参考输入输出，正式发布的范围由 Agent 在证据约束下实际闭合的部分决定，可能窄于参考全集。表~\ref{tab:reference-comparison} 冻结三案例的参考集规模与正式发布规模对照。口径说明：参考行数取自 runs-log 各轮 Reference structure 记录，发布行数取自发布清单；行级覆盖率、字段命中率与数值一致性的脚本化对照尚未产出（\ref{sec:boundaries} 节边界 7）。
 
-\begin{xltabular}{\linewidth}{LLLL}
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.0\hsize}L>{\hsize=1.1\hsize}L>{\hsize=1.3\hsize}L}
 \caption{三案例与参考集的规模对照}\label{tab:reference-comparison}\\
 \toprule
 \textbf{案例} & \textbf{参考集规模} & \textbf{正式发布规模} & \textbf{差距定性} \\
@@ -174,39 +173,17 @@ Gold 案例配有参考输入输出，但正式发布的范围由 Agent 在证�
 \textbf{案例} & \textbf{参考集规模} & \textbf{正式发布规模} & \textbf{差距定性} \\
 \midrule
 \endhead
-gold7 & 241 study /\allowbreak{} 3,109 locus /\allowbreak{} 2,216 mapping 行 & 1 study /\allowbreak{} 88 locus /\allowbreak{} 127 mapping 行 & 正式绑定单研究（GCST90027158），映射基因全部来自补充材料；多研究扩展列改进（\ref{sec:boundaries}） \\
+gold7 & 241 study /\allowbreak{} 3,109 locus /\allowbreak{} 2,216 mapping 行 & 1 study /\allowbreak{} 88 locus /\allowbreak{} 127 mapping 行 & 正式绑定单研究（GCST90027158），映射基因全部来自补充材料；多研究扩展见 \ref{sec:boundaries} 节边界 4 \\
 gold8 & 约 50 种请求药物 ×\allowbreak{} 8 肝毒性 PT（72 行） & 9 药、68 行落表（4 行官方聚合确无该 PT，未零填充） & DILIrank 名册与 LiverTox 维度不可达，结构化阻断而非静默缺失 \\
-gold9 & TOPIC 四源整合（Orphadata、HGNC、ClinVar、ClinGen） & 两源四表 213 /\allowbreak{} 269 /\allowbreak{} 241 /\allowbreak{} 241 行 & ClinVar/\allowbreak{}ClinGen 数值列未落表（载体已绑定，见 \ref{sec:boundaries} 节） \\
+gold9 & TOPIC 四源整合（Orphadata、HGNC、ClinVar、ClinGen） & 两源四表 213 /\allowbreak{} 269 /\allowbreak{} 241 /\allowbreak{} 241 行 & ClinVar/\allowbreak{}ClinGen 数值列未落表（载体已绑定，\ref{sec:boundaries} 节边界 3） \\
 \bottomrule
 \end{xltabular}
 
-两点读法。其一，发布窄于参考的每一处都是显式披露的范围取舍或上游失效结果：未被覆盖的部分要么以结构化阻断交付（gold8 不可达维度），要么作为边界随产物披露（gold7 单研究绑定、gold9 数值列空），而已发布行全部可溯源并经逐件 SHA-256 重验。其二，gold9 暴露的是校验维度的差距：四表行数与参考结构一致，但可选列填充率不在线检查内（\ref{sec:boundaries}），行级填充率门禁已列入改进项。对照评测（冻结参考 +\allowbreak{} 脚本化行级覆盖率、字段命中率、数值一致性抽样）落地后，本节将回填精确数字。
+两点读法。其一，发布窄于参考的每一处都是显式披露的范围取舍或上游失效结果：未被覆盖的部分要么以结构化阻断交付（gold8 不可达维度），要么作为边界随产物披露（gold7 单研究绑定、gold9 数值列空），已发布行全部可溯源并经逐件 SHA-256 重验；结合表~\ref{tab:gold-outcome} 的声明宇宙口径，gold7 对其声明宇宙（GCST90027158 的 89 条关联与 75 位点补充表）为全量解析。其二，gold9 暴露的是校验维度的差距：四表行数与参考结构一致，但可选列填充率不在结构校验范围内（\ref{sec:boundaries} 节边界 3）。
 
 \section{可调用测试 API 与可交互前端}\label{sec:api}
 
-系统以 HTTP API 与 Web 前端同时暴露全部能力：
-\begin{xltabular}{\linewidth}{LLL}
-\caption{系统 HTTP API 端点}\label{tab:api-endpoints}\\
-\toprule
-\textbf{端点} & \textbf{方法} & \textbf{作用} \\
-\midrule
-\endfirsthead
-\toprule
-\textbf{端点} & \textbf{方法} & \textbf{作用} \\
-\midrule
-\endhead
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}health} & GET & Host/\allowbreak{}运行时/\allowbreak{}Core 健康自检 \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}tasks} & POST /\allowbreak{} GET & 创建任务（自然语言输入即 Body）/\allowbreak{} 列出任务 \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}tasks/\allowbreak{}\{task\_\allowbreak{}id\}} & GET & 任务快照：状态、runs、artifact 数、当前发布指针 \\
-\code{…/\allowbreak{}runs} · \code{…/\allowbreak{}cancel} · \code{…/\allowbreak{}resume} & POST & 在既有任务上发起新 run（续跑）；取消 /\allowbreak{} 恢复（含权限与 HIL 恢复） \\
-\code{…/\allowbreak{}runs/\allowbreak{}\{run\_\allowbreak{}id\}/\allowbreak{}permissions/\allowbreak{}\{request\_\allowbreak{}id\}} & POST & 权限裁决（approve/\allowbreak{}deny，绑定证据摘要） \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}tasks/\allowbreak{}\{task\_\allowbreak{}id\}/\allowbreak{}compact} & POST & 手动上下文压缩 \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}publications/\allowbreak{}\{pub\_\allowbreak{}id\}/\allowbreak{}artifacts/\allowbreak{}…} & GET & 发布物与逐 artifact 下载（消费时重验 SHA-256） \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}settings} · \code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}model-registry/\allowbreak{}*} & GET/\allowbreak{}PUT/\allowbreak{}POST & 模型供应商/\allowbreak{}模型注册、参数与激活（不锁定任何模型） \\
-\code{/\allowbreak{}api/\allowbreak{}v1/\allowbreak{}ws} & WebSocket & 事件流实时订阅（工具调用、验证、发布事件） \\
-\bottomrule
-\end{xltabular}
-前端（React 19 +\allowbreak{} Vite +\allowbreak{} Tailwind）提供任务列表与创建、run 事件时间线、发布物查看（按当前发布指针渲染并重验摘要）、人工确认结构化问卷（字段映射/\allowbreak{}单位/\allowbreak{}发布确认等场景的 approve/\allowbreak{}reject/\allowbreak{}correct）、模型设置页。开发入口 \code{pnpm dev}（Host 8000 +\allowbreak{} 前端中间件），生产入口 \code{pnpm start}。三案例的完整复现命令（监督程序调用模板、缓存种子方法、单实例约束）已在仓库 \code{docs/\allowbreak{}plans/\allowbreak{}} 与 \code{docs/\allowbreak{}gold-formal-rerun.md} 固化。
+系统以 HTTP API 与 Web 前端同时暴露全部能力：API 覆盖健康自检、任务创建与名单、run 续跑/\allowbreak{}取消/\allowbreak{}恢复、权限裁决（approve/\allowbreak{}deny，绑定证据摘要）、发布物与逐 artifact 下载（消费时重验 SHA-256）及事件流实时订阅；前端（React 19 +\allowbreak{} Vite +\allowbreak{} Tailwind）提供任务列表与创建、run 事件时间线、发布物查看、人工确认结构化问卷（approve/\allowbreak{}reject/\allowbreak{}correct，覆盖字段映射/\allowbreak{}单位/\allowbreak{}发布确认等场景）与模型设置页。开发入口 \code{pnpm dev}（Host 8000 +\allowbreak{} 前端中间件），生产入口 \code{pnpm start}；案例的完整复现命令已在仓库 \code{docs/\allowbreak{}plans/\allowbreak{}} 与 \code{docs/\allowbreak{}gold-formal-rerun.md} 固化。
 
 \section{结构化输出样例与字段说明}\label{sec:samples}
 
@@ -216,57 +193,47 @@ hgnc_symbol,orphacode,clingen_classification,clingen_classification_date,clingen
 TBX1,567,,,,,,NONE,
 \end{lstlisting}
 
-字段语义：\code{clingen\_\allowbreak{}classification} 为 ClinGen 基因-疾病有效性分类（如 Definite/\allowbreak{}Strong/\allowbreak{}Limited；Refuted/\allowbreak{}Disputed 出现时触发冲突逻辑）；\code{clinvar\_\allowbreak{}count} 为 ClinVar 该基因致病记录计数，\code{clinvar\_\allowbreak{}query} 保留实际查询串以供复核；\code{conflict\_\allowbreak{}flag} 取 \code{NONE} 或 \code{CONFLICT\_\allowbreak{}CLINGEN\_\allowbreak{}REFUTED\_\allowbreak{}OR\_\allowbreak{}DISPUTED\_\allowbreak{}WITH\_\allowbreak{}ORPHANET\_\allowbreak{}ASSOCIATION}，\code{conflict\_\allowbreak{}detail} 列出冲突的 ClinGen 疾病标签。空值即"来源未覆盖该单元格"，系统不以零或推断填充（gold9 中 ClinVar/\allowbreak{}ClinGen 两列整体为空的边界说明见 \ref{sec:boundaries} 节）。
-
-来源凭据样例（\code{provenance.json} 中 \code{input\_\allowbreak{}asset\_\allowbreak{}receipts} 的第一条，逐字段）：
-\begin{lstlisting}[style=papercode]
-{ "asset_id": "asset_df8d562a0c6011af…c0962bbb",
-  "sha256": "df8d562a0c6011af36a74eb4000ce81ca7d723e8031010819fb71727c0962bbb",
-  "size_bytes": 54026799, "locator_ref": "asset_df8d562a0c60…c0962bbb" }
-\end{lstlisting}
-
-即：输入不是"一个下载文件"，而是（任务、来源、字节摘要、采集实现身份）共同绑定的证据对象。发布清单（\code{dataset\_\allowbreak{}manifest.json}）对每个文件登记相对路径、媒体类型、字节数与 SHA-256（如 gold8 主表 13,558 B /\allowbreak{} \code{08e9db4f…}，清单文件摘要 \code{1ec9f4ab…}）；读取端每次读取都重算摘要，文件被改动即拒绝展示。
+字段语义：\code{clingen\_\allowbreak{}classification} 为 ClinGen 基因-疾病有效性分类（Definite/\allowbreak{}Strong/\allowbreak{}Limited；Refuted/\allowbreak{}Disputed 出现时触发冲突逻辑）；\code{clinvar\_\allowbreak{}count} 为 ClinVar 致病记录计数，\code{clinvar\_\allowbreak{}query} 保留实际查询串供复核；\code{conflict\_\allowbreak{}flag} 取 \code{NONE} 或 \code{CONFLICT\_\allowbreak{}CLINGEN\_\allowbreak{}REFUTED\_\allowbreak{}OR\_\allowbreak{}DISPUTED\_\allowbreak{}WITH\_\allowbreak{}ORPHANET\_\allowbreak{}ASSOCIATION}。空值即“来源未覆盖该单元格”，系统不以零或推断填充（gold9 中两列整体为空的边界说明见 \ref{sec:boundaries} 节）。输入侧同理：一个来源凭据不是“一个下载文件”，而是任务、来源、字节摘要与采集实现身份共同绑定的证据对象（\code{provenance.json} 中 \code{input\_\allowbreak{}asset\_\allowbreak{}receipts} 逐条登记）；发布清单对每个文件登记路径、字节数与 SHA-256，读取端每次读取都重算摘要，文件被改动即拒绝展示。
 
 \section{案例结论对照赛题评价标准}\label{sec:eval-criteria}
 
-\begin{xltabular}{\linewidth}{LLL}
-\caption{三案例对照赛题评价标准}\label{tab:eval-criteria}\\
+\begin{xltabular}{\linewidth}{>{\hsize=0.8\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.0\hsize}L}
+\caption{案例对照赛题评价标准}\label{tab:eval-criteria}\\
 \toprule
-\textbf{评价维度} & \textbf{三案例证据} & \textbf{尚存边界（详见 \ref{sec:boundaries} 节）} \\
+\textbf{评价维度} & \textbf{案例证据} & \textbf{尚存边界（详见 \ref{sec:boundaries} 节）} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{评价维度} & \textbf{三案例证据} & \textbf{尚存边界（详见 \ref{sec:boundaries} 节）} \\
+\textbf{评价维度} & \textbf{案例证据} & \textbf{尚存边界（详见 \ref{sec:boundaries} 节）} \\
 \midrule
 \endhead
-数据查找完备性 & 路线检查 +\allowbreak{} 多库治理采集（GWAS Catalog/\allowbreak{}Europe PMC/\allowbreak{}dbSNP、openFDA、Orphadata/\allowbreak{}HGNC/\allowbreak{}ClinVar/\allowbreak{}ClinGen）；不可达来源显式阻断而非静默缺失 & SourceCoverage 覆盖证据产品化在办（\ref{sec:source-discovery}） \\
+数据查找完备性 & 路线检查 +\allowbreak{} 多库治理采集（GWAS Catalog/\allowbreak{}Europe PMC/\allowbreak{}dbSNP、openFDA、Orphadata/\allowbreak{}HGNC/\allowbreak{}ClinVar/\allowbreak{}ClinGen、MGnify/\allowbreak{}GMRepo）；不可达来源显式阻断而非静默缺失 & 覆盖证据尚未随产物交付（边界 6） \\
 来源可追溯性 & 全部正式行携带 source\_\allowbreak{}url/\allowbreak{}locator；输入载体字节级摘要入链；发布产物消费时重验 & gold9 跨源数值列未落表 \\
 清洗整合可靠性 & 动态预检 11 次结构化拒绝迭代；v1→v2 自检换版；68/\allowbreak{}72 行真实缺失逐条列出；四表主外键闭合 67/\allowbreak{}67 & first source wins 非裁真（\ref{sec:stage5-integrate}） \\
-输出格式可用性 & 三例均交付 CSV+\allowbreak{}Schema+\allowbreak{}Provenance+\allowbreak{}Validation+\allowbreak{}Manifest 的不可变发布，逐件 SHA-256 经第三方监督重验 & 端到端图表 Gold 案例在办（点级正式闭合测试已达成，见 \ref{subsec:chart-vlm} 节） \\
+输出格式可用性 & 各案例均交付 CSV+\allowbreak{}Schema+\allowbreak{}Provenance+\allowbreak{}Validation+\allowbreak{}Manifest 的不可变发布，逐件 SHA-256 经第三方监督重验 & 端到端图表案例尚未交付；点级发布闭环已有测试覆盖（边界 1） \\
 \bottomrule
 \end{xltabular}
 
-\section{能力边界与改进项}\label{sec:boundaries}
+\section{能力边界与处置}\label{sec:boundaries}
 
-前文各案例只在与叙事直接相关的位置点到边界；本节统一收拢三案例的全部适用边界——范围取舍、上游失效下的处置与已识别偏差——逐条说明系统针对每条边界的行为与改进状态，供评审在一处核对：
-\begin{xltabular}{\linewidth}{LLLL}
-\caption{三案例能力边界与改进项}\label{tab:boundaries}\\
+本节统一收拢各案例的适用边界——范围取舍、上游失效下的处置与已识别偏差——及对应的处置方式：
+\begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=1.4\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.3\hsize}L}
+\caption{案例能力边界与处置}\label{tab:boundaries}\\
 \toprule
-\textbf{\#} & \textbf{边界} & \textbf{性质} & \textbf{改进状态} \\
+\textbf{\#} & \textbf{边界} & \textbf{性质} & \textbf{处置} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{\#} & \textbf{边界} & \textbf{性质} & \textbf{改进状态} \\
+\textbf{\#} & \textbf{边界} & \textbf{性质} & \textbf{处置} \\
 \midrule
 \endhead
-1 & 图表抽取链路已有点级正式发布闭环测试（\ref{subsec:chart-vlm} 节：accepted /\allowbreak{} corrected 双路径产出发布物、逐件 SHA-256 重验、pending/\allowbreak{}缺表 fail-closed），但 gold7–9 未含端到端图表案例 & 案例覆盖（点级已闭合） & \textbf{最高优先级待办}：端到端图表 Gold 案例，对齐加分项"自动识别图表坐标轴或图例解析错误" \\
-2 & gold8 DILIrank vMost 名册与 LiverTox 维度保持暂存阻断；FAERS 计数语义为 MedDRA PT 报告次数（非去重患者、非因果证据） & 上游失效下的正确终态 & 官方文件恢复后即可闭合；替代源自动发现（文献补充或其他官方通道）列入改进项 \\
-3 & gold9 crosswalk 的 ClinVar/\allowbreak{}ClinGen 数值列未落表（ClinVar 载体仅绑定单基因 BTK）；结构校验不含可选列填充率 & 已识别偏差，记入案例档案 & 行级填充率检查（可选列空值超阈即 warning/\allowbreak{}阻断）与 LLM 补齐候选列入改进项；偏差可经 \ref{sec:hil} 节反馈-修正-换版闭环落表，无需重跑全链路 \\
-4 & gold7 正式绑定单研究（GCST90027158）；映射基因全部来自补充材料（GWAS Catalog \code{authorReportedGenes} 为空）；样本量元数据未正式绑定 & 范围取舍 & 已随发布披露，可扩展多研究绑定 \\
+1 & 图表抽取链路已有点级正式发布闭环测试（\ref{subsec:chart-vlm} 节：accepted /\allowbreak{} corrected 双路径产出发布物、逐件 SHA-256 重验、pending/\allowbreak{}缺表 fail-closed），但尚无含图表场景的端到端案例 & 案例覆盖（点级已闭合） & 点级闭环已由测试锁定；端到端图表案例对齐加分项“自动识别图表坐标轴或图例解析错误” \\
+2 & gold8 DILIrank vMost 名册与 LiverTox 维度保持暂存阻断；FAERS 计数语义为 MedDRA PT 报告次数（非去重患者、非因果证据） & 上游失效下的正确终态 & 官方文件恢复后即可闭合；替代源自动发现为已识别改进方向 \\
+3 & gold9 crosswalk 的 ClinVar/\allowbreak{}ClinGen 数值列未落表（ClinVar 载体仅绑定单基因 BTK）；结构校验不含可选列填充率 & 已识别偏差，记入案例档案 & 可经 \ref{sec:hil} 节反馈-修正-换版闭环落表，无需重跑全链路；填充率检查列入校验清单改进 \\
+4 & gold7 正式绑定单研究（GCST90027158）；映射基因全部来自补充材料（GWAS Catalog \code{authorReportedGenes} 为空）；样本量元数据未正式绑定 & 范围取舍 & 已随发布披露；可扩展多研究绑定 \\
 5 & 冲突合并 first source wins：保证复现但不构成科学裁真（\ref{sec:stage5-integrate}） & 设计取舍 & 冲突审计随产物交付，裁真保留给研究者与人工确认 \\
-6 & 全局 QueryPlan /\allowbreak{} SourceCoverage 证据未产品化（\ref{sec:source-discovery}） & 规划能力 & 覆盖证据产品化在办；覆盖只在预定义源集合内计算，不宣称"全网查全" \\
-7 & 与参考集的对照目前为手工冻结数字（\ref{sec:ref-compare}）；行级覆盖率、字段命中率与数值一致性尚未脚本化 & 量化评测缺口 & 对照评测（冻结参考 +\allowbreak{} 脚本化，并入 gold-v1 评估器）在办，完成后回填 \ref{sec:ref-compare} 节精确数字 \\
+6 & 全局 QueryPlan /\allowbreak{} SourceCoverage 证据未随产物交付（\ref{sec:source-discovery}） & 规划能力 & 覆盖只在预定义源集合内计算，不宣称“全网查全”；产品化设计见 \ref{sec:source-discovery} 节 \\
+7 & 与参考集的对照为手工冻结数字（\ref{sec:ref-compare}）；行级覆盖率、字段命中率与数值一致性尚未脚本化 & 量化评测缺口 & 冻结参考 +\allowbreak{} 脚本化对照，并入 gold-v1 评估器 \\
 \bottomrule
 \end{xltabular}
-这些边界不削弱发布物的可信度——每条边界要么作为显式元数据随正式产物交付，要么被结构化阻断在正式发布之外。这正是 
-ef{sec:design-goals} 节"能力诚实性"的实现方式：边界是产品属性，而不是对话措辞；评审对"任务未完成 /\allowbreak{} 字段未对齐 /\allowbreak{} 图表能力缺失"的关切，逐条以处置方式与改进状态回应，而不是回避或包装成已完成。
+上述边界或作为显式元数据随正式产物交付，或被结构化阻断在正式发布之外——这是 \ref{sec:design-goals} 节“能力诚实性”目标的落地形态。
