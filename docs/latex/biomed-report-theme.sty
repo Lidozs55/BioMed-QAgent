@@ -83,11 +83,23 @@
     \color{ReportLine}\titlerule
   ]
 
-% 不使用负数顶部间距，避免标题侵入页眉或不同 TeX 环境下位置漂移。
+% ----------------------------------------------------------------------
+% Chapter 前后间距（真正的控制点）
+%
+% \titleformat{\chapter} 之后，章标题（含 \chapter* 的摘要/目录）改由
+% titlesec 的 \ttl@mkchap 排版：标题前 \vspace*{before-sep}、标题后
+% after-sep；不指定时的默认值为 50pt/40pt，即标题上下大空白的来源。
+% ctexbook 自带的 \@makechapterhead 路径被绕开，因此
+% \ctexset{chapter/beforeskip} 在本模板中不生效，不要用错旋钮。
+% 章标题固定新起一页，before-sep 即正文区顶到标题的距离；页眉到正文
+% 区的距离由 geometry 的 headsep（cls 中设为 14pt，全局生效）决定，
+% 两者叠加构成页眉分隔线到章标题的视觉间隙。
+% ----------------------------------------------------------------------
+
 \titlespacing*{\chapter}
   {0pt}
-  {8pt plus 2pt minus 2pt}
-  {6pt plus 2pt minus 1pt}
+  {0pt}
+  {8pt}
 
 % ----------------------------------------------------------------------
 % Section
@@ -327,11 +339,11 @@
 
   \vspace*{8mm}
 
-  {\sffamily\small\bfseries\color{ReportBlue}
+  {\sffamily\Large\bfseries\color{ReportBlue}
     阿里云赛事作品报告\par
   }
 
-  \vspace{3mm}
+  \vspace{4mm}
 
   {\color{ReportBlue}
     \rule{\textwidth}{1.2pt}\par
@@ -369,6 +381,13 @@
 
     \end{tabularx}
   }
+
+  % 参赛信息表（作品名称/选题/简介/技术说明/链接）：
+  % 原为“参赛作品简介”章，2026-08 应要求移到封面填充下部空白；
+  % 内容单独成文件，本模板只负责装配。
+  \vspace{10mm}
+
+  \input{chapters/ch00-submission-table}
 
   \vfill
 

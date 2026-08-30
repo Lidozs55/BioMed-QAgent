@@ -36,12 +36,12 @@
 % --------------------------------------------------------------
 \RequirePackage[
   a4paper,
-  top=16mm,
+  top=20mm,
   bottom=16mm,
   left=18mm,
   right=18mm,
   headheight=32pt,
-  % headsep=6mm,
+  headsep=14pt,
   footskip=8mm
 ]{geometry}
 
