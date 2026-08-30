@@ -79,8 +79,9 @@ export interface BusinessToolBundleContext {
     client: PublicHttpClient;
     fallback: BrowserFallback;
   } | null;
-  /** VLM model config for chart extraction (defaults to env config). */
-  vlmConfig?: Partial<VlmConfig>;
+  /** VLM config resolver, consulted per extraction call so settings changes
+   * apply without restart; resolved keys stay in memory only. */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
   /** Operational budgets snapshotted for this run. */
   limits?: RuntimeLimits;
   /** Warning surface (Python run_ctx.add_warning parity). */
@@ -290,7 +291,7 @@ export async function createBusinessToolBundle(
   register(createPdfTools(shared), "pdf_extraction");
   register(createChartDataVlmTool({
     ...shared,
-    vlmConfig: context.vlmConfig,
+    resolveVlmConfig: context.resolveVlmConfig,
     httpClient: client,
     onWarning: context.onWarning,
     hilGate: context.hilGate,

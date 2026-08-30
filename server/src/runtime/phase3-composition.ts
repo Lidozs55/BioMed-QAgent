@@ -326,8 +326,12 @@ export interface Phase3RuntimeOptions {
   /** Business capabilities: DB bridge, browser pool, secrets. */
   database?: DatabaseClient | null;
   browserPool?: import("../external/browser/pool.js").NodeBrowserPool | null;
-  /** VLM chart-extraction config; missing fields keep env defaults. */
-  vlmConfig?: Partial<VlmConfig> | null;
+  /**
+   * VLM chart-extraction config resolver; consulted per governed extraction
+   * call (not snapshotted at composition time), so visual-model role changes
+   * apply without a restart. The resolved API key stays in memory only.
+   */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
   /** Core-promoted browser parser registry shared by all task runs. */
   browserRecipeRegistry?: BrowserParserRecipeRegistry;
   /**
@@ -535,7 +539,7 @@ export async function createPhase3Runtime(
         browser,
         hooks: toolHooks,
         runId: () => currentRunId,
-        vlmConfig: options.vlmConfig ?? undefined,
+        resolveVlmConfig: options.resolveVlmConfig,
         limits,
         registrar,
         taskId,

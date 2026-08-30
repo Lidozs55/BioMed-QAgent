@@ -61,12 +61,59 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
       agentExecPolicy: null,
       database: shared.database,
       browserPool: shared.browserPool,
-      vlmConfig: {
-        apiKey: "vlm-key",
-        baseUrl: "https://vlm.example/v1",
-        model: "vlm-model",
-      },
+      resolveVlmConfig: expect.any(Function),
     }));
+    await options.lifecycle?.close();
+  });
+
+  test("injects a lazy VLM config resolver so role changes apply without restart", async () => {
+    const shared = services();
+    const createFormalRuntime = vi.fn(async (runtimeOptions: Phase3RuntimeOptions) => {
+      void runtimeOptions;
+      return {
+        handle: () => false,
+        handleUpgrade: () => false,
+        close: async () => undefined,
+      };
+    });
+    const options = await createBootstrapOptions({
+      config: parseHostConfig({ PORT: "0" }),
+      repositoryRoot: path.resolve("test-repository"),
+      tasksRoot: path.resolve("test-tasks"),
+      workspacesRoot: path.resolve("test-workspaces"),
+      ...shared,
+      createFormalRuntime,
+    });
+
+    // Bootstrap must not snapshot the VLM config: nothing is resolved eagerly.
+    expect(shared.modelSettings.resolveVlmConfig).not.toHaveBeenCalled();
+
+    // The formal runtime factory receives the live resolver only when the
+    // host builds a runtime.
+    await options.formalRuntime?.();
+    const runtimeOptions = vi.mocked(createFormalRuntime).mock.calls[0]?.[0];
+    expect(typeof runtimeOptions?.resolveVlmConfig).toBe("function");
+    expect(runtimeOptions).not.toHaveProperty("vlmConfig");
+
+    // Each resolution consults the live settings service, so a visual-model
+    // role change after Host bootstrap is visible on the next extraction call.
+    await expect(runtimeOptions?.resolveVlmConfig?.()).resolves.toEqual({
+      apiKey: "vlm-key",
+      baseUrl: "https://vlm.example/v1",
+      model: "vlm-model",
+    });
+    shared.modelSettings.resolveVlmConfig.mockResolvedValueOnce({
+      apiKey: "vlm-key-2",
+      baseUrl: "https://vlm2.example/v1",
+      model: "vlm-model-2",
+    });
+    await expect(runtimeOptions?.resolveVlmConfig?.()).resolves.toEqual({
+      apiKey: "vlm-key-2",
+      baseUrl: "https://vlm2.example/v1",
+      model: "vlm-model-2",
+    });
+    expect(shared.modelSettings.resolveVlmConfig).toHaveBeenCalledTimes(2);
+    await options.initializeLifecycle?.(options.lifecycle!);
     await options.lifecycle?.close();
   });
 

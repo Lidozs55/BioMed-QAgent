@@ -79,6 +79,7 @@ describe("TypeScript model settings", () => {
       baseUrl: "https://models.example/v1",
       contextWindow: 64000,
       maxTokens: 3072,
+      safetyReserveTokens: 3200,
       compactionTriggerRatio: 0.85,
       compactionTargetRatio: 0.45,
       temperature: 0.25,
@@ -912,7 +913,7 @@ describe("TypeScript model settings", () => {
     }
   });
 
-  test("VLM fallback does not leak a non-DashScope active provider key", async () => {
+  test("VLM resolution fails closed instead of returning the hidden qwen-vl-max default", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir, environment: {} });
     const baseUrl = await serve(service);
@@ -938,11 +939,16 @@ describe("TypeScript model settings", () => {
     await fetch(`${baseUrl}/api/v1/model-registry/models/${String(model.id)}/activate`, {
       method: "POST",
     });
-    expect(await service.resolveVlmConfig()).toEqual({
-      apiKey: "",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model: "qwen-vl-max",
-    });
+    // Non-visual active model and no explicit vision assignment: extraction
+    // must fail closed with an actionable blocker, never fall back to the
+    // hard-coded DashScope default model.
+    const failure = await service.resolveVlmConfig().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain("qwen-vl-max");
+    expect((failure as Error).message).toContain("视觉抽取模型");
   });
 
   test("preserves a masked key and clears it only on an explicit empty value", async () => {
@@ -1114,6 +1120,212 @@ describe("TypeScript model settings", () => {
     expect(settings.model_name).toBe("");
     expect(settings.run_ready).toBe(false);
     expect(settings.run_block_reason).toBe("provider credentials are required");
+  });
+});
+
+describe("visual extraction model role", () => {
+  interface VisionFixture {
+    service: ModelSettingsService;
+    baseUrl: string;
+    settingsDir: string;
+    mainModelId: string;
+    visionModelId: string;
+    visionProviderId: string;
+  }
+
+  /**
+   * Non-visual active main model on "Main Provider" plus an image-capable
+   * model on a second, inactive "Vision Provider".
+   */
+  async function visionFixture(): Promise<VisionFixture> {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const baseUrl = await serve(service);
+    const createProvider = async (name: string, baseUrlValue: string, apiKey: string): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, base_url: baseUrlValue, api_key: apiKey }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const createModel = async (providerId: string, modelId: string, image: boolean): Promise<string> => {
+      const response = await fetch(`${baseUrl}/api/v1/model-registry/models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider_id: providerId,
+          model_id: modelId,
+          capabilities: image
+            ? { text: true, image: true }
+            : { text: true, image: false },
+        }),
+      });
+      return String((await response.json() as Record<string, unknown>).id);
+    };
+    const mainProviderId = await createProvider("Main Provider", "https://main.example/v1", "sk-main-provider");
+    const mainModelId = await createModel(mainProviderId, "main-text-chat", false);
+    const visionProviderId = await createProvider("Vision Provider", "https://vision.example/v1", "sk-vision-provider");
+    const visionModelId = await createModel(visionProviderId, "vision-chat-vl", true);
+    return { service, baseUrl, settingsDir, mainModelId, visionModelId, visionProviderId };
+  }
+
+  test("uses the selected inactive visual model with its own provider key and base URL", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await expect(fixture.service.resolveVlmConfig()).resolves.toEqual({
+      apiKey: "sk-vision-provider",
+      baseUrl: "https://vision.example/v1",
+      model: "vision-chat-vl",
+    });
+    // The main (non-visual) model stays active and untouched.
+    expect(fixture.service.getSettings()).toMatchObject({
+      model_name: "main-text-chat",
+      vision_model_id: fixture.visionModelId,
+      vision_model_name: "vision-chat-vl",
+      vision_provider_name: "Vision Provider",
+      vision_model_ready: true,
+      vision_block_reason: null,
+    });
+    await expect(fixture.service.resolveActiveModel()).resolves.toMatchObject({
+      modelId: "main-text-chat",
+      apiKey: "sk-main-provider",
+    });
+  });
+
+  test("persists the selected visual model id and reloads it", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({
+      vision_model_id: fixture.visionModelId,
+    });
+
+    const reloaded = await ModelSettingsService.create({ settingsDir: fixture.settingsDir, environment: {} });
+    await expect(reloaded.resolveVlmConfig()).resolves.toMatchObject({
+      apiKey: "sk-vision-provider",
+      model: "vision-chat-vl",
+    });
+  });
+
+  test("rejects selecting a model without the image capability", async () => {
+    const fixture = await visionFixture();
+    await expect(fixture.service.updateSettings({ vision_model_id: fixture.mainModelId }))
+      .rejects.toMatchObject({ status: 422 });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+
+    await expect(fixture.service.updateSettings({ vision_model_id: "model_missing" }))
+      .rejects.toMatchObject({ status: 404 });
+  });
+
+  test("clears the assignment when the selected visual model is deleted and reports an actionable blocker", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await fixture.service.deleteModel(fixture.visionModelId);
+
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+    expect(fixture.service.getSettings()).toMatchObject({
+      vision_model_id: null,
+      vision_model_ready: false,
+    });
+    // Non-visual main model remains: extraction fails closed with guidance,
+    // never a hidden default.
+    await expect(fixture.service.resolveVlmConfig()).rejects.toThrow(/视觉抽取模型/);
+  });
+
+  test("clears the assignment when the selected model's provider is disabled", async () => {
+    const fixture = await visionFixture();
+    await fixture.service.updateSettings({ vision_model_id: fixture.visionModelId });
+
+    await fixture.service.updateProvider(fixture.visionProviderId, { enabled: false });
+
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+    await expect(fixture.service.resolveVlmConfig()).rejects.toThrow(/视觉抽取模型/);
+    // Re-enabling the provider does not resurrect the cleared assignment.
+    await fixture.service.updateProvider(fixture.visionProviderId, { enabled: true });
+    expect(await storedSettings(fixture.settingsDir)).toMatchObject({ vision_model_id: null });
+  });
+
+  test("reports a credential blocker when the selected provider has no API key", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Keyless Vision Provider",
+      base_url: "https://keyless.example/v1",
+      api_key: "sk-temp",
+    });
+    const visual = await service.createModel({
+      provider_id: provider.id,
+      model_id: "keyless-vl",
+      capabilities: { text: true, image: true },
+    });
+    // The main provider holds the only credential; the vision provider's key
+    // is removed after creation.
+    await service.updateProvider(provider.id, { api_key: "" });
+    await service.updateSettings({ vision_model_id: visual.id });
+
+    const settings = service.getSettings();
+    expect(settings).toMatchObject({
+      vision_model_id: visual.id,
+      vision_model_ready: false,
+    });
+    expect(String(settings.vision_block_reason)).toContain("API Key");
+    await expect(service.resolveVlmConfig()).rejects.toThrow(/API Key/);
+  });
+
+  test("uses the active model for extraction when it is visual and no assignment exists", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await service.createProvider({
+      name: "Visual Active Provider",
+      base_url: "https://visual-active.example/v1",
+      api_key: "sk-visual-active",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "active-vision-chat",
+      capabilities: { text: true, image: true },
+    });
+
+    expect(service.getSettings()).toMatchObject({
+      vision_model_id: null,
+      vision_model_name: "active-vision-chat",
+      vision_provider_name: "Visual Active Provider",
+      vision_model_ready: true,
+    });
+    await expect(service.resolveVlmConfig()).resolves.toEqual({
+      apiKey: "sk-visual-active",
+      baseUrl: "https://visual-active.example/v1",
+      model: "active-vision-chat",
+    });
+  });
+
+  test("clears a stale on-disk assignment at resolution time and fails with guidance", async () => {
+    // Simulate a hand-edited registry whose vision_model_id points nowhere
+    // (updateSettings would reject the unknown id, so write it to disk).
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const first = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const provider = await first.createProvider({
+      name: "Main Provider",
+      base_url: "https://main.example/v1",
+      api_key: "sk-main-provider",
+    });
+    await first.createModel({
+      provider_id: provider.id,
+      model_id: "main-text-chat",
+      capabilities: { text: true, image: false },
+    });
+    const registryPath = path.join(settingsDir, "model-registry.json");
+    const stored = JSON.parse(await readFile(registryPath, "utf8")) as {
+      settings: Record<string, unknown>;
+    };
+    stored.settings.vision_model_id = "model_ghost";
+    await writeFile(registryPath, JSON.stringify(stored), "utf8");
+
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    await expect(service.resolveVlmConfig()).rejects.toThrow(/重新选择/);
+    expect(await storedSettings(settingsDir)).toMatchObject({ vision_model_id: null });
   });
 });
 

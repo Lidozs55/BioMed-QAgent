@@ -31,7 +31,14 @@ export const EXTRACT_CHART_DATA_VLM_TOOL_NAME = "extract_chart_data_vlm";
 
 export interface ChartDataVlmToolDeps extends ToolServiceDeps {
   hooks?: ToolHooks;
+  /** Static config (fixtures); ignored when ``resolveVlmConfig`` is provided. */
   vlmConfig?: Partial<VlmConfig>;
+  /**
+   * Live resolver consulted immediately before each governed extraction
+   * request, so visual-model role changes apply without restart. The resolved
+   * API key stays in memory and never enters tool results or events.
+   */
+  resolveVlmConfig?: () => Promise<VlmConfig>;
   /** Injectable HTTP client (fixture tests; default is the public policy client). */
   httpClient?: PublicHttpClient;
   /** Warning surface (Python ``run_ctx.add_warning`` parity). */
@@ -58,13 +65,6 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
     onProgress: hooks.onProgress,
     onWarning: deps.onWarning,
   };
-  const tools = createVlmTools({
-    taskRoot: deps.taskRoot,
-    hooks: vlmHooks,
-    vlmConfig: deps.vlmConfig,
-    httpClient: deps.httpClient,
-    hilGate: deps.hilGate,
-  });
 
   const tool: BioMedAgentTool = {
     name: EXTRACT_CHART_DATA_VLM_TOOL_NAME,
@@ -135,6 +135,17 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
       }
       let result: VlmResult;
       try {
+        // Resolve the visual-extraction config immediately before the governed
+        // request; failures surface as actionable tool errors.
+        const tools = createVlmTools({
+          taskRoot: deps.taskRoot,
+          hooks: vlmHooks,
+          vlmConfig: deps.resolveVlmConfig === undefined
+            ? deps.vlmConfig
+            : await deps.resolveVlmConfig(),
+          httpClient: deps.httpClient,
+          hilGate: deps.hilGate,
+        });
         result = await tools.extractChartDataVlm(sourcePath, hint, signal);
       } catch (error) {
         const failure = errorResult(error);

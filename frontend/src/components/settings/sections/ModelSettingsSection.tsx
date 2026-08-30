@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { ModelListManager } from "@/components/settings/model/ModelListManager";
 import { ProviderManager } from "@/components/settings/model/ProviderManager";
+import { VisionModelSelector } from "@/components/settings/model/VisionModelSelector";
 import { SettingCard, SettingSection } from "@/components/settings/primitives";
 import type { ModelSettingsSectionProps } from "@/components/settings/types";
 import type { ManagedModelInfo, ParameterSpec, ProviderInfo } from "@/hooks/useAPI";
@@ -197,6 +198,23 @@ export function ModelSettingsSection({
             ) : (
               <LegacyActiveModelInfo settings={settings} />
             )}
+          </SettingCard>
+        </SettingSection>
+      )}
+
+      {settings && (
+        <SettingSection
+          title="视觉抽取模型"
+          description="为图表数据抽取选择视觉模型；上传的图片由抽取工具处理，而非直接发送给主对话模型，主模型可继续使用纯文本模型。"
+        >
+          <SettingCard>
+            <VisionModelSelector
+              api={api}
+              settings={settings}
+              managedModels={managedModels}
+              providers={providers}
+              onSaved={onActivated}
+            />
           </SettingCard>
         </SettingSection>
       )}
