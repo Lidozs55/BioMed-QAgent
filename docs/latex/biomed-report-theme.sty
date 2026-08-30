@@ -1,0 +1,397 @@
+%% =====================================================================
+%% biomed-report-theme.sty
+%% BioMed-QAgent 报告视觉主题
+%%
+%% 职责：
+%%   - 配色
+%%   - 标题层级
+%%   - 页眉页脚
+%%   - 列表、图表间距
+%%   - 代码块
+%%   - 提示框
+%%   - 封面
+%%   - 目录视觉
+%%
+%% 不负责：
+%%   - 文档类
+%%   - 字体加载
+%%   - 页面尺寸
+%%   - 通用宏包
+%%   - PDF metadata
+%%
+%% 原则：
+%%   克制、紧凑、技术报告风格。
+%%   不使用大面积背景色，不使用圆角卡片。
+%% =====================================================================
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{biomed-report-theme}
+  [2026/08/30 BioMed-QAgent report theme]
+
+% ======================================================================
+% 配色
+% ======================================================================
+
+\definecolor{ReportBlue}{HTML}{1677FF}
+\definecolor{ReportDark}{HTML}{1F2329}
+\definecolor{ReportGray}{HTML}{667085}
+\definecolor{ReportLine}{HTML}{D9DEE7}
+\definecolor{ReportSoft}{HTML}{F6F8FB}
+
+\definecolor{PaperCodeFrame}{gray}{0.62}
+\definecolor{TodoAmber}{HTML}{B45309}
+
+% ======================================================================
+% TODO
+%
+% PDF 中直接搜索 "TODO" 即可定位。
+% 使用 robust command，降低出现在标题、caption 等移动参数中时报错概率。
+% ======================================================================
+
+\DeclareRobustCommand{\TODO}[1]{%
+  \texorpdfstring{%
+    {\color{TodoAmber}\bfseries[[TODO: #1]]}%
+  }{%
+    [TODO: #1]%
+  }%
+}
+
+% ======================================================================
+% 标题
+%
+% 统一交给 titlesec。
+% 不再同时使用 \ctexset 修改 section/subsection，避免两套机制互相覆盖。
+% ======================================================================
+
+% ----------------------------------------------------------------------
+% Chapter
+%
+% ctexbook 默认 chapter 顶部留白很大。
+% 这里改成技术报告式紧凑标题：
+%
+%   1  项目概述
+%   ─────────────────────────────
+% ----------------------------------------------------------------------
+
+\titleformat{\chapter}[hang]
+  {\Large\bfseries\sffamily\color{ReportDark}}
+  {\color{ReportBlue}\thechapter}
+  {0.65em}
+  {}
+  [%
+    \vspace{1pt}%
+    \color{ReportLine}\titlerule
+  ]
+
+% 不使用负数顶部间距，避免标题侵入页眉或不同 TeX 环境下位置漂移。
+\titlespacing*{\chapter}
+  {0pt}
+  {8pt plus 2pt minus 2pt}
+  {6pt plus 2pt minus 1pt}
+
+% ----------------------------------------------------------------------
+% Section
+% ----------------------------------------------------------------------
+
+\titleformat{\section}
+  {\large\bfseries\sffamily\color{ReportDark}}
+  {\color{ReportBlue}\thesection}
+  {0.55em}
+  {}
+
+\titlespacing*{\section}
+  {0pt}
+  {7pt plus 2pt minus 1pt}
+  {3pt plus 1pt}
+
+% ----------------------------------------------------------------------
+% Subsection
+% ----------------------------------------------------------------------
+
+\titleformat{\subsection}
+  {\normalsize\bfseries\sffamily\color{ReportDark}}
+  {\color{ReportBlue}\thesubsection}
+  {0.5em}
+  {}
+
+\titlespacing*{\subsection}
+  {0pt}
+  {5pt plus 1pt minus 1pt}
+  {2pt plus 1pt}
+
+% ----------------------------------------------------------------------
+% Subsubsection
+% ----------------------------------------------------------------------
+
+\titleformat{\subsubsection}
+  {\normalsize\bfseries\sffamily\color{ReportDark}}
+  {\color{ReportBlue}\thesubsubsection}
+  {0.5em}
+  {}
+
+\titlespacing*{\subsubsection}
+  {0pt}
+  {4pt plus 1pt minus 1pt}
+  {1pt plus 1pt}
+
+% ======================================================================
+% 页眉页脚
+%
+% book/ctexbook 会在 chapter 首页自动切换为 plain。
+% 因此 report 与 plain 必须使用同一套定义，否则章首页会突然变样。
+% ======================================================================
+
+\newcommand{\ReportPageStyle}{%
+  \fancyhf{}%
+
+  \fancyhead[L]{%
+    \small\sffamily\color{ReportGray}\ReportLeftHeader
+  }%
+
+  \fancyhead[R]{%
+    \small\sffamily\color{ReportGray}\ReportRightHeader
+  }%
+
+  \fancyfoot[C]{%
+    \small\sffamily\color{ReportGray}\thepage
+  }%
+
+  \renewcommand{\headrulewidth}{0.35pt}%
+  \renewcommand{\footrulewidth}{0pt}%
+
+  \renewcommand{\headrule}{%
+    \hbox to\headwidth{%
+      \color{ReportLine}%
+      \leaders\hrule height \headrulewidth\hfill
+    }%
+  }%
+}
+
+\fancypagestyle{report}{%
+  \ReportPageStyle
+}
+
+\fancypagestyle{plain}{%
+  \ReportPageStyle
+}
+
+\pagestyle{report}
+
+% ======================================================================
+% 列表
+%
+% 报告中 enumerate/itemize 很多，控制垂直空间。
+% ======================================================================
+
+\setlist{
+  itemsep=1pt,
+  parsep=0pt,
+  topsep=2pt,
+  partopsep=0pt,
+  leftmargin=2em
+}
+
+\setlist[itemize,1]{
+  label=\textbullet,
+  leftmargin=1.8em
+}
+
+\setlist[enumerate,1]{
+  label=\arabic*.,
+  leftmargin=2.2em
+}
+
+% 二级列表稍微收紧
+\setlist[itemize,2]{
+  itemsep=0pt,
+  topsep=1pt
+}
+
+\setlist[enumerate,2]{
+  itemsep=0pt,
+  topsep=1pt
+}
+
+% ======================================================================
+% Figure / Table
+% ======================================================================
+
+% CTeX 已经负责“图”“表”名称，不重复：
+%
+%   \captionsetup[figure]{name=图}
+%   \captionsetup[table]{name=表}
+%
+% 避免形成两套中文 caption 配置。
+
+\captionsetup{
+  font=small,
+  labelfont=bf,
+  textfont=small,
+  skip=3pt
+}
+
+\renewcommand{\arraystretch}{1.08}
+\setlength{\tabcolsep}{4pt}
+
+% 浮动体与正文距离
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 1pt}
+\setlength{\intextsep}{6pt plus 2pt minus 1pt}
+
+% ======================================================================
+% 代码块
+%
+% 注意：listings 的 \lstset 参数体内不能有空行（空行会被宏解析为
+% \par，触发 "Paragraph ended before \lstset@ was complete"）。
+% 因此这里每个选项占一行、以 % 结尾，避免换行参与参数解析。
+% ======================================================================
+
+\lstset{%
+  basicstyle=\ttfamily\small,%
+  breaklines=true,%
+  breakatwhitespace=false,%
+  frame=single,%
+  framerule=0.3pt,%
+  rulecolor=\color{PaperCodeFrame},%
+  framesep=4pt,%
+  aboveskip=4pt,%
+  belowskip=4pt,%
+  xleftmargin=1em,%
+  xrightmargin=1em,%
+  showstringspaces=false,%
+  columns=fullflexible,%
+  keepspaces=true,%
+  tabsize=2%
+}
+
+% ======================================================================
+% 提示框
+%
+% 不使用全局 \tcbset 直接改变所有 tcolorbox。
+% 只定义 reportbox style，再让本模板两个环境引用。
+%
+% 注意：tcolorbox 的 \tcbset 与 \newtcolorbox 选项体由 pgfkeys 解析，
+% 参数体内不能有空行（空行会触发 "Paragraph ended before
+% \pgfkeys@addpath was complete"），故紧凑单行 % 结尾。
+% ======================================================================
+
+\tcbuselibrary{skins,breakable}
+
+\tcbset{%
+  reportbox/.style={%
+    enhanced,%
+    breakable,%
+    frame hidden,%
+    boxrule=0pt,%
+    arc=0pt,%
+    colback=white,%
+    colbacktitle=white,%
+    coltitle=ReportDark,%
+    left=2.5mm,%
+    right=2.5mm,%
+    top=1.5mm,%
+    bottom=1.5mm,%
+    before skip=4pt,%
+    after skip=4pt,%
+    fonttitle=\bfseries\sffamily%
+  }%
+}
+
+\newtcolorbox{keypoint}[1][核心要点]{%
+  reportbox,%
+  borderline west={2pt}{0pt}{ReportBlue},%
+  title={#1}%
+}
+
+\newtcolorbox{resultbox}[1][关键结果]{%
+  reportbox,%
+  borderline west={2pt}{0pt}{ReportDark},%
+  title={#1}%
+}
+
+% ======================================================================
+% 封面
+%
+% 只负责正式提交信息。
+% 删除原来的“本报告采用紧凑排版……”等模板开发说明。
+% ======================================================================
+
+% 防止 class 未预定义时 \renewcommand 报错
+\providecommand{\makereporttitle}{}
+
+\renewcommand{\makereporttitle}{%
+  \begin{titlepage}
+
+  \thispagestyle{empty}
+  \setlength{\parindent}{0pt}
+
+  \vspace*{8mm}
+
+  {\sffamily\small\bfseries\color{ReportBlue}
+    阿里云赛事作品报告\par
+  }
+
+  \vspace{3mm}
+
+  {\color{ReportBlue}
+    \rule{\textwidth}{1.2pt}\par
+  }
+
+  \vspace{10mm}
+
+  {\sffamily\bfseries
+    \fontsize{24pt}{29pt}\selectfont
+    \color{ReportDark}
+    \ReportTitle\par
+  }
+
+  \ifstrempty{\ReportSubtitle}{}{%
+    \vspace{4mm}
+
+    {\sffamily\large\color{ReportGray}
+      \ReportSubtitle\par
+    }
+  }
+
+  \vspace{11mm}
+
+  {%
+    \renewcommand{\arraystretch}{1.15}
+
+    \begin{tabularx}
+      {\textwidth}
+      {@{}>{\bfseries\sffamily}p{28mm}X@{}}
+
+      赛题方向 & \ReportTrack  \\
+      团队名称 & \ReportTeam   \\
+      学校     & \ReportSchool \\
+      日期     & \ReportDate   \\
+
+    \end{tabularx}
+  }
+
+  \vfill
+
+  {\color{ReportBlue}
+    \rule{\textwidth}{1.2pt}\par
+  }
+
+  \end{titlepage}
+}
+
+% ======================================================================
+% 目录
+%
+% 使用 ctexbook 原生 \tableofcontents，不重新实现、不包装。
+%
+% 这样保留：
+%   - CTeX 中文目录名称
+%   - chapter/bookmark 行为
+%   - 原生目录生成逻辑
+% （目录字号等视觉优化后续再做）
+% ======================================================================
+
+\setcounter{tocdepth}{2}
+\setcounter{secnumdepth}{3}
+
+\endinput

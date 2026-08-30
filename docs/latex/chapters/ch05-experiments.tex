@@ -135,12 +135,12 @@ r6 & qwen3.8-flash & blocked & 三类拒绝循环不收敛（35 prepare /\allowb
 隔离1 & deepseek-v4-flash & blocked & 首次 prepare 墙前放弃，转工作区 & supervisor（诚实分类） & 提出温度假设（0.2 vs 0.7） \\
 隔离2 & deepseek-v4-flash & 拦停 & 直接转 python 解 zip & supervisor & 证伪温度杠杆 → 确认数据可见性缺口 \\
 直问1 & qwen3.7-flash & 拦停 & 盲写 transform 触沙箱拒绝后转 python & supervisor & 沙箱方言进系统提示词 \\
-直问2 & qwen3.7-flash & blocked & 零正式尝试即交"临时结果 +\allowbreak{} 假阻塞" & supervisor 诚实分类 & end-of-run publication gate（在办） \\
+直问2 & qwen3.7-flash & blocked & 零正式尝试即交"临时结果 +\allowbreak{} 假阻塞" & supervisor 诚实分类 & end-of-run publication gate \TODO{轻量修复在办} \\
 直问3 & qwen3.7-flash & 拦停 & 发布评估拒绝后转 python & supervisor & receipt-only 绑定修复 +\allowbreak{} 拒绝携带 check 详情 \\
 \bottomrule
 \end{xltabular}
 
-矩阵给出两个结论。其一，护栏纵深有效：十一轮中每一次错误都落在对应拦截层——preflight 逐字段校验拦自造 digest、quarantine 拦表头与占位符、supervisor 拦越权读盘与 shell、终态分类拦伪阻塞——没有任何编造行进入过受验发布；唯一穿透（r4 占位符空壳发布）当日立案，并以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 准入筛查修复。因此"阻断率"应读作护栏纵深的证据而非系统弱点：每个未拦住的失败模式都转化为一条产品修复（receipt-only submit、机制系统提示词、prepare 键差点名报错等），全部已在主线落地。其二，模型能力分层清晰（表~\ref{tab:model-tiering}）：多数"模型失败"实为产品可观测性与工效缺口（数据不可见、错误不点名、逃生门太顺手），已按此顺序修复；Qwen 非 flash 档的正式发布案例列为在办项，取得后在表~\ref{tab:model-tiering} 补行。
+矩阵给出两个结论。其一，护栏纵深有效：十一轮中每一次错误都落在对应拦截层——preflight 逐字段校验拦自造 digest、quarantine 拦表头与占位符、supervisor 拦越权读盘与 shell、终态分类拦伪阻塞——没有任何编造行进入过受验发布；唯一穿透（r4 占位符空壳发布）当日立案，并以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 准入筛查修复。因此"阻断率"应读作护栏纵深的证据而非系统弱点：每个未拦住的失败模式都转化为一条产品修复（receipt-only submit、机制系统提示词、prepare 键差点名报错等），全部已在主线落地。其二，模型能力分层清晰（表~\ref{tab:model-tiering}）：多数"模型失败"实为产品可观测性与工效缺口（数据不可见、错误不点名、逃生门太顺手），已按此顺序修复；Qwen 非 flash 档的正式发布案例列为在办项。\TODO{qwen3.7-plus 正式发布案例取得后，在表\ref{tab:model-tiering}补行}
 
 \begin{xltabular}{\linewidth}{LLL}
 \caption{模型能力分层（runs-log 2026-08-25--29）}\label{tab:model-tiering}\\
@@ -162,7 +162,7 @@ qwen3.7-plus & gold7 早期多轮失败：不走正式路线、三轮谎报"整�
 
 \section{与参考集的对照}\label{sec:ref-compare}
 
-Gold 案例配有参考输入输出，但正式发布的范围由 Agent 在证据约束下实际闭合的部分决定，可能窄于参考全集。表~\ref{tab:reference-comparison} 冻结三案例的参考集规模与正式发布规模对照。口径说明：参考行数取自 runs-log 各轮 Reference structure 记录，发布行数取自发布清单；本表为手工冻结的先行版，行级覆盖率、字段命中率与数值一致性的脚本化对照评测在办，完成后补充精确量化数字。
+Gold 案例配有参考输入输出，但正式发布的范围由 Agent 在证据约束下实际闭合的部分决定，可能窄于参考全集。表~\ref{tab:reference-comparison} 冻结三案例的参考集规模与正式发布规模对照。口径说明：参考行数取自 runs-log 各轮 Reference structure 记录，发布行数取自发布清单；本表为手工冻结的先行版。\TODO{脚本化对照评测（行级覆盖率、字段命中率、数值一致性）在办，完成后补充精确量化数字}
 
 \begin{xltabular}{\linewidth}{LLLL}
 \caption{三案例与参考集的规模对照}\label{tab:reference-comparison}\\
@@ -180,7 +180,7 @@ gold9 & TOPIC 四源整合（Orphadata、HGNC、ClinVar、ClinGen） & 两源四
 \bottomrule
 \end{xltabular}
 
-两点读法。其一，发布窄于参考的每一处都是显式披露的范围取舍或上游失效结果：未被覆盖的部分要么以结构化阻断交付（gold8 不可达维度），要么作为边界随产物披露（gold7 单研究绑定、gold9 数值列空），而已发布行全部可溯源并经逐件 SHA-256 重验。其二，gold9 暴露的是校验维度的差距：四表行数与参考结构一致，但可选列填充率不在线检查内（\ref{sec:boundaries}），行级填充率门禁已列入改进项。对照评测（冻结参考 +\allowbreak{} 脚本化行级覆盖率、字段命中率、数值一致性抽样）落地后，本节将回填精确数字。
+两点读法。其一，发布窄于参考的每一处都是显式披露的范围取舍或上游失效结果：未被覆盖的部分要么以结构化阻断交付（gold8 不可达维度），要么作为边界随产物披露（gold7 单研究绑定、gold9 数值列空），而已发布行全部可溯源并经逐件 SHA-256 重验。其二，gold9 暴露的是校验维度的差距：四表行数与参考结构一致，但可选列填充率不在线检查内（\ref{sec:boundaries}），行级填充率门禁已列入改进项。\TODO{对照评测落地后回填精确数字：冻结参考 + 脚本化行级覆盖率、字段命中率、数值一致性抽样}
 
 \section{可调用测试 API 与可交互前端}\label{sec:api}
 
@@ -211,7 +211,7 @@ gold9 & TOPIC 四源整合（Orphadata、HGNC、ClinVar、ClinGen） & 两源四
 \section{结构化输出样例与字段说明}\label{sec:samples}
 
 以 gold9 跨源证据交叉表为例（真实发布行）：
-\begin{lstlisting}[style=papercode]
+\begin{lstlisting}
 hgnc_symbol,orphacode,clingen_classification,clingen_classification_date,clingen_disease_label,clinvar_count,clinvar_query,conflict_flag,conflict_detail
 TBX1,567,,,,,,NONE,
 \end{lstlisting}
@@ -219,7 +219,7 @@ TBX1,567,,,,,,NONE,
 字段语义：\code{clingen\_\allowbreak{}classification} 为 ClinGen 基因-疾病有效性分类（如 Definite/\allowbreak{}Strong/\allowbreak{}Limited；Refuted/\allowbreak{}Disputed 出现时触发冲突逻辑）；\code{clinvar\_\allowbreak{}count} 为 ClinVar 该基因致病记录计数，\code{clinvar\_\allowbreak{}query} 保留实际查询串以供复核；\code{conflict\_\allowbreak{}flag} 取 \code{NONE} 或 \code{CONFLICT\_\allowbreak{}CLINGEN\_\allowbreak{}REFUTED\_\allowbreak{}OR\_\allowbreak{}DISPUTED\_\allowbreak{}WITH\_\allowbreak{}ORPHANET\_\allowbreak{}ASSOCIATION}，\code{conflict\_\allowbreak{}detail} 列出冲突的 ClinGen 疾病标签。空值即"来源未覆盖该单元格"，系统不以零或推断填充（gold9 中 ClinVar/\allowbreak{}ClinGen 两列整体为空的边界说明见 \ref{sec:boundaries} 节）。
 
 来源凭据样例（\code{provenance.json} 中 \code{input\_\allowbreak{}asset\_\allowbreak{}receipts} 的第一条，逐字段）：
-\begin{lstlisting}[style=papercode]
+\begin{lstlisting}
 { "asset_id": "asset_df8d562a0c6011af…c0962bbb",
   "sha256": "df8d562a0c6011af36a74eb4000ce81ca7d723e8031010819fb71727c0962bbb",
   "size_bytes": 54026799, "locator_ref": "asset_df8d562a0c60…c0962bbb" }

@@ -1,126 +1,47 @@
 %% =====================================================================
-%% BioMed-QAgent 参赛作品报告 —— 主文件
-%% 源内容：PROJECT_REPORT_DRAFT.md（机械转换，章节文件在 chapters/）
-%% 编译：latexmk -xelatex -outdir=build main.tex
-%% 依赖：TeX Live（xelatex）；中文排版走 ctex；无外部字体要求
+%% BioMed-QAgent 参赛作品报告 — 主入口
+%%
+%% 本文件只保留:文档类、项目元信息、正文装配。
+%% 所有排版(页面/字体/标题/页眉页脚/表格/代码/提示框)见:
+%%   biomed-report.cls          — 模板入口
+%%   biomed-report-theme.sty    — 视觉主题
+%%
+%% 编译(latexmk,产物在 build/):
+%%   latexmk -xelatex -outdir=build main.tex
 %% =====================================================================
-\documentclass[UTF8, scheme=chinese, zihao=5, oneside]{ctexbook}
 
-% 让 xdvipdfmx 为 CJK 写 ToUnicode：PDF 中文可复制/可搜索
-\XeTeXgenerateactualtext=1
+\documentclass{biomed-report}
 
-% ---------------------------------------------------------------- 页面
-\usepackage[a4paper, top=2.2cm, bottom=2.2cm, left=2.2cm, right=2.2cm]{geometry}
-\usepackage{pdflscape}   % 主架构图整页横排（ch03 landscape 环境）
-\emergencystretch=3em
+% ------------------------- 项目元信息 -------------------------
+\reporttitle{BioMed QAgent}
+\reportsubtitle{面向生物医学研究的多源数据智能采集与分析系统}
+\reportshorttitle{BioMed QAgent · 参赛作品报告}
+\reportteam{BioMed-QAgent 项目组}
+\reportschool{北京理工大学}
+\reporttrack{阿里云 AI Scientist 赛题}
+\reportdate{2026 年 8 月}
 
-% ---------------------------------------------------------------- 常用宏包
-\usepackage{graphicx}
-\usepackage{booktabs}
-\usepackage{array}
-\usepackage{xltabular}   % 支持跨页的 tabularx（长表 + 自动换列）
-\usepackage{seqsplit}    % 超长 token（如 SHA-256）可断行
-\usepackage{listings}
-\usepackage{enumitem}
-\usepackage{caption}
-\usepackage{xcolor}
-\usepackage{fancyhdr}
-\usepackage{newunicodechar}
-% 正文中直接出现的数学符号（不在拉丁字体里）映射到数学字体
-\newunicodechar{≠}{\ensuremath{\neq}}
-\newunicodechar{↔}{\ensuremath{\leftrightarrow}}
-
-% ---------------------------------------------------------------- 章前空白
-% ctexbook 默认章标题前留 ~50pt 弹性空白， competition 报告页数紧张，收紧到 16pt；
-% beforeskip 需为负值（绝对量）以免首行被吞（同 titlesec 约定），afterskip 保持默认
-\ctexset{
-  chapter/beforeskip = -16pt,
-  section/beforeskip = 1.2ex plus 0.3ex,
-  subsection/beforeskip = 1ex plus 0.2ex,
-}
-
-% ---------------------------------------------------------------- 表格列型
-% 中文论文表体左对齐、自动换行（X 列），配合 xltabular 使用
-\newcolumntype{L}{>{\raggedright\arraybackslash}X}
-
-% ---------------------------------------------------------------- 行内代码
-% seqsplit：长标识符（SHA-256、路径、authorReportedGenes 等）可在任意字符处折行，
-% 仅在行尾放不下时触发，正常排版无视觉变化；robust 使 \code 可用在 caption 等移动参数
-\DeclareRobustCommand{\code}[1]{\texttt{\seqsplit{#1}}}
-
-% ---------------------------------------------------------------- 代码块
-\definecolor{papercodeframe}{gray}{0.62}
-\lstdefinestyle{papercode}{
-  basicstyle=\ttfamily\small,
-  breaklines=true,
-  postbreak=\mbox{\textcolor{papercodeframe}{$\hookrightarrow$}\space},
-  frame=single,
-  framerule=0.3pt,
-  framesep=6pt,
-  aboveskip=1em,
-  belowskip=1em,
-  xleftmargin=1.2em,
-  xrightmargin=1.2em,
-  showstringspaces=false,
-  columns=fullflexible,
-  keepspaces=true,
-  tabsize=2,
-}
-
-% ---------------------------------------------------------------- 列表
-\setlist[itemize]{topsep=4pt, itemsep=2pt, parsep=0pt}
-\setlist[enumerate]{topsep=4pt, itemsep=2pt, parsep=0pt}
-
-% ---------------------------------------------------------------- 图表题注
-\captionsetup{font=small, labelfont=bf}
-
-% ---------------------------------------------------------------- 页眉页脚
-\pagestyle{fancy}
-\fancyhf{}
-\fancyhead[C]{\small\leftmark}
-\fancyfoot[C]{\small\thepage}
-\renewcommand{\headrulewidth}{0.4pt}
-
-% ---------------------------------------------------------------- 交叉引用与书签
-\usepackage[bookmarksnumbered=true, hidelinks]{hyperref}
-\hypersetup{
-  pdftitle={BioMed QAgent：面向生物医学研究的多源数据智能采集与分析系统——参赛作品报告},
-  pdfauthor={BioMed-QAgent 项目组},
-}
-
-% ---------------------------------------------------------------- 目录深度
-\setcounter{tocdepth}{0}
-\setcounter{secnumdepth}{3}
-
+% ------------------------- 正文装配 -------------------------
 \begin{document}
 
-% ================================================================ 封面
-\begin{titlepage}
-  \centering
-  \vspace*{2.8cm}
-  {\zihao{1} BioMed QAgent}\par
-  \vspace{1.1em}
-  {\zihao{3} 面向生物医学研究的多源数据智能采集与分析系统}\par
-  \vspace{0.8em}
-  {\zihao{4} —— 参赛作品报告 ——}\par
-  \vspace{5.5cm}
-  {\zihao{4} 2026 年 8 月}\par
-  \vfill
-\end{titlepage}
+% 封面(不显示页码)
+\makereporttitle
 
-% ================================================================ 前置部分
+% 前置部分:摘要、目录(罗马页码)
 \frontmatter
-\include{chapters/ch00-abstract}
+
+\input{chapters/ch00-abstract}
 
 \tableofcontents
 
-% ================================================================ 正文
+% 正文:从 1 开始的阿拉伯页码
 \mainmatter
-\include{chapters/ch01-introduction}
-\include{chapters/ch02-problem-definition}
-\include{chapters/ch03-system-overview}
-\include{chapters/ch04-dataset-core}
-\include{chapters/ch05-experiments}
-\include{chapters/ch06-conclusion}
+
+\input{chapters/ch01-introduction}
+\input{chapters/ch02-problem-definition}
+\input{chapters/ch03-system-overview}
+\input{chapters/ch04-dataset-core}
+\input{chapters/ch05-experiments}
+\input{chapters/ch06-conclusion}
 
 \end{document}
