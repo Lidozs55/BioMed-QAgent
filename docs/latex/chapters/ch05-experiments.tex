@@ -25,6 +25,8 @@
 \end{xltabular}
 十案例中，gold7–gold9 在同一冻结代码提交（\code{e8d03589}）、单一 Host、同一评测协议下完成并重点展开，分别代表三类典型难点：动态多表拓扑闭环（gold7）、外部来源失效下的部分维度发布与结构化阻断（gold8）、多源多表整合与跨源证据（gold9）；gold10（肠道微生物组）在独立冻结提交下亦达成四表正式发布。gold1–6 为参考样例，覆盖表达/\allowbreak{}变异/\allowbreak{}靶点/\allowbreak{}结构/\allowbreak{}活性/\allowbreak{}图表六类场景，未纳入本轮冻结评测协议。各正式执行案例的声明宇宙与结局总览见表~\ref{tab:gold-outcome}。
 
+需要说明工程投入与案例规模的关系：上述机制是赛题赛道能力（来源发现与覆盖、异构解析、清洗整合、图表提取与全链路溯源）的实现本体，属于一次性基础设施投入——gold7–10 四个正式案例在冻结代码与同一评测协议下复用整套机制，新增普通场景只需登记来源与配置，而非重建流水线。因此，仅以单个案例的产出行数衡量投入，会忽略两点关键价值：可复现性（同一输入必然产出相同结果）与审计性（每行可溯源、每步可重验、发现问题可定位修正），后者正是“可信科学数据编译器”区别于一次性手工整理的所在。
+
 \begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.0\hsize}L>{\hsize=1.1\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.2\hsize}L}
 \caption{正式执行案例的声明宇宙与结局总览}\label{tab:gold-outcome}\\
 \toprule
@@ -97,7 +99,7 @@ i2 /\allowbreak{} phet /\allowbreak{} in\_\allowbreak{}supp\_\allowbreak{}75\_\a
 这一“核实不可达 → 显式阻断 → 定向续跑 → 正式化可达维度”的降级链，正是提案加分项“自动识别缺失数据并完成修正或寻求人类建议”在数据链路上的落地；不可达维度的替代源自动发现为已识别的改进方向（\ref{sec:boundaries} 节边界 2）。
 
 \textbf{输出结构}：\code{faers\_\allowbreak{}reaction\_\allowbreak{}counts.csv} 68 行 × 5 列（\code{drug\_\allowbreak{}name, reaction\_\allowbreak{}pt, report\_\allowbreak{}count, retrieval\_\allowbreak{}method, source\_\allowbreak{}url}）。请求的 9 药 × 8 肝毒性 PT = 72 行中，4 行因官方聚合响应确无该 PT 词条而\textbf{未零填充}，逐条列出（如 azathioprine–HEPATOCELLULAR INJURY）；其余 68 行与发现阶段 openFDA 计数逐条一致（如 acetaminophen ACUTE HEPATIC FAILURE = 3297）。校验 16/\allowbreak{}16 通过（0 坏行、0 重复主键）、溯源 9/\allowbreak{}9 载体满足、\code{product\_\allowbreak{}status=publishable}。每行 \code{source\_\allowbreak{}url} 直接给出可复核的官方 API 查询串；\code{report\_\allowbreak{}count} 的语义为 MedDRA PT 报告次数（非去重患者、非因果证据），已在终答与溯源中注明。
-不可达的 DILIrank vMost 名册与 LiverTox 维度不进入正式发布，仅保留为明确标注暂存的工作区文件——“部分维度正式发布 +\allowbreak{} 不可达维度结构化阻断”是该上游条件下的完成形态，也是 \ref{sec:stage7-validate} 节显式终态语义的一次实战兑现。其余边界见 \ref{sec:boundaries} 节。
+不可达的 DILIrank vMost 名册与 LiverTox 维度不进入正式发布，仅保留为明确标注暂存的工作区文件——“部分维度正式发布 +\allowbreak{} 不可达维度结构化阻断”是该上游条件下的完成形态，也是 \ref{sec:stage7-validate} 节显式终态语义的一次实战兑现。需要说明的是，这里的阻断并非“不做替代”：第三方镜像或转载无法进入字节级证据链，系统因此不会自动改换来源，而是结构化地请求研究者提供官方文件；可靠的替代源自动发现（从文献补充或其他官方通道补 DILI 证据）已列为规划中的合规扩展。其余边界见 \ref{sec:boundaries} 节。
 
 \section{案例 gold9：原发性免疫缺陷基因-疾病整合（多源四表与跨源证据）}\label{sec:gold9}
 
@@ -216,7 +218,7 @@ TBX1,567,,,,,,NONE,
 
 \section{能力边界与处置}\label{sec:boundaries}
 
-本节统一收拢各案例的适用边界——范围取舍、上游失效下的处置与已识别偏差——及对应的处置方式：
+需要先说明边界披露的性质：它是能力诚实性设计（\ref{sec:design-goals} 节目标六）的落地形态，与“能力未实现”不同——多数边界是范围取舍或上游失效下的正确处置，每条都有对应的处置路径。本节统一收拢各案例的适用边界——范围取舍、上游失效下的处置与已识别偏差——并给出处置方式：
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=1.4\hsize}L>{\hsize=0.9\hsize}L>{\hsize=1.3\hsize}L}
 \caption{案例能力边界与处置}\label{tab:boundaries}\\
 \toprule
@@ -231,7 +233,7 @@ TBX1,567,,,,,,NONE,
 2 & gold8 DILIrank vMost 名册与 LiverTox 维度保持暂存阻断；FAERS 计数语义为 MedDRA PT 报告次数（非去重患者、非因果证据） & 上游失效下的正确终态 & 官方文件恢复后即可闭合；替代源自动发现为已识别改进方向 \\
 3 & gold9 crosswalk 的 ClinVar/\allowbreak{}ClinGen 数值列未落表（ClinVar 载体仅绑定单基因 BTK）；结构校验不含可选列填充率 & 已识别偏差，记入案例档案 & 可经 \ref{sec:hil} 节反馈-修正-换版闭环落表，无需重跑全链路；填充率检查列入校验清单改进 \\
 4 & gold7 正式绑定单研究（GCST90027158）；映射基因全部来自补充材料（GWAS Catalog \code{authorReportedGenes} 为空）；样本量元数据未正式绑定 & 范围取舍 & 已随发布披露；可扩展多研究绑定 \\
-5 & 冲突合并 first source wins：保证复现但不构成科学裁真（\ref{sec:stage5-integrate}） & 设计取舍 & 冲突审计随产物交付，裁真保留给研究者与人工确认 \\
+5 & 同键冲突的终局裁决 first source wins：保证复现但不构成科学裁真；双列并排与冲突审计已保留全部候选（\ref{sec:stage5-integrate}） & 设计取舍 & 冲突审计随产物交付，裁真保留给研究者与人工确认 \\
 6 & 全局 QueryPlan /\allowbreak{} SourceCoverage 证据未随产物交付（\ref{sec:source-discovery}） & 规划能力 & 覆盖只在预定义源集合内计算，不宣称“全网查全”；产品化设计见 \ref{sec:source-discovery} 节 \\
 7 & 与参考集的对照为手工冻结数字（\ref{sec:ref-compare}）；行级覆盖率、字段命中率与数值一致性尚未脚本化 & 量化评测缺口 & 冻结参考 +\allowbreak{} 脚本化对照，并入 gold-v1 评估器 \\
 \bottomrule
