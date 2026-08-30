@@ -38,6 +38,7 @@ describe("Core acquisition provider catalog", () => {
     ["gwas-catalog.associations.v1", "gwas_catalog", "rs429358", "www.ebi.ac.uk", "gwas_catalog"],
     ["europepmc.supplementary.v1", "europepmc_supplementary", "PMC9005347", "www.ebi.ac.uk", "pubmed"],
     ["europepmc.pdf.v1", "europepmc_pdf", "PMC9005347", "europepmc.org", "pubmed"],
+    ["europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC9005347", "www.ebi.ac.uk", "pubmed"],
     ["gmrepo.files.v1", "gmrepo", "1234", "gmrepo.humangut.info", "gmrepo"],
   ])("plans %s through a provider-owned endpoint", async (providerId, source, accession, host, database) => {
     const provider = createCoreAcquisitionProviders().find((entry) => entry.providerId === providerId);
@@ -82,6 +83,18 @@ describe("Core acquisition provider catalog", () => {
     expect(plan.filename).toBe("PMC9005347.pdf");
     expect(plan.expectedMediaTypes).toEqual(new Set(["application/pdf"]));
     expect(plan.allowedHosts).toEqual(new Set(["europepmc.org"]));
+    expect(plan.assetRole).toBe("carrier");
+  });
+
+  it("plans the fixed Europe PMC full-text XML carrier as an acquisition-only binary asset", async () => {
+    const providers = createCoreAcquisitionProviders();
+    const xml = providers.find((entry) => entry.providerId === "europepmc.fulltext_xml.v1");
+    expect(xml).toBeDefined();
+    const plan = await xml!.plan(request("europepmc.fulltext_xml.v1", "europepmc_fulltext_xml", "PMC9005347"));
+    expect(plan.source.url).toBe("https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9005347/fullTextXML");
+    expect(plan.filename).toBe("PMC9005347.xml");
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/xml"]));
+    expect(plan.allowedHosts).toEqual(new Set(["www.ebi.ac.uk"]));
     expect(plan.assetRole).toBe("carrier");
   });
 });

@@ -293,3 +293,62 @@ describe("Europe PMC fixed PDF carrier provider", () => {
     await expect(execute()).rejects.toThrow(/valid PMCID|arbitrary paths/);
   });
 });
+
+describe("Europe PMC fixed full-text XML carrier provider", () => {
+  function xmlRequest(accession: string | null): CoreAcquisitionRequest {
+    return request({
+      providerId: EXTENDED_PROVIDER_IDS.europePmcFulltextXml,
+      source: "europepmc_fulltext_xml",
+      accession,
+    });
+  }
+
+  function registry(): CoreAcquisitionRegistry {
+    const value = new CoreAcquisitionRegistry();
+    for (const provider of createExtendedAcquisitionProviders()) value.registerProvider(provider);
+    return value;
+  }
+
+  it("registers the provider with a stable implementation digest", () => {
+    const resolved = registry().resolve(xmlRequest("PMC9005347"), "task_provider");
+    expect(resolved.handler.providerId).toBe("europepmc.fulltext_xml.v1");
+    expect(resolved.handler.implementationDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("plans the official Europe PMC full-text XML endpoint for one uppercase PMCID", async () => {
+    const resolved = registry().resolve(xmlRequest("PMC9005347"), "task_provider");
+    const plan = await resolved.handler.plan(resolved.request);
+    expect(plan.source).toMatchObject({
+      database: "pubmed",
+      accession: "PMC9005347",
+      url: "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9005347/fullTextXML",
+    });
+    expect(plan.filename).toBe("PMC9005347.xml");
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/xml"]));
+    expect(plan.accept).toBe("application/xml,text/xml;q=0.9");
+    expect(plan.allowedHosts).toEqual(new Set(["www.ebi.ac.uk"]));
+    expect(plan.assetRole).toBe("carrier");
+    expect(plan.providerRevisionFacts?.canonical_accession).toBe("PMC9005347");
+  });
+
+  it("normalizes a lowercase PMCID to its uppercase canonical accession", async () => {
+    const resolved = registry().resolve(xmlRequest("pmc9005347"), "task_provider");
+    const plan = await resolved.handler.plan(resolved.request);
+    expect(plan.source.accession).toBe("PMC9005347");
+    expect(plan.source.url).toBe("https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9005347/fullTextXML");
+  });
+
+  it.each([
+    "34180400",
+    "10.7554/eLife.64977",
+    "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9005347/fullTextXML",
+    "../workspace/paper.xml",
+  ])("rejects non-PMCID input %s", async (accession) => {
+    const value = registry();
+    const execute = async (): Promise<void> => {
+      const resolved = value.resolve(xmlRequest(accession), "task_provider");
+      await resolved.handler.plan(resolved.request);
+    };
+    await expect(execute()).rejects.toThrow(/valid PMCID|arbitrary paths/);
+  });
+});
