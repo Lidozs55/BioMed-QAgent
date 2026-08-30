@@ -18,10 +18,11 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { SourceLocatorV2 } from "@biomed/contracts";
+import type { HILSubject, JsonValue, SourceLocatorV2 } from "@biomed/contracts";
 
 import type { CoreResolvedRegisteredAsset } from "../../dataset/adapters/registered/types.js";
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
+import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import {
   assertChartEvidenceCarrierRows,
   type ChartConfidenceLevel,
@@ -115,6 +116,14 @@ export interface RegisteredPaperChartExtractionDeps {
   vlmClientFactory?: (config: VlmConfig) => VlmClient;
   /** Test seam: extract page raster images from the registered PDF. */
   extractPageImages?: (pdfPath: string, destDir: string) => Promise<PdfImageExtraction>;
+  /**
+   * Durable review gate. When present, ALL pending VLM point estimates of
+   * the registered carrier are batched into ONE evidence-bound
+   * ``data_review`` request; a reject/skip resolution fails the extraction
+   * outcome (the estimates are not publishable). Absent (legacy), the
+   * carrier keeps its pending review ids only.
+   */
+  hilGate?: DatasetHILGate | null;
   now?: () => Date;
 }
 
@@ -144,8 +153,27 @@ export interface RegisteredPaperChartEvidenceResult {
     sources: number;
   };
   /** Durable review references; empty until evidence-bound human review. */
-  pending_review: { series_count: number; point_count: number; review_ids: string[] };
+  pending_review: {
+    series_count: number;
+    point_count: number;
+    review_ids: string[];
+    /** Present only when a durable review gate resolved the carrier batch. */
+    review?: RegisteredPaperChartCarrierReview;
+  };
   warnings: string[];
+}
+
+/** Durable resolution of the one batched carrier review (T6). */
+export interface RegisteredPaperChartCarrierReview {
+  request_id: string;
+  review_id: string;
+  action: "accept" | "correct";
+  reviewer: string;
+  reviewed_at: string;
+  evidence_digest: string;
+  reason: string | null;
+  /** Structured corrections; only for ``correct`` resolutions. */
+  correction: JsonValue | null;
 }
 
 export interface ParsedPaperMetaCandidate {
@@ -1097,6 +1125,84 @@ export async function extractRegisteredPaperChartEvidence(
     mediaType: "application/json",
   });
 
+  // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
+  let carrierReview: RegisteredPaperChartCarrierReview | null = null;
+  if (deps.hilGate != null && pointRows.length > 0) {
+    const subject: HILSubject = {
+      source_asset_ids: [receipt.asset_ref.asset_id],
+      record_ids: pointIds.slice(0, MAX_REVIEW_IDS),
+    };
+    const reviewItems = pointRows.map((point) => ({
+      item_id: point.point_id,
+      summary: `${point.point_id}: (${point.x_value}, ${point.y_value}) ${point.extraction_confidence}`,
+      subject: { record_ids: [point.point_id] },
+      evidence: {
+        carrier_asset_id: receipt.asset_ref.asset_id,
+        chart_series_id: point.chart_series_id,
+        x_value: point.x_value,
+        y_value: point.y_value,
+        extraction_confidence: point.extraction_confidence,
+        confidence_reason: point.confidence_reason,
+      },
+      proposed_value: { x: point.x_value, y: point.y_value },
+      confidence_level: point.extraction_confidence,
+    }));
+    const reviewRequest = {
+      requirement_id: null,
+      kind: "data_review" as const,
+      review_type: "vlm_extraction" as const,
+      blocking: true as const,
+      subject,
+      review_items: reviewItems,
+      summary:
+        `${pointRows.length} pending VLM estimate(s) registered in carrier ` +
+        `${receipt.asset_ref.asset_id} require review`,
+      evidence: JSON.parse(JSON.stringify({
+        carrier: {
+          asset_id: receipt.asset_ref.asset_id,
+          sha256: receipt.sha256,
+          relative_path: receipt.relative_path,
+        },
+        points: pointRows.map((point) => ({
+          point_id: point.point_id,
+          chart_series_id: point.chart_series_id,
+          activity_id: point.activity_id,
+          x_value: point.x_value,
+          y_value: point.y_value,
+          estimated_or_exact: point.estimated_or_exact,
+          extraction_confidence: point.extraction_confidence,
+        })),
+      })) as JsonValue,
+      policy_ref: "dataset.vlm_extraction.v1",
+      idempotency_key: `registered_paper_chart:${receipt.asset_ref.asset_id}`,
+    };
+    const review = await deps.hilGate.requestHIL(reviewRequest, signal);
+    if (review.decision.action === "approve") {
+      fail("approve is not valid for VLM data review");
+    }
+    if (review.decision.action === "reject" || review.decision.action === "skip") {
+      // The whole carrier batch was declined: its estimates are not
+      // publishable, so the governed extraction outcome fails closed.
+      fail(
+        `carrier ${receipt.asset_ref.asset_id} was ` +
+          `${review.decision.action === "skip" ? "skipped" : "rejected"} by human review; ` +
+          "its pending VLM estimates are not publishable",
+      );
+    }
+    carrierReview = {
+      request_id: review.request_id,
+      review_id: review.review_id,
+      action: review.decision.action,
+      reviewer: review.reviewer,
+      reviewed_at: review.reviewed_at,
+      evidence_digest: review.evidence_digest,
+      reason: review.reason,
+      correction: review.decision.action === "correct"
+        ? review.decision.correction
+        : null,
+    };
+  }
+
   return {
     status: "ok",
     carrier: {
@@ -1124,6 +1230,7 @@ export async function extractRegisteredPaperChartEvidence(
       series_count: seriesRows.length,
       point_count: pointRows.length,
       review_ids: pointIds.slice(0, MAX_REVIEW_IDS),
+      ...(carrierReview === null ? {} : { review: carrierReview }),
     },
     warnings: warnings.slice(0, MAX_WARNINGS),
   };

@@ -308,6 +308,7 @@ export async function createBusinessToolBundle(
       resolveVlmConfig: context.resolveVlmConfig,
       httpClient: client,
       approvalGate: context.approvalGate,
+      hilGate: context.hilGate,
     }), "extract_chart_data_vlm");
   } else {
     unavailable.add("extract_registered_paper_chart_evidence");

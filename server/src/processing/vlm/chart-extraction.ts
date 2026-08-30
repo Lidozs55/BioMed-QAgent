@@ -112,6 +112,14 @@ function correctionObject(value: JsonValue, path: string): Record<string, JsonVa
   return value;
 }
 
+/**
+ * Evidence-bound review for VLM-derived estimates. Every model-extracted
+ * point enters as ``pending`` regardless of its confidence level — a
+ * medium-confidence estimate is still a visual-model estimate — so ALL
+ * pending points of one source are batched into ONE ``data_review`` request:
+ * accept sets review provenance, correct preserves the original values,
+ * reject removes the point, and skip leaves no publishable estimate.
+ */
 export async function reviewLowConfidencePoints(options: {
   chartRows: ChartRow[];
   pointRows: ChartPointRow[];
@@ -119,11 +127,11 @@ export async function reviewLowConfidencePoints(options: {
   hilGate?: DatasetHILGate | null;
   signal?: AbortSignal;
 }): Promise<void> {
-  const low = options.pointRows.filter((point) => point.confidence_level === "low");
-  if (low.length === 0) return;
+  const pending = options.pointRows.filter((point) => point.human_review_state === "pending");
+  if (pending.length === 0) return;
   if (options.hilGate === undefined || options.hilGate === null) {
     throw new ChartExtractionError(
-      `${low.length} low-confidence VLM point(s) require durable human review`,
+      `${pending.length} pending VLM estimate(s) require durable human review`,
     );
   }
   const review = await options.hilGate.requestHIL({
@@ -131,8 +139,8 @@ export async function reviewLowConfidencePoints(options: {
     kind: "data_review",
     review_type: "vlm_extraction",
     blocking: true,
-    subject: { record_ids: low.map((point) => point.point_id) },
-    review_items: low.map((point) => ({
+    subject: { record_ids: pending.map((point) => point.point_id) },
+    review_items: pending.map((point) => ({
       item_id: point.point_id,
       summary: `${point.series_label || "point"}: (${point.x_value}, ${point.y_value})`,
       subject: { record_ids: [point.point_id] },
@@ -141,42 +149,44 @@ export async function reviewLowConfidencePoints(options: {
         x_value: point.x_value,
         y_value: point.y_value,
         series_label: point.series_label,
+        confidence_level: point.confidence_level,
         confidence_reason: point.confidence_reason,
       },
       proposed_value: { x: point.x_value, y: point.y_value },
-      confidence_level: "low",
+      confidence_level: point.confidence_level === "not_applicable" ? null : point.confidence_level,
     })),
-    summary: `${low.length} low-confidence VLM point(s) require review`,
+    summary: `${pending.length} pending VLM estimate(s) require review`,
     evidence: {
       source_label: options.sourceLabel,
-      points: low.map((point) => ({
+      points: pending.map((point) => ({
         point_id: point.point_id,
         chart_id: point.chart_id,
         x_value: point.x_value,
         y_value: point.y_value,
+        confidence_level: point.confidence_level,
         confidence_reason: point.confidence_reason,
       })),
     },
     policy_ref: "dataset.vlm_extraction.v1",
-    idempotency_key: `vlm:${options.sourceLabel}:${low.map((point) => point.point_id).join(",")}`,
+    idempotency_key: `vlm:${options.sourceLabel}:${pending.map((point) => point.point_id).join(",")}`,
   }, options.signal);
 
   if (review.decision.action === "approve") {
     throw new ChartExtractionError("approve is not valid for VLM data review");
   }
   if (review.decision.action === "reject" || review.decision.action === "skip") {
-    const removed = new Set(low.map((point) => point.point_id));
+    const removed = new Set(pending.map((point) => point.point_id));
     const retained = options.pointRows.filter((point) => !removed.has(point.point_id));
     options.pointRows.splice(0, options.pointRows.length, ...retained);
   } else if (review.decision.action === "accept") {
-    for (const point of low) {
+    for (const point of pending) {
       point.human_review_state = "accepted";
       point.review_id = review.review_id;
     }
   } else {
     const root = correctionObject(review.decision.correction, "VLM correction");
     const corrections = correctionObject(root["points"] ?? null, "VLM correction.points");
-    for (const point of low) {
+    for (const point of pending) {
       const item = correctionObject(
         corrections[point.point_id] ?? null,
         `VLM correction.points.${point.point_id}`,

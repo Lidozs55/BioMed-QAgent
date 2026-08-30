@@ -316,4 +316,133 @@ describe("data_correction end-to-end (real transport + reducer + controller + qu
     expect(screen.queryByText("需要人工修正")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
+
+  it("resolves one coalesced VLM data_review batch through the real runtime path", async () => {
+    const taskId = "task_e2e_vlm";
+    const runId = `run_${taskId}`;
+    const sockets: FakeSocket[] = [];
+
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [summary(taskId, "running", 0)],
+        items: [],
+        next_cursor: null,
+      },
+      false,
+    );
+    useAgentStore.getState().setActiveTaskId(taskId);
+
+    // T6: ALL pending VLM estimates of one carrier arrive as ONE data_review
+    // request; the user accepts the whole batch in a single decision.
+    const hilRequest = {
+      schema_version: "1.0" as const,
+      request_id: "hil_vlm_batch_1",
+      task_id: taskId,
+      run_id: runId,
+      requirement_id: null,
+      kind: "data_review" as const,
+      review_type: "vlm_extraction" as const,
+      status: "pending" as const,
+      blocking: true,
+      subject: { record_ids: ["chart_x_p1", "chart_x_p2"] },
+      review_items: [
+        {
+          item_id: "chart_x_p1",
+          summary: "Erlotinib: (10, 64.5)",
+          subject: { record_ids: ["chart_x_p1"] },
+          evidence: { chart_id: "chart_x", x_value: "10", y_value: "64.5" },
+          proposed_value: { x: "10", y: "64.5" },
+          confidence_level: "medium" as const,
+        },
+        {
+          item_id: "chart_x_p2",
+          summary: "Erlotinib: (100, 22)",
+          subject: { record_ids: ["chart_x_p2"] },
+          evidence: { chart_id: "chart_x", x_value: "100", y_value: "22" },
+          proposed_value: { x: "100", y: "22" },
+          confidence_level: "low" as const,
+        },
+      ],
+      summary: "2 pending VLM estimate(s) require review",
+      evidence_digest: "e".repeat(64),
+      policy_ref: "dataset.vlm_extraction.v1",
+      created_at: CREATED_AT,
+      resolved_at: null,
+    };
+    const resumeSnapshot = vi.fn(
+      (): Promise<TaskSnapshot> =>
+        Promise.resolve({
+          task: summary(taskId, "running", 2),
+          runs: [runRecord(taskId, "running")],
+          messages: [] as MessageRecord[],
+          older_messages_cursor: null,
+        }),
+    );
+    const transport = setupTransport(sockets);
+    const controller = new RuntimeController(
+      api({ resumeRun: resumeSnapshot }),
+      transport,
+    );
+
+    const connecting = transport.connect();
+    const socket = sockets[0];
+    transport.subscribe(taskId, 0);
+    socket.open();
+    await connecting;
+
+    act(() => {
+      socket.message(
+        envelope(taskId, 1, {
+          type: "user_input_required",
+          request_id: hilRequest.request_id,
+          prompt_kind: "data_correction",
+          summary: hilRequest.summary,
+          expires_at: null,
+          fixture_exempt: false,
+          detail: { review_type: "vlm_extraction" },
+          hil_request: hilRequest,
+        }),
+      );
+    });
+    expect(
+      useAgentStore.getState().tasksById[taskId].pendingUserInput?.hilRequest,
+    ).toMatchObject({ request_id: hilRequest.request_id, review_type: "vlm_extraction" });
+
+    const { rerender } = render(<ActiveTaskDialog controller={controller} />);
+    // The batch summary renders twice (questionnaire + review card header).
+    expect(
+      screen.getAllByText("2 pending VLM estimate(s) require review").length,
+    ).toBeGreaterThan(0);
+    // Both pending estimates of the carrier render in ONE batch table.
+    expect(screen.getByText("Erlotinib: (10, 64.5)")).toBeVisible();
+    expect(screen.getByText("Erlotinib: (100, 22)")).toBeVisible();
+
+    // One decision resolves the WHOLE batch.
+    fireEvent.click(screen.getByRole("button", { name: "接受整个审核批次" }));
+    await waitFor(() => expect(resumeSnapshot).toHaveBeenCalledTimes(1));
+    expect(resumeSnapshot).toHaveBeenCalledWith(taskId, runId, {
+      request_id: hilRequest.request_id,
+      evidence_digest: hilRequest.evidence_digest,
+      decision: { action: "accept" },
+      reason: null,
+    });
+
+    act(() => {
+      socket.message(
+        envelope(taskId, 2, {
+          type: "user_input_resumed",
+          request_id: hilRequest.request_id,
+          decision: { action: "accept" },
+          detail: {},
+        }),
+      );
+      socket.message(envelope(taskId, 3, { type: "run_completed" }));
+    });
+
+    expect(
+      useAgentStore.getState().tasksById[taskId].summary.status,
+    ).toBe("completed");
+    rerender(<ActiveTaskDialog controller={controller} />);
+    expect(screen.queryByText("接受整个审核批次")).not.toBeInTheDocument();
+  });
 });

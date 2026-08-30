@@ -163,6 +163,15 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
           isError: true,
         };
       }
+      // A processor-returned {status:"error"} result is a tool error too —
+      // never an unmarked success payload.
+      if (result.status === "error") {
+        return {
+          content: JSON.stringify(result, null, 2),
+          details: { status: "error", error: result.error },
+          isError: true,
+        };
+      }
       return { content: JSON.stringify(result, null, 2) };
     },
   };

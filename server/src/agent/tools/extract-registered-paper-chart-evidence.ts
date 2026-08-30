@@ -18,6 +18,7 @@ import {
 } from "../../processing/vlm/registered-paper-chart-extraction.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { errorResult } from "./result.js";
 
@@ -33,6 +34,11 @@ export interface RegisteredPaperChartEvidenceToolDeps extends ToolServiceDeps {
   httpClient?: PublicHttpClient;
   /** Durable credential approval gate (VLM access is credentialed). */
   approvalGate?: ToolApprovalGate | null;
+  /**
+   * Durable data-review gate. When present, the carrier's pending VLM
+   * estimates are batched into ONE evidence-bound data_review request.
+   */
+  hilGate?: DatasetHILGate | null;
 }
 
 function requireAssetIdArgument(value: unknown, field: string): string {
@@ -168,6 +174,7 @@ export function createRegisteredPaperChartEvidenceTool(
           sourceAssetRegistry: deps.sourceAssetRegistry,
           resolveVlmConfig: deps.resolveVlmConfig,
           httpClient: deps.httpClient,
+          hilGate: deps.hilGate ?? null,
         }, signal);
       } catch (error) {
         const failure = errorResult(error);

@@ -58,6 +58,10 @@ import type { HILGatePreReview } from "./hil-pre-review.js";
 import { claimTasksRootExclusive } from "./host-lease.js";
 
 import { readExecutionContinuation } from "./execution-continuation.js";
+import {
+  completePublicationAcceptanceContinuation,
+  loadBoundPublicationAcceptanceContinuation,
+} from "../dataset/dynamic-family/publication.js";
 
 import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/workspace-manager.js";
 
@@ -377,6 +381,82 @@ export async function createDurableAgentRuntime(
         error: "Dynamic publication HIL cannot continue after Application Host restart without a deterministic continuation",
         error_code: "configuration_error",
       });
+    }
+  };
+
+  /**
+   * Deterministic post-restart resume for a dynamic publication whose
+   * ``publication_acceptance`` review was resolved. Returns:
+   * - "resumed":  the publication completed (durable events appended).
+   * - "pending":  a durable continuation exists; the review is unresolved,
+   *               so the request survives the restart and keeps waiting.
+   * - "rejected": a continuation exists but resuming failed (run_failed).
+   * - "absent":   no durable continuation (caller decides fail-closed).
+   */
+  const resumePublicationAcceptance = async (
+    taskId: string,
+    runId: string,
+    request: HILRequest | null,
+  ): Promise<"resumed" | "pending" | "rejected" | "absent"> => {
+    const requirementId = request?.requirement_id ?? null;
+    if (requirementId === null) return "absent";
+    const taskRoot = pathForTask(options.tasksRoot, taskId);
+    const continuation = await loadBoundPublicationAcceptanceContinuation(
+      taskRoot,
+      taskId,
+      requirementId,
+    );
+    if (continuation === null) return "absent";
+    const review = await hilStore.getReviewForRequest(taskId, continuation.requested_review_id);
+    if (review === null) return "pending";
+    try {
+      const completed = await completePublicationAcceptanceContinuation({
+        continuation,
+        taskRoot,
+        runId,
+        review,
+      });
+      await repository.appendRunEvent(taskId, runId, {
+        type: "publication_created",
+        publication_id: completed.publication.publication_id,
+        run_id: runId,
+        manifest_sha256: completed.publication.manifest_sha256,
+        supersedes_publication_id: completed.publication.supersedes_publication_id,
+        published_at: completed.publication.published_at,
+      });
+      for (const artifact of completed.manifest.artifacts) {
+        await repository.appendRunEvent(taskId, runId, {
+          type: "artifact_produced",
+          artifact: {
+            artifact_id: artifact.artifact_id,
+            name: artifact.relative_path.split("/").at(-1) ?? artifact.relative_path,
+            role: artifact.role,
+            relative_path: artifact.relative_path,
+            media_type: artifact.media_type,
+            size_bytes: artifact.size_bytes,
+            sha256: artifact.sha256,
+            generated_by_step_id: `dynamic:${requirementId}`,
+          },
+        });
+      }
+      await repository.appendRunEvent(taskId, runId, { type: "run_completed" });
+      return "resumed";
+    } catch (error) {
+      const snapshot = await repository.getSnapshot(taskId);
+      const run = snapshot?.runs.find((candidate) => candidate.run_id === runId);
+      if (
+        run !== undefined &&
+        run.status !== "completed" &&
+        run.status !== "failed" &&
+        run.status !== "cancelled"
+      ) {
+        const message = error instanceof Error ? error.message : String(error);
+        await repository.appendRunEvent(taskId, runId, {
+          type: "run_failed",
+          error: message.slice(0, 4_000),
+        });
+      }
+      return "rejected";
     }
   };
 
@@ -1001,7 +1081,10 @@ export async function createDurableAgentRuntime(
             storedRequest?.requirement_id ?? null,
           );
           if (!started && isDynamicPublicationAcceptance(storedRequest)) {
-            await failClosedDynamicPublicationRecovery(taskId, runId);
+            const outcome = await resumePublicationAcceptance(taskId, runId, storedRequest);
+            if (outcome === "absent") {
+              await failClosedDynamicPublicationRecovery(taskId, runId);
+            }
           }
         }
         return repository.getSnapshot(taskId);
@@ -1046,7 +1129,10 @@ export async function createDurableAgentRuntime(
       );
       if (started) return repository.getSnapshot(taskId);
       if (isDynamicPublicationAcceptance(storedRequest)) {
-        await failClosedDynamicPublicationRecovery(taskId, runId);
+        const outcome = await resumePublicationAcceptance(taskId, runId, storedRequest);
+        if (outcome === "absent") {
+          await failClosedDynamicPublicationRecovery(taskId, runId);
+        }
         return repository.getSnapshot(taskId);
       }
     }
@@ -1711,6 +1797,12 @@ export async function createDurableAgentRuntime(
 
   for (const recovery of hilRecoveries) {
     if (isDynamicPublicationAcceptance(recovery.request)) {
+      const resumed = await resumePublicationAcceptance(
+        recovery.task_id,
+        recovery.run_id,
+        recovery.request,
+      );
+      if (resumed !== "absent") continue;
       await failClosedDynamicPublicationRecovery(recovery.task_id, recovery.run_id);
       continue;
     }

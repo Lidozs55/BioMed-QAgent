@@ -405,6 +405,91 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("batches all pending carrier estimates into one data_review request", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const requests: Array<{
+        kind: string;
+        review_type: string | null;
+        item_count: number;
+        requirement_id: string | null;
+      }> = [];
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async (input) => {
+            requests.push({
+              kind: input.kind,
+              review_type: input.review_type,
+              item_count: input.review_items.length,
+              requirement_id: input.requirement_id,
+            });
+            return {
+              schema_version: "1.0",
+              review_id: "review_carrier_1",
+              request_id: "request_carrier_1",
+              decision: { action: "accept" as const },
+              reviewer: "user" as const,
+              reviewed_at: "2026-08-30T11:00:00.000Z",
+              evidence_digest: "a".repeat(64),
+              reason: null,
+            };
+          },
+        },
+      });
+
+      // ONE coalesced evidence-bound review for the whole carrier.
+      expect(requests).toEqual([{
+        kind: "data_review",
+        review_type: "vlm_extraction",
+        item_count: 2,
+        requirement_id: null,
+      }]);
+      expect(result.pending_review.review).toMatchObject({
+        review_id: "review_carrier_1",
+        action: "accept",
+        reviewer: "user",
+      });
+
+      // The registered carrier rows stay pending: the review provenance is
+      // durable, but the carrier never masquerades as review-closed rows.
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      for (const point of rowsOf(carrier, "chart_points")) {
+        expect(point.review_status).toBe("pending");
+        expect(point.review_id).toBeNull();
+      }
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("rejects the extraction outcome when the reviewer rejects the batched review", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      await expect(extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async () => ({
+            schema_version: "1.0",
+            review_id: "review_carrier_rejected",
+            request_id: "request_carrier_rejected",
+            decision: { action: "reject" as const },
+            reviewer: "user" as const,
+            reviewed_at: "2026-08-30T11:00:00.000Z",
+            evidence_digest: "b".repeat(64),
+            reason: "not evidence-bound",
+          }),
+        },
+      })).rejects.toThrow(/rejected by human review/);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("rejects absolute paths before any model call", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {
