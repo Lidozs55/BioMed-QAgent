@@ -22,6 +22,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   DeterministicDeriveRequest,
+  DiscoveryQueryRecord,
   JsonValue,
   ProviderRevisionEvidenceV1,
   PublicationCandidate,
@@ -51,6 +52,7 @@ import { checkExpressionCompatibility } from "../compat/compat_gate.js";
 import type { IntegrationResult } from "../integrator/integrator.js";
 import { integrate } from "../integrator/integrator.js";
 import { assembleManifest, buildProvenanceDocument, writeManifest } from "../publish/manifest.js";
+import { buildSourceCoverageReport, writeSourceCoverageReport } from "../audit/source-coverage.js";
 import { promotePublication } from "../publish/publisher.js";
 import {
   buildOperationPlan,
@@ -118,6 +120,11 @@ export interface ExecuteContext {
   providerRevisionEvidence?: readonly ProviderRevisionEvidenceV1[] | null;
   /** Exact task-owned registration receipts resolved for this build. */
   registrationReceipts?: readonly SourceAssetRegistrationReceipt[] | null;
+  /**
+   * Runtime discovery observations for the source coverage evidence. Audit
+   * input only — never part of the build's authoritative identity.
+   */
+  discoveryQueries?: readonly DiscoveryQueryRecord[] | null;
   /** Optional server-owned fixed derive slot. */
   deriveRequest?: DeterministicDeriveRequest | null;
   deriveCapability?: DeterministicDeriveCapability | null;
@@ -364,6 +371,10 @@ export function createTsCoreOperationRunner(options: {
   bindings: ReadonlyMap<string, ReturnType<typeof import("../contracts/spec.js").parseSourceBinding>>;
   /** Phase-A bindings recovered from checkpoint rehydration (WP-A5). */
   rehydratedBindingIds: Set<string>;
+  /** Exact task-owned registration receipts for the source coverage evidence. */
+  registrationReceipts?: readonly SourceAssetRegistrationReceipt[] | null;
+  /** Runtime discovery observations for the source coverage evidence. */
+  discoveryQueries?: readonly DiscoveryQueryRecord[] | null;
   /** I-04 publish fence: true while this build still owns its lock. */
   fence?: (() => Promise<boolean>) | null;
   hilGate?: DatasetHILGate | null;
@@ -379,6 +390,8 @@ export function createTsCoreOperationRunner(options: {
     runnerState,
     bindings,
     rehydratedBindingIds,
+    registrationReceipts,
+    discoveryQueries,
   } = options;
   const identityContexts = options.identityContexts ?? new Map<string, ExpressionAdapterIdentityContext>();
   const identityContext = options.identityContext ?? null;
@@ -702,9 +715,24 @@ export function createTsCoreOperationRunner(options: {
           batch_defaults: batchDefaults,
           record_overrides: [],
         });
+        // Source coverage evidence (TODO P1 #21): Core-derived query plan and
+        // acquisition coverage, published as an audit_report manifest artifact.
+        const coveragePath = await writeSourceCoverageReport(
+          outputDir,
+          buildSourceCoverageReport({
+            taskId,
+            spec,
+            sourceAssets,
+            registrationReceipts: registrationReceipts ?? [],
+            canonicalResults: runnerState.canonicalResults,
+            integratedRows: integration.rowCount,
+            discoveryQueries: discoveryQueries ?? null,
+          }),
+        );
         const auditPaths = [
           ...runnerState.canonicalResults.flatMap((result) => result.auditPaths),
           confidencePath,
+          coveragePath,
         ];
         const summary = sourceSummary([...bindings.keys()], runnerState);
         let manifest = await assembleManifest({
@@ -878,7 +906,7 @@ export class TypeScriptDatasetCore {
       for (const assetId of Object.values(registeredIds)) {
         if (!context.registeredSourceAssetIds.has(assetId)) throw new ExecutionError(`source asset '${assetId}' is not task-registered`);
       }
-      const result = await executeRegisteredMultiTableBuild({ taskId, taskRoot, spec, registeredAssetIds: registeredIds, runId: context.runId });
+      const result = await executeRegisteredMultiTableBuild({ taskId, taskRoot, spec, registeredAssetIds: registeredIds, runId: context.runId, discoveryQueries: context.discoveryQueries ?? null });
       return {
         requirement_id: requirementId,
         status: "completed",
@@ -942,6 +970,8 @@ export class TypeScriptDatasetCore {
       runnerState,
       bindings,
       rehydratedBindingIds,
+      registrationReceipts: context.registrationReceipts ?? null,
+      discoveryQueries: context.discoveryQueries ?? null,
       fence: async (): Promise<boolean> => lease.assertOwned(),
       hilGate: this.options.hilGate ?? null,
     });

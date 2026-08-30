@@ -270,6 +270,38 @@ ID、一对一关系。相似度规则足以将看似相似、实际不同的字
 
 ---
 
+## 9. 来源覆盖证据（QueryPlan / SourceCoverage）
+
+Core 在发布装配时确定性生成 `source_coverage_report.json`，以 `audit_report`
+角色进入发布清单（契约见 `@biomed/contracts` 的 `SourceCoverageReport`，构建见
+`server/src/dataset/audit/source-coverage.ts`）。
+
+**数据分三层，证据强度不同：**
+
+1. `query_plan`：从执行规格的 `source_bindings` 确定性投影的检索计划
+   （source/provider/adapter/accession/参数）；
+2. `acquisition_coverage`：Core 自验的采集结果——绑定资产回执（asset_id、
+   SHA-256、字节数、media_type、registered_at）、行数记账（解析/规范化保留/
+   规范化拒绝）与排除原因；覆盖计数只由这一层推导；
+3. `discovery_queries`：runtime 工具钩子累积的检索观察记录，逐条 fail-closed
+   解析后原样携带；它是观察记录，不参与覆盖计数，也不得被解读为查全证明。
+
+**边界不变量：**
+
+- 覆盖只在 `universe_scope: "spec_source_bindings"`（任务规格声明的源绑定）内
+  计算；报告携带固定 scope note，明确不构成"全网查全"宣称；
+- 报告是审计证据，不是逐行 provenance，也不是主数据；
+- summary 由解析器强制与条目一致（汇总撒谎即拒绝）；
+- discovery 台账为审计输入，不参与构建的 authoritative identity digest。
+
+**路线覆盖与恢复**：V1 静态路线经 `validate_profile` 的 `auditPaths` 进入清单；
+V2 注册式路线在发布条目中追加；动态 Family 路线的发布层目前没有规格绑定与
+完整回执，暂不产出该报告（跟进项）。runtime 恢复时用
+`server/src/runtime/discovery-ledger.ts` 的 `projectDiscoveryQueries` 从既有
+`operation_*` 事件重建检索台账，不新增事件类型。
+
+---
+
 ## 20. 代码评审检查表
 
 新增数据源或数据类型时，先逐项对照 §19 顶层不变量，再回答：

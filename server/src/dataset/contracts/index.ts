@@ -20,3 +20,5 @@ export * from "./manifest.js";
 export * from "./multitable.js";
 export * from "./publication-candidate.js";
 export * from "./spec.js";
+
+export * from "./source-coverage.js";
