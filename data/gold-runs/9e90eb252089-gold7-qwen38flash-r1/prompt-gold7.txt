@@ -1,0 +1,7 @@
+﻿阿尔茨海默病（AD）GWAS 风险位点数据整合
+
+以 Bellenguez 2022 全基因组关联分析（PMID 35379992，GWAS Catalog 研究编号如 GCST90027158）为主要来源，结合作者官方补充材料中的风险位点表交叉核对，整理 AD 遗传风险图谱。
+
+交付三张可互相关联的表：1) 研究表（队列、样本量、平台/方法元数据）；2) 风险位点表（变异 rsID、染色体位置、GRCh38 坐标须经 dbSNP 核验、效应值与分层统计 stage1/stage2/stage12 的 OR 与 p 值、异质性、风险等位基因、所在基因、是否出现在补充材料 75 位点集中）；3) 变异-基因映射表。各表通过研究 accession / rsID / 基因符号关联，每行保留来源可追溯性。
+
+（gold7 无 prompts 文件；此为 run 实发 TOPIC 原文，依据 docs/reports/gold789-case-chapter.md §5.2 重建）

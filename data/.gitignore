@@ -1,2 +1,6 @@
 *
 !.gitignore
+!gold-runs/
+!gold-runs/**
+!gold/
+!gold/**
