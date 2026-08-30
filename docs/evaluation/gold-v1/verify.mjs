@@ -95,6 +95,17 @@ function verify() {
     if (schema.family !== spec.expected_family || !Array.isArray(schema.tables) || schema.tables.length === 0) fail(`invalid schema reference: ${spec.schema_ref}`);
     const source = readJson(pathInside(spec.source_inventory));
     if (source.case_id !== entry.case_id || !Array.isArray(source.allowed_providers)) fail(`invalid source inventory: ${spec.source_inventory}`);
+    // Fields feeding the run's frozen execution_context (run-case.mjs) must be
+    // well-formed for every case, not only the one being invoked.
+    if (typeof spec.expected_family !== "string" || spec.expected_family === "") fail(`invalid expected_family: ${entry.case_id}`);
+    if (!Array.isArray(spec.allowed_sources) || spec.allowed_sources.some((item) => typeof item !== "string" || item === "")) fail(`invalid allowed_sources: ${entry.case_id}`);
+    if (
+      !Array.isArray(spec.required_tables) || spec.required_tables.length === 0 ||
+      spec.required_tables.some((item) => typeof item !== "string" || item === "") ||
+      new Set(spec.required_tables).size !== spec.required_tables.length
+    ) fail(`invalid required_tables: ${entry.case_id}`);
+    if (typeof spec.success_definition !== "string" || spec.success_definition.trim() === "") fail(`invalid success_definition: ${entry.case_id}`);
+    if (!Array.isArray(spec.forbidden_shortcuts) || spec.forbidden_shortcuts.some((item) => typeof item !== "string" || item === "")) fail(`invalid forbidden_shortcuts: ${entry.case_id}`);
     for (const anchor of source.historical_content_anchors ?? []) {
       if (anchor.status === "historical_only") {
         if (!Number.isInteger(anchor.bytes) || anchor.bytes <= 0) fail(`historical anchor missing bytes: ${anchor.asset_id}`);

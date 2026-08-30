@@ -246,6 +246,26 @@ function boundedValue(value: unknown, depth = 0): unknown {
   return String(value).slice(0, MAX_TEXT);
 }
 
+/**
+ * Delimited marker pair for frozen run context carried by ``systemContext``.
+ * The agent must treat the section as binding evidence and never echo it into
+ * the user-visible conversation.
+ */
+export const SYSTEM_CONTEXT_SECTION_BEGIN = "[Begin Frozen execution context]";
+export const SYSTEM_CONTEXT_SECTION_END = "[End Frozen execution context]";
+
+/** Appends the serialized frozen run context to the system prompt. */
+export function systemContextSection(systemContext: string | undefined): string {
+  if (systemContext === undefined || systemContext.trim() === "") return "";
+  return [
+    "",
+    "",
+    SYSTEM_CONTEXT_SECTION_BEGIN,
+    systemContext.trim(),
+    SYSTEM_CONTEXT_SECTION_END,
+  ].join("\n");
+}
+
 export function toolCatalogPrompt(
   tools: readonly BioMedAgentTool[],
   initialToolNames: readonly string[],
@@ -1487,7 +1507,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
         ...config,
         systemPrompt:
           PHASE1_SYSTEM_PROMPT +
-          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)),
+          toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)) +
+          systemContextSection(config.systemContext),
         skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
       });
       const upstream = await this.createUpstreamSession(validated);

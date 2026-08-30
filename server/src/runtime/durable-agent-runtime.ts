@@ -15,10 +15,16 @@ import type {
   HILRequest,
   JsonValue,
   ResumeHILInput,
+  TaskExecutionContext,
   TaskMode,
   WebSocketControlFrame,
 } from "@biomed/contracts";
-import { parseJsonTextStrict, parseResumeHILInput } from "@biomed/contracts";
+import {
+  parseJsonTextStrict,
+  parseResumeHILInput,
+  parseTaskExecutionContext,
+  stableTaskExecutionContextJson,
+} from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import {
@@ -229,6 +235,20 @@ function databases(value: unknown): string[] {
     throw new TypeError("databases must be a string array");
   }
   return value as string[];
+}
+
+/**
+ * Exact wire validation of the frozen execution context attached to a run
+ * admission; absent/null means "no frozen contract". Invalid contexts reject
+ * the request instead of being coerced.
+ */
+function executionContext(value: unknown): TaskExecutionContext | null {
+  if (value === undefined || value === null) return null;
+  try {
+    return parseTaskExecutionContext(value, "execution_context");
+  } catch (error) {
+    throw new TypeError(`execution_context is invalid: ${(error as Error).message}`, { cause: error });
+  }
 }
 
 interface ImportUpload {
@@ -458,6 +478,11 @@ export async function createDurableAgentRuntime(
   }
 
   async function createSession(taskId: string, runId: string, mode: TaskMode): Promise<ActiveTask> {
+    // The frozen evaluation contract of THIS run is bound through the system
+    // prompt; the user message is never modified (durable-context invariant).
+    const runSnapshot = await repository.getSnapshot(taskId);
+    const executionContext =
+      runSnapshot?.runs.find((run) => run.run_id === runId)?.execution_context ?? null;
     const approvalGate = new DurableApprovalGate(
       taskId,
       repository,
@@ -500,6 +525,9 @@ export async function createDurableAgentRuntime(
           "submit_dynamic_family_publication",
         ],
         getCurrentPublicationId: () => workspace.getCurrentPublicationId?.() ?? null,
+        ...(executionContext === null
+          ? {}
+          : { systemContext: stableTaskExecutionContextJson(executionContext) }),
         cleanup: disposeWorkspace,
       });
       workspace.setPiSessionId?.(session.piSessionId);
@@ -534,6 +562,7 @@ export async function createDurableAgentRuntime(
       input: inputString(body),
       databases: databases(body.databases),
       mode,
+      executionContext: executionContext(body.execution_context),
     });
     await launchAcceptedTask(accepted, body.input as string);
     return accepted;
@@ -580,6 +609,7 @@ export async function createDurableAgentRuntime(
       input: durableInput,
       databases: [],
       mode: "import",
+      executionContext: null,
     });
     await launchAcceptedTask(accepted, durableInput, async (taskRoot) => {
       const sourceAssets = path.join(taskRoot, "source_assets");
@@ -599,6 +629,7 @@ export async function createDurableAgentRuntime(
     const accepted = await repository.createRun(taskId, {
       requestId,
       input: inputString(body),
+      executionContext: executionContext(body.execution_context),
     });
     if (existingRun !== undefined) return accepted;
     let task = activeTasks.get(taskId);

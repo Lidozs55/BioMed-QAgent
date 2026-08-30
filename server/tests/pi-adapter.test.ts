@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { BioMedAgentError } from "../src/agent/contracts.js";
+import { BioMedAgentError, type BioMedSessionConfig } from "../src/agent/contracts.js";
 import { SKILL_TOOL_NAMES } from "../src/agent/skills/skill-tool-map.js";
 import {
   activationToolDefinition,
@@ -12,6 +12,8 @@ import {
   resolveRequestMaxTokens,
   resolveSessionBudget,
   shouldReconfigureSession,
+  SYSTEM_CONTEXT_SECTION_BEGIN,
+  SYSTEM_CONTEXT_SECTION_END,
   toUpstreamEvent,
   toolCatalogPrompt,
   TOOL_ACTIVATION_NAME,
@@ -468,6 +470,46 @@ describe("PiAgentAdapter", () => {
     await collect(session.run("continue"));
 
     expect(upstream.reconcileConfig).toHaveBeenCalledOnce();
+  });
+
+  test("appends the frozen execution context to the system prompt and never to the user prompt", async () => {
+    const upstream = new FakeUpstreamSession();
+    const capturedConfigs: BioMedSessionConfig[] = [];
+    const systemContext = [
+      "{",
+      '  "case_id": "gold6",',
+      '  "prompt_sha256": "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298"',
+      "}",
+    ].join("\n");
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        capturedConfigs.push(config);
+        return upstream;
+      },
+    }).createSession({ ...sessionConfig, systemContext });
+
+    await collect(session.run("frozen gold6 user prompt"));
+
+    const systemPrompt = capturedConfigs[0]?.systemPrompt ?? "";
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_BEGIN)).toHaveLength(2);
+    expect(systemPrompt.split(SYSTEM_CONTEXT_SECTION_END)).toHaveLength(2);
+    expect(systemPrompt).toContain('"case_id": "gold6"');
+    expect(systemPrompt.indexOf(SYSTEM_CONTEXT_SECTION_BEGIN)).toBeGreaterThan(
+      systemPrompt.indexOf("[Dataset completion contract]"),
+    );
+    // The upstream user prompt stays byte-identical to the run input; the
+    // frozen context never rides along in the user message.
+    expect(upstream.prompts).toEqual(["frozen gold6 user prompt"]);
+
+    // Without frozen context the section markers never appear.
+    const bareConfigs: BioMedSessionConfig[] = [];
+    await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        bareConfigs.push(config);
+        return new FakeUpstreamSession();
+      },
+    }).createSession(sessionConfig);
+    expect(bareConfigs[0]?.systemPrompt).not.toContain("Frozen execution context");
   });
 
   test("exposes the upstream model budget for the run-entry preflight", async () => {
