@@ -106,6 +106,29 @@
 - **正样本**：6 次 execute 失败每次只修一个具体输入事实（"Fixing only that fact"，对照 gold1-r1 的乱猜参数是质变）；拒绝臆造 VCV/NCT/asset；终答逐 blocker 标注路由判定+归因+求助清单，且明确区分"失败事实 vs 范围决策"。
 - 行为形态变化（三案对比）：gold1-r1=乱撞墙后幻觉时限放弃；gold1-r3=成功但发布后无界复核（79% token）；gold3=**未撞墙但提前收手**（工具在手不用）。C2 与 E3/E4 是两个方向的极端，提示词需要同时含"发布后收敛界"与"上交前穷尽界"。
 
+## gold4 @ qwen3.8-flash（2026-08-30，main@0b534ce30d5a，task_ts_7d6e45c2-e136-4cbf-80f5-4d32cc06d1f5）
+
+> 身份断言通过。**首次跑前安装 Playwright Chromium**（D1-④/E2 环境项消除；本 run 未依赖浏览器通道）。终态 **succeeded_publication ×2（2/4 交付）**：`pub_sarscov2-spike-ace2-structures_ef36631509d5bf32`（4 PDB 载体：6M0J/6LZG/6XM5/7JWY，含链/配体/pH 实验条件）+ `pub_sarscov2-spike-ace2-targets_edb3ace3986bf001`（Q9BYF1+P0DTC2），各 7 artifacts，走静态族路线。
+> 未交付：文献表（acquisition 全败，G3）；变异表（静态族无 live provider，G2）。
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前 | 21 | 70,742 | 2,483 | 756,736 | 829,961 | 82s |
+> | 发布后 | **58** | 184,839 | 7,246 | 3,472,384 | **3,664,469** | 260s |
+> | 合计 | 79 | 255,581 | 9,729 | 4,229,120 | 4,494,430 | 352s |
+>
+> 峰值上下文 74,245/256k；0 压缩；0 权限停审；0 HIL。20 次 tool 错误中 18 次发生在发布后。**发布后 58 次调用/81% token 全部花在"试图回读已发布回执"上**——终答自己总结："execute 只回 publication id，从不返回 `asset_…`；preview/cache reader 拒绝一切非 asset 标识 → stop probing"。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| G1 | **已发布产物零读取通道（E5 的定量铁证）**：发布成功后，模型想用受治理通道核验自己产物字节——`workspace_list`×12（publication 文件不在 workspace 视图）、`preview_core_asset`×5（pub/manifest id 被 schema 拒）、cache readers×数（无 receipt 入口）共 20 错，烧 58 调用/3.66M token 后才停。E5 从"小不便"升级为**已证实的高成本产品缺口** | 产品（可观察性） | phase_split + tool_errors 序列；终答"Verification attempt … not supported by the exposed tool surface"段 | execute/publication detail 返回 artifact `asset_id` 列表（最小修），或提供 publication→preview 的受治理读取工具 |
+| G2 | **`variant_evidence` 静态族无 live provider**：sources 仅 `registered_variant_*`（要求先有 task-owned Core 资产）→ 题面"关键变异表"静态路结构性不通；正确路线（dynamic over dbsnp/clinvar）模型自己找对了并要求确认 | 产品（family 设计） | 终答"no registered static source"段 | variant_evidence 接入 live provider（dbsnp esearch 家族），与 gold3-E1 同一根因（变异发现链缺失）合并立项 |
+| G3 | **文献载体获取全军覆没**：`literature_evidence` validate 通过但 3/3 PMCID 采集失败——PMC13342853 Europe PMC fullTextXML `http_client_error`（两次复现，疑 http client 兼容性而非端点故障：PubMed 元数据显示 OA 存在）；PMC13059109/13213839 `BioC collection contains no document`（解析器对该类文章空返回） | 产品（provider 可靠性） | 终答未交付段 1；execute@343/356/785 err | 单独复现 http_client_error（带 headers 对照）；BioC 空文档应回结构化 `no_fulltext` 而非 invalid_input |
+| G4 | **自检无界复发（C2 变种）**：对比 gold1-r3 有进步（最终主动 stop probing 并总结原因），但止损仍花了 58 调用；若提示词写明"回执通道不可用时，以 publication 事件+artifact roles 为核验终点"，可省 ~80% token | prompt | phase_split 比例 | 提示词加"发布后核验预算 ≤N 次；连续 2 次同类工具失败即停止该通道尝试" |
+
+- **正样本（本四案最强）**：载体甄别——search_pdb 假命中 5 件（7AN4 弯曲菌差向异构酶、6VN2 USP7、7NX3 ALK…）**全部剔除且给出物种/蛋白理由**；保留结构逐条带分辨率+PMID；"载体获取失败 ≠ 文献不存在"的区分；拒绝臆造变异行；Dynamic 变异构建给出完整方案后请求范围确认（对比 gold3-E4 的"要清单但工具在手不用"，这次的确认请求附了具体 provider/位点方案，属合理边界）。
+- 四案纵向（同模型同 Host）：gold1-r3 24min/60calls/5.71M → gold2 40min/69calls/7.67M → gold3 2.3min/20calls/0.78M（提前收手）→ gold4 5.9min/79calls/4.49M（构建高效+死墙实证）。行为方差极大，提示词需要"穷尽界+收敛界"双向约束。
+
 ## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
 
 （空。每完成一个案例，按模板追加；同步把 `closure.json` 的 `run_usage` 抄入本表上方案例头部，便于比较提示词/路线变化对 token 的影响。）
