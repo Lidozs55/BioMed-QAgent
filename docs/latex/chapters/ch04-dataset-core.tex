@@ -4,7 +4,7 @@ Dataset Core 是系统唯一的数据信任边界：八阶段固定流水线 acq
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.75\textwidth]{images/biomed-qagent-core-deterministic-flow.pdf}
+  \includegraphics[width=0.75\textwidth]{figures/biomed-qagent-core-deterministic-flow.pdf}
   \caption{Dataset Core 确定性数据流详图}
   \label{fig:core-deterministic-flow}
 \end{figure}
@@ -43,7 +43,7 @@ VLM/\allowbreak{}PDF/\allowbreak{}caption 的抽取结果先固化为任务所�
 
 这些规则在案例中的形态：缺失分层在 gold8 表现为 4 行官方聚合确无词条的记录不产生行、不零填充并逐条列出，在 gold9 表现为可选证据列留空并计入完整性统计。原始写法保留在 gold9 发布表中直接可见——HGNC 归一后的 \code{hgnc\_\allowbreak{}symbol} 与来源原写法 \code{orphanet\_\allowbreak{}gene\_\allowbreak{}symbol} 并列成列，\code{gene\_\allowbreak{}records} 另保留 \code{alias\_\allowbreak{}symbols} 与 \code{previous\_\allowbreak{}symbols}，归一不抹去历史身份。gold7 的变体-基因映射表（127 行）则整体来自补充材料这份逐研究注释资产，而非模型推测。
 
-实体身份对齐同样采用确定性机制：化合物以 InChI Key 精确匹配建立交叉映射表（如 ChEMBL↔PubChem，匹配方法 exact\_\allowbreak{}inchi\_\allowbreak{}key，匹配不上时显式标记为冲突而不强行合并）；基因符号归一有内置确定性映射表，也可使用注册的外部规范资产（如 HGNC current，见 gold9）；probe→gene 依赖逐平台注释资产，未映射探针保留原命名空间、不静默丢弃。
+实体身份对齐同样采用确定性机制：化合物以 InChI Key 精确匹配建立交叉映射表（如 ChEMBL↔\allowbreak{}PubChem，匹配方法 exact\_\allowbreak{}inchi\_\allowbreak{}key，匹配不上时显式标记为冲突而不强行合并）；基因符号归一有内置确定性映射表，也可使用注册的外部规范资产（如 HGNC current，见 gold9）；probe→gene 依赖逐平台注释资产，未映射探针保留原命名空间、不静默丢弃。
 
 \section{阶段4 compat：兼容性门}
 
