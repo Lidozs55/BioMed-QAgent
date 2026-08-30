@@ -1,4 +1,4 @@
-\chapter{Dataset Core：确定性八阶段流水线}
+\chapter{Dataset Core：确定性八阶段流水线}\label{ch:dataset-core}
 
 Dataset Core 是系统唯一的数据信任边界：八阶段固定流水线——采集 → 解析 → 规范化 → 兼容性检查 → 整合 → 派生 → 校验 → 发布（acquire → parse → normalize → compat → integrate → derive → validate → publish），
 每一步都有显式输入、操作收据、输出摘要与失败语义。Agent 的自主决策面见 \ref{sec:agent-autonomy} 节；决策进入 Core 后，执行路线固定、正式数据值由注册操作产出——动态数据家族（Family）允许 digest-bound 变换在隔离区产生候选字节，但须经闭世界准入、Validation、B3、ProductAssessment 与 Publisher 逐级把关后才成为正式值。动态家族扩展的是“能读什么”，不扩大“能写什么”。
