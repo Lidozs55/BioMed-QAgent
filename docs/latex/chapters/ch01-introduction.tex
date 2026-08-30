@@ -27,7 +27,7 @@ identity、实验类型和活性单位需要显式交叉映射与冲突记录。
 类方法让模型能在回答前搜索外部信息并调用工具，但直接让模型生成或改写正式数据会面临幻觉、不可重复与长流程状态脆弱等问题。
 
 与上述研究脉络并行，三类工程系统已各自成熟。本系统与它们的逐项差异见表~\ref{tab:related-comparison}：
-\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.0\hsize}L>{\hsize=1.4\hsize}L}
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=0.8\hsize}L>{\hsize=1.6\hsize}L}
 \caption{与相邻工程系统的差异对照}\label{tab:related-comparison}\\
 \toprule
 \textbf{相邻系统} & \textbf{已提供} & \textbf{本作的差异} \\
@@ -65,7 +65,7 @@ BioMed-QAgent 的目的不是“替研究者得出科学结论”，而是完成
 
 用户输入最初只是一段自由文本，可能存在多种解读方式。为了避免歧义，系统并不试图穷尽地形式化用户的全部科学意图——那样做既不可能，也没有必要——而是只固定那些“一旦改变，数据产品的含义就会随之变化”的关键选择。这些选择共有十项，共同构成本次执行的数据集规格，
 在实现中对应数据集执行规格（DatasetExecutionSpec）结构：
-\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.1\hsize}L>{\hsize=1.3\hsize}L}
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.2\hsize}L}
 \caption{数据集规格的十项关键选择}\label{tab:spec-choices}\\
 \toprule
 \textbf{选择} & \textbf{含义} & \textbf{改变意味着什么} \\
