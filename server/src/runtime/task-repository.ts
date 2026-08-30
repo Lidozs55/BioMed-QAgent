@@ -347,7 +347,7 @@ export class DurableTaskRepository {
     return reduceTaskEvents(metadata, await this.readAllEvents(taskId));
   }
 
-  async listTasks(limit = 50): Promise<TaskPage> {
+  async listTasks(limit = 50, cursor: string | null = null): Promise<TaskPage> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new TypeError("limit must be between 1 and 100");
     }
@@ -360,11 +360,23 @@ export class DurableTaskRepository {
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
     const active = tasks.filter((task) => task.active_run_id !== null);
     const history = tasks.filter((task) => task.active_run_id === null);
+    let start = 0;
+    if (cursor !== null && cursor !== "") {
+      // Exclusive-after continuation: the cursor is the last item of the
+      // previous page. An unknown cursor (e.g. its task was deleted between
+      // pages) yields an empty exhausted page instead of looping or failing.
+      const cursorIndex = history.findIndex((task) => task.task_id === cursor);
+      if (cursorIndex === -1) {
+        return { schema_version: "1.0", active_items: active, items: [], next_cursor: null };
+      }
+      start = cursorIndex + 1;
+    }
+    const end = start + limit;
     return {
       schema_version: "1.0",
       active_items: active,
-      items: history.slice(0, limit),
-      next_cursor: history.length > limit ? history[limit - 1]?.task_id ?? null : null,
+      items: history.slice(start, end),
+      next_cursor: history.length > end ? history[end - 1]?.task_id ?? null : null,
     };
   }
 

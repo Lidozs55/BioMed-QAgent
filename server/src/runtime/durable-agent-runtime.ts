@@ -1391,7 +1391,8 @@ export async function createDurableAgentRuntime(
       }
       if (request.method === "GET" && url.pathname === "/api/v1/tasks") {
         const limit = Number(url.searchParams.get("limit") ?? "50");
-        sendJson(response, 200, await repository.listTasks(limit));
+        const cursor = url.searchParams.get("cursor");
+        sendJson(response, 200, await repository.listTasks(limit, cursor));
         return;
       }
       const task = /^\/api\/v1\/tasks\/([^/]+)$/.exec(url.pathname);
@@ -1719,8 +1720,6 @@ export async function createDurableAgentRuntime(
         return true;
       }
       if (requestPath === "/api/v1/tasks") {
-        const url = new URL(request.url ?? "/api/v1/tasks", "http://application-host");
-        if (request.method === "GET" && url.searchParams.has("cursor")) return false;
         void dispatch(request, response);
         return true;
       }
