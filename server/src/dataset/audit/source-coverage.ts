@@ -169,6 +169,27 @@ function buildSummary(
 export function buildSourceCoverageReport(input: SourceCoverageBuildInput): SourceCoverageReport {
   const queryPlan = buildQueryPlanEntries(input.spec);
   const { entries: acquisitionCoverage } = buildAcquisitionCoverage(input);
+  const planIds = queryPlan.map((entry) => entry.binding_id).sort();
+  const coverageIds = acquisitionCoverage.map((entry) => entry.binding_id).sort();
+  if (JSON.stringify(planIds) !== JSON.stringify(coverageIds)) {
+    throw new Error("source coverage query plan and acquisition entries have different bindings");
+  }
+  for (const entry of acquisitionCoverage) {
+    if (entry.asset === null) continue;
+    const sourceAsset = input.sourceAssets[entry.binding_id];
+    const receipt = input.registrationReceipts.find(
+      (candidate) => candidate.asset_ref.asset_id === entry.asset?.asset_id,
+    );
+    if (
+      sourceAsset === undefined ||
+      receipt === undefined ||
+      sourceAsset.sha256 !== entry.asset.sha256 ||
+      sourceAsset.size_bytes !== entry.asset.size_bytes ||
+      sourceAsset.media_type !== entry.asset.media_type
+    ) {
+      throw new Error(`source coverage asset receipt mismatch for binding '${entry.binding_id}'`);
+    }
+  }
   const discoveryQueries =
     input.discoveryQueries === undefined || input.discoveryQueries === null
       ? null

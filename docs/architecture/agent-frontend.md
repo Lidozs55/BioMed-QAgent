@@ -338,8 +338,11 @@ Agent 任务处于 `running` / `finalizing` 时，顶部任务状态条常驻"�
 **不硬编码 22 列 Schema**；`PublicationResultsViewer` 读取 Publication 与
 `dataset_manifest.json`（含 `dataset_family`），识别主数据与辅助表并按数据族
 选择结果 Tab 与列渲染策略。界面必须显式展示 family、row granularity、有效行数、
-来源覆盖、Validation 状态、confidence 分布、provenance 覆盖率，以及
-`PARTIAL_SUCCESS` / `NO_DATA` 的原因。
+Validation 状态、confidence 分布、逐行 provenance 覆盖率（traced/untraced 行数与
+覆盖率），以及 `PARTIAL_SUCCESS` / `NO_DATA` 的原因。结果页展示的“覆盖”是
+逐行溯源覆盖，不等同于完整 SourceCoverage 语义报告：后者（universe scope、query
+plan、采集行数记账等）以 manifest 的 `audit_report` 角色交付，结果页完整语义报告的
+复现仍是待办。
 
 正式 HIL 由 shadcn `Dialog` 中的批量审核卡片承载：一个 blocking 请求可展示多个
 review item，数据审核提供接受/结构化修正/拒绝/跳过，凭据授权严格只提供授权/拒绝。
