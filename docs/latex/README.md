@@ -49,7 +49,7 @@ latexmk -xelatex -outdir=build main.tex   # 输出 build/main.pdf（A4）
 ## 转换脚本说明
 
 - `md2latex.mjs`：标题去手工编号交给 LaTeX 自动编号；`**粗体**`→`\textbf`、`` `代码` ``→`\code`、
-  pipe 表格→`xltabular`、代码围栏→`lstlisting`、`![](...)`→`figure`。
+  pipe 表格→`xltabular`、代码围栏→`lstlisting`、md 图片引用→`figure`。
   `\code` 用 `seqsplit` 支持长标识符（SHA-256、路径）折行；`_`/`/`/`+` 后插入断点防 Overfull。
 - `svg2pdf.mjs`：用 Edge headless 打印 SVG 为矢量 PDF（无 Inkscape 依赖）；
   独立 `--user-data-dir` + 轮询等文件，规避 Edge 单实例委托与异步子进程问题。
