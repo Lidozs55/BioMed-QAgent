@@ -21,7 +21,8 @@ import {
   useAgentStore,
 } from "@/stores/agentStore";
 
-const TASK_PAGE_SIZE = 10;
+const TASK_FIRST_PAGE_SIZE = 15;
+const TASK_EXPAND_PAGE_SIZE = 10;
 const EVENT_REPLAY_PAGE_SIZE = 1000;
 //: Cold hydration replays only the tail of the event log. Anything older than
 //: the window is not re-reduced; earlier messages stay reachable through the
@@ -114,7 +115,7 @@ export class RuntimeController {
     useAgentStore.getState().setHistoryState("loading");
     try {
       const page = excludeDeletedTasks(
-        await this.api.fetchTasks({ limit: TASK_PAGE_SIZE }),
+        await this.api.fetchTasks({ limit: TASK_FIRST_PAGE_SIZE }),
         this.deletedTaskIds,
       );
       if (signal?.aborted) return;
@@ -737,7 +738,7 @@ export class RuntimeController {
     const expansion = (async () => {
       const page = excludeDeletedTasks(
         await this.api.fetchTasks({
-          limit: TASK_PAGE_SIZE,
+          limit: TASK_EXPAND_PAGE_SIZE,
           cursor,
         }),
         this.deletedTaskIds,
