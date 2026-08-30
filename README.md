@@ -91,7 +91,7 @@ uv sync
 pnpm dev
 ```
 
-在 `.env` 中至少配置可用的模型 API key。默认监听 `http://127.0.0.1:5173`；`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
+在 `.env` 中至少配置可用的模型 API key。Host 首选 `http://127.0.0.1:5173`；若端口已被占用，则由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
 
 生产构建与启动：
 
@@ -99,6 +99,8 @@ pnpm dev
 pnpm build
 pnpm start
 ```
+
+生产静态入口按当前 OS 用户禁止多开；已有实例时第二次 `pnpm start` 会提示已在运行并正常退出，不启动第二个 Host。
 
 详细安装、Windows smoke test 和故障排查见 [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md)。
 
