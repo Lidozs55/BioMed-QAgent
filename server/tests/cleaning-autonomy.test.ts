@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { parseCleaningRuleProposal } from "@biomed/contracts";
 
 import { parseNormalizationProfile } from "../src/dataset/contracts/profiles.js";
-import { preflightCleaningRules } from "../src/dataset/cleaning/preflight.js";
+import {
+  preflightCleaningRules,
+  validateCleaningRuleReceipt,
+} from "../src/dataset/cleaning/preflight.js";
 import { rankMappingCandidates } from "../src/dataset/cleaning/string-similarity.js";
 import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
 
@@ -58,19 +61,76 @@ describe("cleaning autonomy primitives", () => {
     })).toThrow(/outside allowed_units/);
   });
 
-  it("keeps similarity-only mappings in HIL instead of auto-accepting them", () => {
-    const result = preflightCleaningRules(createDefaultDatasetFamilyRegistry(), [{
-      kind: "field_mapping",
-      proposal_id: "mapping_1",
+  it("binds generated receipts to identity and rejects tampering", () => {
+    const proposal = {
+      kind: "field_mapping" as const,
+      proposal_id: "mapping_identity",
       binding_id: "binding_1",
       source_schema_ref: "gene_expression.long.v1",
       target_schema_ref: "gene_expression.long.v1",
       source_field: "sample_id",
-      target_field: "sample_identifier",
+      target_field: "sample_id",
       transform: "identity",
       candidate_set_digest: null,
-      evidence: "column-name similarity",
-    }]);
+      evidence: "schema identity",
+    };
+    const result = preflightCleaningRules(createDefaultDatasetFamilyRegistry(), {
+      task_id: "task_1",
+      run_id: "run_1",
+      requirement_id: "requirement_1",
+      proposals: [proposal],
+    });
+    expect(result.receipt).not.toBeNull();
+    const receipt = result.receipt;
+    if (receipt === null) return;
+    const registry = createDefaultDatasetFamilyRegistry();
+    expect(validateCleaningRuleReceipt(registry, receipt, {
+      task_id: "task_1",
+      run_id: "run_1",
+      requirement_id: "requirement_1",
+      binding_ids: ["binding_1"],
+    })).toEqual(receipt);
+    expect(() => validateCleaningRuleReceipt(registry, {
+      ...receipt,
+      receipt_digest: "0".repeat(64),
+    }, {
+      task_id: "task_1",
+      run_id: "run_1",
+      requirement_id: "requirement_1",
+      binding_ids: ["binding_1"],
+    })).toThrow(/digest is invalid/);
+    expect(() => validateCleaningRuleReceipt(registry, receipt, {
+      task_id: "task_1",
+      run_id: "run_2",
+      requirement_id: "requirement_1",
+      binding_ids: ["binding_1"],
+    })).toThrow(/identity/);
+    expect(() => validateCleaningRuleReceipt(registry, receipt, {
+      task_id: "task_1",
+      run_id: "run_1",
+      requirement_id: "requirement_1",
+      binding_ids: ["other_binding"],
+    })).toThrow(/not in the execution spec/);
+  });
+
+  it("keeps similarity-only mappings in HIL instead of auto-accepting them", () => {
+    const result = preflightCleaningRules(createDefaultDatasetFamilyRegistry(), {
+      task_id: "task_1",
+      run_id: "run_1",
+      requirement_id: "requirement_1",
+      proposals: [{
+        kind: "field_mapping",
+        proposal_id: "mapping_1",
+        binding_id: "binding_1",
+        source_schema_ref: "gene_expression.long.v1",
+        target_schema_ref: "gene_expression.long.v1",
+        source_field: "sample_id",
+        target_field: "sample_identifier",
+        transform: "identity",
+        candidate_set_digest: null,
+        evidence: "column-name similarity",
+      }],
+    });
     expect(result.items[0]).toMatchObject({
       decision: "needs_hil",
       rule_id: null,

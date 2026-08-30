@@ -269,8 +269,9 @@ ID、一对一关系。相似度规则足以将看似相似、实际不同的字
 Agent 可通过 `preflight_cleaning_rules` 提交单位/字段映射提议；Core 会重新按
 注册 NormalizationProfile/Schema Registry 校验并稳定排序候选。只有唯一且命中
 Core 注册规则的项可标为 `accepted_registered_rule`；相似度-only、并列或近似并列
-候选仍保持 proposed 并进入 HIL。预检结果不是 execute 收据，未接入正式 execute
-的 proposal 不能改变 canonicalizer 行为。
+候选仍保持 proposed 并进入 HIL。只有 Core 重算并签发、绑定当前 task/run/requirement/binding 的 receipt
+才能进入 execute；receipt digest 漂移、事实重投影不一致或 task-owned 原子消费标记已存在时 fail-closed。
+已注册单位规则沿用 canonicalizer 的 `value * factor + offset` 路径；任意字段 transform 仍不能改变 canonicalizer 行为。
 
 > 决策依据：ADR-009、ADR §21.6（踩坑）。
 

@@ -6,7 +6,7 @@ import type {
   DatasetBridgePublicationData,
   DatasetExecutionSpec,
 } from "@biomed/contracts";
-import { parseJsonTextStrict } from "@biomed/contracts";
+import { parseCleaningRulePreflightReceipt, parseJsonTextStrict } from "@biomed/contracts";
 
 import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
 import { ArtifactIntegrityError, readLatestSourceCoverageReport } from "../../runtime/artifact-store.js";
@@ -508,6 +508,7 @@ export function createDatasetExecutionTools(
           source_files: sourceFilesSchema,
           mapping_files: mappingFilesSchema,
           metadata_files: metadataFilesSchema,
+          cleaning_rule_receipt: { type: "object", description: "Unchanged Core-issued receipt from preflight_cleaning_rules." },
         },
         required: ["spec"],
         additionalProperties: false,
@@ -589,6 +590,9 @@ export function createDatasetExecutionTools(
               source_files: sourceFiles,
               mapping_files: mappingFiles,
               metadata_files: metadataFiles,
+              ...(args.cleaning_rule_receipt === undefined || args.cleaning_rule_receipt === null
+                ? {}
+                : { cleaning_rule_receipt: parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt) }),
               registered_source_asset_ids: registeredSourceAssetIds(sourceFiles),
               created_at: new Date().toISOString(),
             });
@@ -602,6 +606,9 @@ export function createDatasetExecutionTools(
             sourceFiles,
             mappingFiles,
             metadataFiles,
+            cleaningRuleReceipt: args.cleaning_rule_receipt === undefined
+              ? null
+              : parseCleaningRulePreflightReceipt(args.cleaning_rule_receipt),
             discoveryQueries: options.discoveryLedger?.() ?? null,
           });
           await capturePublication(options, response);
@@ -643,19 +650,29 @@ export function createDatasetExecutionTools(
       parameters: {
         type: "object",
         properties: {
+          requirement_id: { type: "string", minLength: 1 },
           proposals: {
             type: "array",
             minItems: 1,
             description: "Agent proposals only; Core recomputes candidate ranking and registry matches.",
           },
         },
-        required: ["proposals"],
+        required: ["requirement_id", "proposals"],
         additionalProperties: false,
       },
       async execute(value) {
         try {
           const args = object(value);
-          const result = preflightCleaningRules(options.familyRegistry, args.proposals);
+          const requirementId = args.requirement_id;
+          if (typeof requirementId !== "string" || requirementId.trim() === "") {
+            throw new TypeError("requirement_id is required");
+          }
+          const result = preflightCleaningRules(options.familyRegistry, {
+            task_id: options.taskId,
+            run_id: options.runId(),
+            requirement_id: requirementId,
+            proposals: args.proposals,
+          });
           return {
             content: JSON.stringify({
               ok: true,
@@ -664,7 +681,7 @@ export function createDatasetExecutionTools(
               candidate_set_digests: Object.fromEntries(
                 Object.entries(result.candidate_sets).map(([id, set]) => [id, set.digest]),
               ),
-              receipt_digest: result.receipt_digest,
+              receipt: result.receipt,
             }),
             details: result,
           };
