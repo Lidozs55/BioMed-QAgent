@@ -14,7 +14,9 @@
     "docs:check": "node scripts/check-doc-links.mjs",
     "gold:supervise": "node scripts/gold-formal-supervisor.mjs",
     "prepare": "husky",
-    "commit": "cz"
+    "commit": "cz",
+    "pack": "node scripts/pack-release.mjs",
+    "pack:target": "node scripts/pack-release.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
