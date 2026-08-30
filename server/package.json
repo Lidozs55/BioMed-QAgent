@@ -17,6 +17,7 @@
   "dependencies": {
     "@biomed/contracts": "workspace:*",
     "@earendil-works/pi-coding-agent": "0.82.1",
+    "@napi-rs/canvas": "1.0.5",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.10.1",
     "pdfjs-dist": "^6.2.108",

@@ -8,7 +8,7 @@ import {
   fixedBiomedicalAcquisitionParameters,
 } from "../src/dataset/acquisition/biomedical-providers.js";
 import { GMREPO_FILES_PROVIDER_ID } from "../src/dataset/acquisition/gmrepo-provider.js";
-import { EXTENDED_PROVIDER_IDS } from "../src/dataset/acquisition/extended-providers.js";
+import { createExtendedAcquisitionProviders, EXTENDED_PROVIDER_IDS } from "../src/dataset/acquisition/extended-providers.js";
 import { CoreAcquisitionRegistry } from "../src/dataset/acquisition/runtime.js";
 
 function request(options: {
@@ -233,5 +233,63 @@ describe("fixed biomedical acquisition provider registry", () => {
       entities: {},
       bindingParameters: { url: "https://evil.example" },
     })).toThrow(/does not accept binding parameters/);
+  });
+});
+
+describe("Europe PMC fixed PDF carrier provider", () => {
+  function pdfRequest(accession: string | null): CoreAcquisitionRequest {
+    return request({
+      providerId: EXTENDED_PROVIDER_IDS.europePmcPdf,
+      source: "europepmc_pdf",
+      accession,
+    });
+  }
+
+  function registry(): CoreAcquisitionRegistry {
+    const value = new CoreAcquisitionRegistry();
+    for (const provider of createExtendedAcquisitionProviders()) value.registerProvider(provider);
+    return value;
+  }
+
+  it("registers the provider with a stable implementation digest", () => {
+    const resolved = registry().resolve(pdfRequest("PMC9005347"), "task_provider");
+    expect(resolved.handler.providerId).toBe("europepmc.pdf.v1");
+    expect(resolved.handler.implementationDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("plans the official Europe PMC PDF endpoint for one uppercase PMCID", async () => {
+    const resolved = registry().resolve(pdfRequest("PMC9005347"), "task_provider");
+    const plan = await resolved.handler.plan(resolved.request);
+    expect(plan.source).toMatchObject({
+      database: "pubmed",
+      accession: "PMC9005347",
+      url: "https://europepmc.org/api/getPdf?pmcid=PMC9005347",
+    });
+    expect(plan.filename).toBe("PMC9005347.pdf");
+    expect(plan.expectedMediaTypes).toEqual(new Set(["application/pdf"]));
+    expect(plan.allowedHosts).toEqual(new Set(["europepmc.org"]));
+    expect(plan.assetRole).toBe("carrier");
+    expect(plan.providerRevisionFacts?.canonical_accession).toBe("PMC9005347");
+  });
+
+  it("normalizes a lowercase PMCID to its uppercase canonical accession", async () => {
+    const resolved = registry().resolve(pdfRequest("pmc9005347"), "task_provider");
+    const plan = await resolved.handler.plan(resolved.request);
+    expect(plan.source.accession).toBe("PMC9005347");
+    expect(plan.source.url).toBe("https://europepmc.org/api/getPdf?pmcid=PMC9005347");
+  });
+
+  it.each([
+    "34180400",
+    "10.7554/eLife.64977",
+    "https://europepmc.org/api/getPdf?pmcid=PMC9005347",
+    "../workspace/paper.pdf",
+  ])("rejects non-PMCID input %s", async (accession) => {
+    const value = registry();
+    const execute = async (): Promise<void> => {
+      const resolved = value.resolve(pdfRequest(accession), "task_provider");
+      await resolved.handler.plan(resolved.request);
+    };
+    await expect(execute()).rejects.toThrow(/valid PMCID|arbitrary paths/);
   });
 });

@@ -20,7 +20,28 @@ From the repository root:
 node docs/evaluation/gold-v1/verify.mjs
 ```
 
-The verifier checks UTF-8 prompts, prompt hashes, all referenced files, source-anchor hash/size formats, the frozen default runtime limits, and the full directory checksum inventory. `checksums.sha256` covers every versioned input except itself.
+The verifier checks UTF-8 prompts, prompt hashes, all referenced files, source-anchor hash/size formats, the frozen default runtime limits, and the full directory checksum inventory. `checksums.sha256` covers every versioned input except itself. After adding or changing a versioned input, refresh the inventory with `node docs/evaluation/gold-v1/verify.mjs --write-checksums`.
+
+## Current-commit assertion (Gold6)
+
+A saved Gold6 run — the JSON written by `run-case.mjs gold6 --output <file>` — is asserted against the current commit and live Host with:
+
+```bash
+node docs/evaluation/gold-v1/assert-current-run.mjs data/gold/gold6-current-run.json [--base-url URL]
+```
+
+`assert-current-run.mjs` REJECTS the run (exit 1, one `REJECT:` line per problem) when any of the following holds:
+
+- **Commit mismatch** — the run's `product_commit` differs from the current `git rev-parse HEAD`.
+- **Context-hash mismatch** — the run's `execution_context` hashes (manifest, case, prompt, runtime profile) do not match the frozen files on disk, or the persisted run `execution_context` drifted from them.
+- **Missing PMCID coverage** — any frozen PMCID (`sources/gold6.sources.json` selection) appears nowhere in the run evidence or is missing from the published `paper_records`.
+- **Missing required tables** — the published manifest does not contain every `required_tables` entry of the frozen case.
+- **Pending/rejected estimates** — a published `chart_points` row is not `accepted`/`corrected`, or a corrected row does not preserve its original values.
+- **Absent review IDs** — a published estimate carries no durable review id, or the single `publication_acceptance` review was never resolved.
+- **Stale source receipts** — a published source asset id is not evidenced by this run's own event stream (i.e. it was copied from an earlier run).
+- **Artifact API hash mismatch** — a declared artifact fails to download, or its bytes re-hash to something other than the manifest receipt (the published manifest itself is re-verified the same way, plus exactly one `publication_created` event).
+
+Historical Gold6 runs cannot pass this script: they were produced by different commits, without the frozen execution context, and without the governed extraction route.
 
 ## Source inventory semantics
 

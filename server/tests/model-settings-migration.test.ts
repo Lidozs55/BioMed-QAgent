@@ -117,6 +117,118 @@ describe("loaded registry schema validation", () => {
   });
 });
 
+describe("vision model role migration", () => {
+  test("existing registries load with vision_model_id null and never infer it from capabilities", async () => {
+    const settingsDir = tmpSettingsDir();
+    await mkdir(settingsDir, { recursive: true });
+    // A pre-vision-role registry: no vision_model_id field, and an active
+    // manually-edited model that happens to carry an image capability.
+    await writeFile(
+      path.join(settingsDir, "model-registry.json"),
+      JSON.stringify({
+        version: 1,
+        settings: {
+          provider_id: "provider_old",
+          active_model_id: "model_old",
+          base_url: "https://legacy.example/v1",
+          model_name: "legacy-vl",
+          max_tokens: 4096,
+          context_window: 32768,
+          safety_reserve_ratio: 0.05,
+          compaction_trigger_ratio: 0.85,
+          compaction_target_ratio: 0.6,
+          advanced: {
+            temperature: 0.7,
+            top_p: 1,
+            repetition_penalty: 1,
+            enable_search: false,
+            thinking_mode: false,
+          },
+          runtime_limits_version: 1,
+        },
+        providers: [{
+          id: "provider_old",
+          name: "Legacy",
+          base_url: "https://legacy.example/v1",
+          preset_id: null,
+          description: "",
+          enabled: true,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }],
+        models: [{
+          id: "model_old",
+          provider_id: "provider_old",
+          model_id: "legacy-vl",
+          name: "Legacy VL",
+          description: "",
+          context_window: 32768,
+          max_output_tokens: 4096,
+          suggested_max_tokens: 4096,
+          capabilities: { text: true, image: true, video: false, audio: false },
+          params: {},
+          source: "manual",
+          metadata_source: "user",
+          active: true,
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }],
+      }),
+      "utf8",
+    );
+    const registryPath = path.join(settingsDir, "model-registry.json");
+
+    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+
+    // The explicit visual role stays unset: a manually edited capability is
+    // never promoted into an assignment during migration.
+    const stored = JSON.parse(await readFile(registryPath, "utf8")) as {
+      settings: { vision_model_id?: unknown };
+    };
+    expect(stored.settings.vision_model_id).toBeNull();
+    expect(service.getSettings()).toMatchObject({ vision_model_id: null });
+  });
+
+  test("corrupt on-disk vision_model_id values fall back to null with a warning", async () => {
+    const settingsDir = tmpSettingsDir();
+    await mkdir(settingsDir, { recursive: true });
+    await writeFile(
+      path.join(settingsDir, "model-registry.json"),
+      JSON.stringify({
+        version: 1,
+        settings: {
+          provider_id: null,
+          active_model_id: null,
+          base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          model_name: "",
+          max_tokens: 8192,
+          context_window: null,
+          safety_reserve_ratio: 0.05,
+          compaction_trigger_ratio: 0.85,
+          compaction_target_ratio: 0.45,
+          advanced: {},
+          vision_model_id: 42,
+          runtime_limits_version: 1,
+        },
+        providers: [],
+        models: [],
+      }),
+      "utf8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+      expect(service.getSettings()).toMatchObject({ vision_model_id: null });
+      expect(
+        warnSpy.mock.calls.some((args) => args.join(" ").includes("vision_model_id")),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe("legacy value range clamping on migration", () => {
   test("clamps out-of-range legacy model.json values before persisting", async () => {
     const settingsDir = tmpSettingsDir();

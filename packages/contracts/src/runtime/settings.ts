@@ -69,6 +69,11 @@ export function parseModelSettings(body: unknown): ModelSettings {
     advanced: parseAdvanced(Reflect.get(obj, "advanced"), "settings.advanced"),
     run_block_reason: optString(Reflect.get(obj, "run_block_reason"), "settings.run_block_reason") ?? null,
     runtime_limits: parseRuntimeLimits(Reflect.get(obj, "runtime_limits"), "settings.runtime_limits"),
+    vision_model_id: optString(Reflect.get(obj, "vision_model_id"), "settings.vision_model_id") ?? null,
+    vision_model_name: optString(Reflect.get(obj, "vision_model_name"), "settings.vision_model_name") ?? null,
+    vision_provider_name: optString(Reflect.get(obj, "vision_provider_name"), "settings.vision_provider_name") ?? null,
+    vision_model_ready: assertBoolean(Reflect.get(obj, "vision_model_ready"), "settings.vision_model_ready"),
+    vision_block_reason: optString(Reflect.get(obj, "vision_block_reason"), "settings.vision_block_reason") ?? null,
   };
 }
 

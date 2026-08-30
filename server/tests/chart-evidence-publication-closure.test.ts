@@ -15,6 +15,13 @@ import {
   CHART_SERIES_TABLE_ID,
   createChartEvidenceRegisteredTableRegistry,
 } from "../src/dataset/families/bioactivity-measurement/chart-evidence/index.js";
+import {
+  createPaperEvidenceRegisteredTableRegistry,
+  derivePaperCanonicalIdentities,
+  paperEvidenceTables,
+  PAPER_RECORDS_TABLE_ID,
+  type PaperEvidenceRows,
+} from "../src/dataset/families/bioactivity-measurement/paper-evidence/index.js";
 import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
 import { executeRegisteredMultiTableBuild } from "../src/dataset/runtime/registered-multitable.js";
 import { sha256FileStream } from "../src/dataset/adapters/hashing.js";
@@ -32,7 +39,15 @@ const BIOACTIVITY_FIXTURE = path.join(
   "bioactivity-measurement",
   "non-gold.valid.json",
 );
+const PAPER_FIXTURE = path.join(
+  import.meta.dirname,
+  "fixtures",
+  "bioactivity-paper-evidence",
+  "non-gold.valid.json",
+);
 const PLACEHOLDER_ASSET = `asset_${"a".repeat(64)}`;
+const SUPPLEMENT_PLACEHOLDER_ASSET = `asset_${"b".repeat(64)}`;
+const PAPER_KEY = "paper_61c24be3438bc9cda08d90c85aad8d54";
 
 const tempRoots: string[] = [];
 afterAll(async () => {
@@ -77,21 +92,56 @@ interface Scenario {
   chartFixtureText: string;
 }
 
+/**
+ * The chart fixture is aligned to the richer paper evidence publication: its
+ * paper_id joins the paper_records composite key and its point references the
+ * deterministically derived canonical activity from activity_value_records.
+ */
+async function alignChartFixtureToPaperEvidence(
+  chartFixtureText: string,
+  figureAssetId: string,
+): Promise<string> {
+  const paperRows = JSON.parse(await readFile(PAPER_FIXTURE, "utf8")) as PaperEvidenceRows;
+  const derived = derivePaperCanonicalIdentities(paperRows);
+  const derivedActivityId = derived.activities[0]!.activity_id;
+  const aligned = chartFixtureText
+    .replaceAll(PLACEHOLDER_ASSET, figureAssetId)
+    .replace(/"paper_id":\s*"31234567"/g, `"paper_id": "${PAPER_KEY}"`)
+    .replace(/"activity_id":\s*"ACT_NON_GOLD_1"/g, `"activity_id": "${derivedActivityId}"`);
+  if (!aligned.includes(derivedActivityId) || !aligned.includes(PAPER_KEY) ||
+      aligned.includes(PLACEHOLDER_ASSET)) {
+    throw new Error("chart fixture alignment to paper evidence failed");
+  }
+  return aligned;
+}
+
 async function buildTask(scenario: Scenario) {
   const root = await mkdtemp(path.join(os.tmpdir(), "chart-evidence-publication-"));
   tempRoots.push(root);
   const taskId = "task_chart_closure";
 
-  // The figure/PGN carrier and the upstream ChEMBL-style carrier are separate
-  // registered assets; the row-level source_asset_id fields must reference
-  // their real content-addressed IDs.
+  // The figure/PGN carrier, the paper PDF, the supplementary asset, and the
+  // upstream ChEMBL-style carrier are separate registered assets; row-level
+  // source_asset_id fields must reference their real content-addressed IDs.
   const figureReceipt = await registerBytes(
     root, taskId, "source_pmc_fig2", "figure2.png", Buffer.from("png-bytes"),
+  );
+  const paperPdfReceipt = await registerBytes(
+    root, taskId, "source_paper_pdf", "paper.pdf", Buffer.from("paper-pdf-bytes"),
+  );
+  const supplementReceipt = await registerBytes(
+    root, taskId, "source_paper_supplement_s1", "supplement-s1.csv", Buffer.from("supplementary,table\n1,2\n"),
   );
   const upstreamReceipt = await registerBytes(
     root, taskId, "source_chembl", "non-gold-upstream.json", Buffer.from("upstream-json"),
   );
-  const chartJson = scenario.chartFixtureText.replaceAll(PLACEHOLDER_ASSET, figureReceipt.asset_ref.asset_id);
+  const paperJson = (await readFile(PAPER_FIXTURE, "utf8"))
+    .replaceAll(PLACEHOLDER_ASSET, paperPdfReceipt.asset_ref.asset_id)
+    .replaceAll(SUPPLEMENT_PLACEHOLDER_ASSET, supplementReceipt.asset_ref.asset_id);
+  const chartJson = await alignChartFixtureToPaperEvidence(
+    scenario.chartFixtureText,
+    figureReceipt.asset_ref.asset_id,
+  );
   const chartReceipt = await registerBytes(
     root, taskId, "source_chart_carrier", "chart-evidence.json", Buffer.from(chartJson, "utf8"),
   );
@@ -99,6 +149,9 @@ async function buildTask(scenario: Scenario) {
     .replaceAll(PLACEHOLDER_ASSET, upstreamReceipt.asset_ref.asset_id);
   const bioactivityReceipt = await registerBytes(
     root, taskId, "source_bioactivity_carrier", "bioactivity-evidence.json", Buffer.from(bioactivityJson, "utf8"),
+  );
+  const paperReceipt = await registerBytes(
+    root, taskId, "source_paper_evidence_carrier", "paper-evidence.json", Buffer.from(paperJson, "utf8"),
   );
 
   const baseBindings = bioactivityTableEntries().map((entry) =>
@@ -115,10 +168,18 @@ async function buildTask(scenario: Scenario) {
       `registered_bioactivity_${entry.definition.table_id}_json`,
       "registered_asset",
     ));
-  const bindings = [...baseBindings, ...chartBindings];
+  const paperBindings = paperEvidenceTables.map((entry) =>
+    binding(
+      `paper_${entry.definition.table_id}`,
+      `registered_bioactivity_${entry.definition.table_id}`,
+      `registered_bioactivity_${entry.definition.table_id}_json`,
+      "registered_asset",
+    ));
+  const bindings = [...baseBindings, ...chartBindings, ...paperBindings];
   const registeredAssetIds: Record<string, string> = {};
   for (const item of baseBindings) registeredAssetIds[item.binding_id] = bioactivityReceipt.asset_ref.asset_id;
   for (const item of chartBindings) registeredAssetIds[item.binding_id] = chartReceipt.asset_ref.asset_id;
+  for (const item of paperBindings) registeredAssetIds[item.binding_id] = paperReceipt.asset_ref.asset_id;
 
   const activitiesSchema = bioactivityTableEntries().find((entry) => entry.tableId === "activities")!.schema;
   const result = await executeRegisteredMultiTableBuild({
@@ -168,16 +229,36 @@ describe("chart evidence formal publication closure", () => {
     expect(chartSources.map((source) => source.table_id).sort()).toEqual([
       "chart_points", "chart_series", "papers", "sources",
     ]);
+    const paperSources = family.sources.filter((source) =>
+      createPaperEvidenceRegisteredTableRegistry().entries().some((registration) =>
+        registration.parser.adapter_id === source.adapter_id));
+    expect(paperSources.map((source) => source.table_id).sort()).toEqual([
+      "activity_value_records", "experiment_records", "paper_records", "supplementary_asset_records",
+    ]);
   });
 
   it("publishes accepted chart points end-to-end with intact artifact hashes and provenance", async () => {
     const chartFixtureText = await readFile(CHART_FIXTURE, "utf8");
+    const paperRows = JSON.parse(await readFile(PAPER_FIXTURE, "utf8")) as PaperEvidenceRows;
+    const derivedActivityId = derivePaperCanonicalIdentities(paperRows).activities[0]!.activity_id;
     const { root, result } = await buildTask({ chartFixtureText });
 
     expect(result.validation.status).toBe("passed");
-    expect(result.candidate.tables.map((table) => table.definition.table_id)).toEqual([
+    const tableIds = result.candidate.tables.map((table) => table.definition.table_id);
+    // The frozen gold6 six-table projection is a subset of the richer
+    // publication, not an evaluation-only alias applied after publication.
+    expect(tableIds).toEqual(expect.arrayContaining([
+      "paper_records",
+      "experiment_records",
+      "activity_value_records",
+      "chart_series",
+      "chart_points",
+      "supplementary_asset_records",
+    ]));
+    expect(tableIds).toEqual([
       "activities", "compounds", "assays", "targets",
       "chart_series", "chart_points", "papers", "sources",
+      "paper_records", "experiment_records", "activity_value_records", "supplementary_asset_records",
     ]);
     expect(result.publication.publicationId).toMatch(/^pub_build_chart_closure_/);
     expect(result.publication.invariants.provenance_closed).toBe(true);
@@ -194,6 +275,22 @@ describe("chart evidence formal publication closure", () => {
       expect(await sha256FileStream(stored)).toBe(artifact.sha256);
     }
 
+    // Every chart point's activity_id resolves to a derived canonical
+    // activity that exists in the published canonical activities bytes.
+    const activitiesCsv = await readFile(
+      path.join(root, "dataset_runs", "run_chart_closure", "build_chart_closure",
+        (tableResult("activities", result)).output_files[0]!.relative_path),
+      "utf8",
+    );
+    expect(activitiesCsv).toContain(derivedActivityId);
+    const chartPointsCsv = await readFile(
+      path.join(root, "dataset_runs", "run_chart_closure", "build_chart_closure",
+        (tableResult("chart_points", result)).output_files[0]!.relative_path),
+      "utf8",
+    );
+    expect(chartPointsCsv).toContain(derivedActivityId);
+    expect(chartPointsCsv).not.toContain("ACT_NON_GOLD_1");
+
     // The chart evidence table keeps source asset, page/bbox locator, model
     // identity, transform digests, and point-level confidence in the formal
     // publication bytes.
@@ -207,6 +304,23 @@ describe("chart evidence formal publication closure", () => {
     expect(seriesCsv).toContain("image_bbox");
     expect(seriesCsv).toContain("vlm_extract");
     expect(seriesCsv).toContain("1111111111111111111111111111111111111111111111111111111111111111");
+
+    // Paper evidence keeps raw value, raw unit, raw relation, original text,
+    // and source locator in the publication alongside derived canonical rows.
+    const activityValuesCsv = await readFile(
+      path.join(root, "dataset_runs", "run_chart_closure", "build_chart_closure",
+        (tableResult("activity_value_records", result)).output_files[0]!.relative_path),
+      "utf8",
+    );
+    expect(activityValuesCsv).toContain("IC50 of 12.5 nM");
+    expect(activityValuesCsv).toContain("pdf_region");
+    expect(activityValuesCsv).toContain("0.5");
+    const paperRecordsCsv = await readFile(
+      path.join(root, "dataset_runs", "run_chart_closure", "build_chart_closure",
+        (tableResult(PAPER_RECORDS_TABLE_ID, result)).output_files[0]!.relative_path),
+      "utf8",
+    );
+    expect(paperRecordsCsv).toContain(PAPER_KEY);
   });
 
   it("publishes human-corrected points while preserving the correction history", async () => {

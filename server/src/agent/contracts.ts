@@ -122,6 +122,11 @@ export interface BioMedSessionConfig {
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];
   systemPrompt?: string;
+  /**
+   * Frozen run context (already serialized as a delimited section) appended to
+   * the system prompt. Never placed in the upstream user message.
+   */
+  systemContext?: string;
   tools?: readonly BioMedAgentTool[];
   /** Tools whose full schemas are available on the first model turn. */
   initialToolNames?: readonly string[];

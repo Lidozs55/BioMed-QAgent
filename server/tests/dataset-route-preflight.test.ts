@@ -42,6 +42,24 @@ describe("dataset formal-route capability preflight", () => {
     );
   });
 
+  test("directs the Agent to acquire one Europe PMC PDF carrier per frozen PMCID", () => {
+    const capabilities = datasetRouteCapabilities();
+    const pdf = capabilities.core_acquisition_only.find(
+      (provider) => provider.provider_id === "europepmc.pdf.v1",
+    );
+
+    expect(pdf).toMatchObject({
+      source: "europepmc_pdf",
+      input_kind: "binary_archive",
+      route_status: "requires_formal_extraction",
+    });
+    expect(pdf?.input_hint).toMatch(/PMCID/);
+    expect(pdf?.blocker).toMatch(/acquire_core_carrier/i);
+    expect(capabilities.dynamic.direct_bindings).not.toContainEqual(
+      expect.objectContaining({ provider_id: "europepmc.pdf.v1" }),
+    );
+  });
+
   test("returns the same bounded, side-effect-free facts through the Agent tool", async () => {
     const tool = createDatasetRoutePreflightTool();
     const result = await tool.execute({});

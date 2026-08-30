@@ -34,7 +34,8 @@ interface ApiSurface {
 interface ModelSettingsSurface extends ApiSurface {
   resolveActiveModel(): Promise<BioMedModelConfig>;
   resolveRuntimeLimits?(): RuntimeLimits;
-  resolveVlmConfig?(): Promise<Partial<VlmConfig>>;
+  /** Consulted per extraction call, never snapshotted at bootstrap. */
+  resolveVlmConfig?(): Promise<VlmConfig>;
 }
 
 type FormalRuntime = Pick<
@@ -100,9 +101,6 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     resolveModel: modelSettings.resolveActiveModel,
   });
   const permissionBrokerRegistry = new PermissionBrokerRegistry();
-  const vlmConfig = modelSettings.resolveVlmConfig === undefined
-    ? undefined
-    : await modelSettings.resolveVlmConfig().catch(() => undefined);
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
   const formalFactory = input.createFormalRuntime ?? createPhase3Runtime;
 
@@ -135,7 +133,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       resolveRuntimeLimits: modelSettings.resolveRuntimeLimits,
       database,
       browserPool,
-      vlmConfig,
+      resolveVlmConfig: modelSettings.resolveVlmConfig,
     }),
   };
 }

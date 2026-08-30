@@ -38,7 +38,13 @@ import {
 } from "../../http/validation.js";
 import { catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
 import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
-import { resolveActiveConfig, resolveVlmConfig } from "./model-resolution.js";
+import {
+  resolveActiveConfig,
+  resolveVlmConfig,
+  VisionConfigError,
+  visionAssignmentProblem,
+  visionSettingsFacts,
+} from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
 import {
   bootstrapEnvironmentDefaults,
@@ -191,12 +197,26 @@ export class ModelSettingsService {
 
   resolveRuntimeLimits = (): RuntimeLimits => ({ ...this.registry.settings.runtime_limits });
 
-  /** Resolve VLM chart-extraction config from active settings when possible. */
-  resolveVlmConfig = (): Promise<{
+  /**
+   * Resolve the visual-extraction config at call time (never snapshotted at
+   * bootstrap). A stale assignment is cleared first; anything unresolvable
+   * fails closed with an actionable ``VisionConfigError``. The API key is
+   * returned to the caller only — it is never logged or persisted here.
+   */
+  resolveVlmConfig = async (): Promise<{
     apiKey: string;
     baseUrl: string;
     model: string;
-  }> => Promise.resolve(resolveVlmConfig(this.registry, this.auth, this.environment));
+  }> => {
+    const stale = visionAssignmentProblem(this.registry);
+    if (stale !== null) {
+      await this.mutate(() => {
+        this.registry.settings.vision_model_id = null;
+      });
+      throw new VisionConfigError(stale);
+    }
+    return resolveVlmConfig(this.registry, this.auth, this.environment);
+  };
 
   /* ---- Routes surface ---- */
 
@@ -236,6 +256,7 @@ export class ModelSettingsService {
       run_ready: apiKey !== "" && modelName !== "",
       run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
+      ...visionSettingsFacts(this.registry, this.auth, this.environment),
     };
   }
 
@@ -259,6 +280,28 @@ export class ModelSettingsService {
       if (body.repetition_penalty !== undefined) settings.advanced.repetition_penalty = boundedNumber(body.repetition_penalty, "repetition_penalty", 0);
       if (body.enable_search !== undefined) settings.advanced.enable_search = Boolean(body.enable_search);
       if (body.thinking_mode !== undefined) settings.advanced.thinking_mode = Boolean(body.thinking_mode);
+      // Visual-extraction role: persist the managed-model record id only, and
+      // only for an enabled provider's image-capable model (fail fast with an
+      // actionable message); null clears the role.
+      if (body.vision_model_id === null) {
+        settings.vision_model_id = null;
+      } else if (body.vision_model_id !== undefined) {
+        const visionModel = this.model(requiredString(body.vision_model_id, "vision_model_id"));
+        const visionProvider = this.provider(visionModel.provider_id);
+        if (visionProvider.enabled === false) {
+          throw new HttpError(
+            422,
+            `供应商「${visionProvider.name}」已停用，不能将其模型设为视觉抽取模型`,
+          );
+        }
+        if (visionModel.capabilities.image !== true) {
+          throw new HttpError(
+            422,
+            `模型「${visionModel.name}」未开启图像能力，不能作为视觉抽取模型`,
+          );
+        }
+        settings.vision_model_id = visionModel.id;
+      }
       if (body.runtime_limits === null) {
         settings.runtime_limits = { ...DEFAULT_RUNTIME_LIMITS };
       } else if (body.runtime_limits !== undefined) {
@@ -361,6 +404,15 @@ export class ModelSettingsService {
       if (body.preset_id !== undefined) provider.preset_id = typeof body.preset_id === "string" ? body.preset_id : null;
       if (body.description !== undefined) provider.description = String(body.description);
       if (body.enabled !== undefined) provider.enabled = Boolean(body.enabled);
+      // Disabling a provider clears its models' visual role (case: disabled
+      // visual model clears the assignment instead of failing at extraction).
+      if (provider.enabled === false) {
+        const visionModelId = this.registry.settings.vision_model_id;
+        if (visionModelId !== null &&
+            this.registry.models.some((item) => item.id === visionModelId && item.provider_id === id)) {
+          this.registry.settings.vision_model_id = null;
+        }
+      }
       if (typeof body.api_key === "string" &&
           body.api_key !== maskApiKey(this.auth.provider_api_keys[id] ?? "")) {
         this.auth.provider_api_keys[id] = body.api_key;
@@ -378,6 +430,11 @@ export class ModelSettingsService {
       delete this.auth.provider_api_keys[id];
       if (this.registry.settings.provider_id === id) {
         this.resetActiveConnectionSettings(true);
+      }
+      // The visual role dies with its provider's models (no dangling id).
+      const visionModelId = this.registry.settings.vision_model_id;
+      if (visionModelId !== null && !this.registry.models.some((item) => item.id === visionModelId)) {
+        this.registry.settings.vision_model_id = null;
       }
     });
   }
@@ -500,6 +557,11 @@ export class ModelSettingsService {
           video: caps.video === true,
           audio: caps.audio === true,
         };
+        // A selected visual model that loses its image capability no longer
+        // serves the role.
+        if (model.capabilities.image === false && this.registry.settings.vision_model_id === id) {
+          this.registry.settings.vision_model_id = null;
+        }
       }
       if (body.params !== undefined) {
         const mergedParams = { ...model.params, ...asRecord(body.params) };
@@ -544,6 +606,9 @@ export class ModelSettingsService {
       this.registry.models = this.registry.models.filter((item) => item.id !== id);
       if (this.registry.settings.active_model_id === id) {
         this.resetActiveConnectionSettings(false);
+      }
+      if (this.registry.settings.vision_model_id === id) {
+        this.registry.settings.vision_model_id = null;
       }
     });
   }

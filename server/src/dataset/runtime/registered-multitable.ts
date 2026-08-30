@@ -64,6 +64,17 @@ import {
   evaluateChartEvidencePublication,
   type ChartEvidenceRows,
 } from "../families/bioactivity-measurement/chart-evidence/index.js";
+import {
+  ACTIVITY_VALUE_RECORDS_TABLE_ID,
+  derivePaperCanonicalIdentities,
+  evaluatePaperEvidencePublication,
+  EXPERIMENT_RECORDS_TABLE_ID,
+  paperEvidenceValidationPolicy,
+  PAPER_EVIDENCE_TABLE_IDS,
+  PAPER_RECORDS_TABLE_ID,
+  SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID,
+  type PaperEvidenceRows,
+} from "../families/bioactivity-measurement/paper-evidence/index.js";
 const IMPLEMENTATION_DIGEST = createHash("sha256")
   .update("registered_multitable.runtime.v1")
   .digest("hex");
@@ -453,6 +464,45 @@ async function writeProviderTables(options: {
   return results;
 }
 
+/**
+ * Rewrites one canonical table CSV so deterministically derived rows (paper
+ * evidence identities) become part of the published table bytes, replacing
+ * the parse-loop result for that table.
+ */
+async function rewriteIntegratedTable(options: {
+  outputDir: string;
+  taskId: string;
+  runId: string;
+  requirementId: string;
+  familyId: string;
+  tableId: string;
+  schema: DatasetSchemaV2;
+  rows: readonly Record<string, unknown>[];
+  relativePath: string;
+  assetIds: readonly string[];
+}): Promise<OperationResultManifest> {
+  const absolutePath = path.join(options.outputDir, ...options.relativePath.split("/"));
+  const content = [
+    options.schema.fields.map((field) => field.name).join(","),
+    ...options.rows.map((row) =>
+      options.schema.fields
+        .map((field) => csvCell(jsonCompatible(row[field.name], `${options.tableId}.${field.name}`)))
+        .join(",")),
+  ].join("\n") + "\n";
+  await writeFile(absolutePath, content, "utf8");
+  return tableResult({
+    taskId: options.taskId,
+    runId: options.runId,
+    requirementId: options.requirementId,
+    familyId: options.familyId,
+    tableId: options.tableId,
+    schema: options.schema,
+    relativePath: options.relativePath,
+    absolutePath,
+    assetIds: options.assetIds,
+  });
+}
+
 /** Server-owned fixed registered asset -> parse -> assemble -> B3 -> Publisher capability. */
 export async function executeRegisteredMultiTableBuild(
   input: RegisteredMultiTableExecutionInput,
@@ -710,6 +760,82 @@ export async function executeRegisteredMultiTableBuild(
   const primaryResult = Object.values(tableResults).find((result) => result.output_summary.schema_ref === primarySchema.schema_id);
   if (primaryResult === undefined) throw new Error("registered multi-table build did not produce its primary schema");
   const registeredAssets = [...sourceReceipts.keys()].sort();
+  const missingPaperTables = PAPER_EVIDENCE_TABLE_IDS.filter((tableId) => tableResults[tableId] === undefined);
+  const paperEvidencePresent = missingPaperTables.length < PAPER_EVIDENCE_TABLE_IDS.length;
+  if (paperEvidencePresent && missingPaperTables.length > 0) {
+    throw new Error(`paper evidence build requires all paper tables; missing: ${missingPaperTables.join(", ")}`);
+  }
+  if (paperEvidencePresent) {
+    if (tableResults[CHART_SERIES_TABLE_ID] === undefined) {
+      throw new Error("paper evidence build requires the chart evidence tables (chart_series, chart_points, papers, sources)");
+    }
+    const paperRows = {
+      paper_records: tableRows[PAPER_RECORDS_TABLE_ID] ?? [],
+      experiment_records: tableRows[EXPERIMENT_RECORDS_TABLE_ID] ?? [],
+      activity_value_records: tableRows[ACTIVITY_VALUE_RECORDS_TABLE_ID] ?? [],
+      supplementary_asset_records: tableRows[SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID] ?? [],
+    } as unknown as PaperEvidenceRows;
+    const paperGate = evaluatePaperEvidencePublication(paperRows, new Set(registeredAssets));
+    if (!paperGate.publishable) {
+      const paperCheck = {
+        check_id: "paper_evidence_gate",
+        scope: "paper_evidence",
+        passed: false,
+        detail: paperGate.checks.map((item) => item.detail).join("; "),
+      };
+      await writeFile(path.join(outputDir, "validation_report.json"), `${JSON.stringify({
+        profile_ref: input.spec.validation_profile_ref,
+        checks: [paperCheck],
+      }, null, 2)}\n`, "utf8");
+      throw new Error(`registered multi-table validation failed: ${paperCheck.scope}:${paperCheck.check_id}: ${paperCheck.detail}`);
+    }
+    // Deterministic core-side identity derivation: canonical activities,
+    // compounds, assays, and targets are derived from the admitted paper
+    // evidence and merged into the canonical tables so chart points can
+    // reference real primary activity IDs in the published bytes.
+    const derived = derivePaperCanonicalIdentities(paperRows);
+    const mergedTables: Readonly<Record<"activities" | "compounds" | "assays" | "targets", Record<string, unknown>[]>> = {
+      activities: [
+        ...(tableRows.activities ?? []),
+        ...derived.activities.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      compounds: [
+        ...(tableRows.compounds ?? []),
+        ...derived.compounds.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      assays: [
+        ...(tableRows.assays ?? []),
+        ...derived.assays.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+      targets: [
+        ...(tableRows.targets ?? []),
+        ...derived.targets.map((row): Record<string, unknown> => ({ ...row })),
+      ],
+    };
+    const canonicalSchemas = registeredTableSchemasById(family);
+    for (const tableId of ["activities", "compounds", "assays", "targets"] as const) {
+      const schema = canonicalSchemas.get(tableId);
+      if (schema === undefined) {
+        throw new Error(`canonical table '${tableId}' has no registered schema for the paper identity merge`);
+      }
+      tableResults[tableId] = await rewriteIntegratedTable({
+        outputDir,
+        taskId: input.taskId,
+        runId,
+        requirementId: input.spec.requirement_id,
+        familyId: family.id,
+        tableId,
+        schema,
+        rows: mergedTables[tableId],
+        relativePath: `tables/${tableId}.csv`,
+        assetIds: registeredAssets,
+      });
+    }
+    tableRows.activities = mergedTables.activities;
+    tableRows.compounds = mergedTables.compounds;
+    tableRows.assays = mergedTables.assays;
+    tableRows.targets = mergedTables.targets;
+  }
   if (tableResults[CHART_SERIES_TABLE_ID] !== undefined) {
     const missingChartTables = [
       CHART_POINTS_TABLE_ID,
@@ -786,9 +912,11 @@ export async function executeRegisteredMultiTableBuild(
     forbidden_roots: input.forbiddenRoots === undefined || input.forbiddenRoots.length === 0
       ? [defaultForbiddenRoot]
       : [...input.forbiddenRoots],
-    policy: tableResults[CHART_SERIES_TABLE_ID] !== undefined
-      ? chartEvidenceValidationPolicy()
-      : family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
+    policy: tableResults[PAPER_RECORDS_TABLE_ID] !== undefined
+      ? paperEvidenceValidationPolicy()
+      : tableResults[CHART_SERIES_TABLE_ID] !== undefined
+        ? chartEvidenceValidationPolicy()
+        : family.multitable_validation_policy ?? { token_preservation_rules: [], profile_relation_missing_policies: {} },
   });
   const auditPath = path.join(outputDir, "registered_adapter_audit.json");
   await writeFile(auditPath, `${JSON.stringify(audits, null, 2)}\n`, "utf8");

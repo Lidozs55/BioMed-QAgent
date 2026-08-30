@@ -14,6 +14,7 @@ import {
   assertFinite,
   assertHex64,
   assertNonNegativeInt,
+  parseTaskExecutionContext,
   ERROR_CODES,
   STAGE_NAMES,
   SUBAGENT_ERROR_CODES,
@@ -98,7 +99,16 @@ export function parseRuntimeEventPayload(payloadObj: Record<string, unknown>, pa
     case "run_queued": {
       const input = assertString(Reflect.get(payloadObj, "input"), path + ".input");
       if (input.length === 0) throw new APIError(502, "Expected non-empty input at " + path + ".input");
-      return { type: "run_queued", request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"), input };
+      return {
+        type: "run_queued",
+        request_id: assertString(Reflect.get(payloadObj, "request_id"), path + ".request_id"),
+        input,
+        execution_context: assertOptionalNull(
+          Reflect.get(payloadObj, "execution_context"),
+          path + ".execution_context",
+          (v, p) => parseTaskExecutionContext(v, p),
+        ),
+      };
     }
     case "run_steered":
       return {

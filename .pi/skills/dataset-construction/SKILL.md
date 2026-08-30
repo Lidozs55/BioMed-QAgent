@@ -175,6 +175,11 @@ export const transform = defineTransform({
 ## Boundaries
 
 
+- A frozen evaluation context carried in the system prompt (evaluation runner
+  runs) is binding task semantics for the run — expected family, required
+  tables, allowed sources, success definition — but it is never publication
+  authority and never bypasses this protocol: completion still requires the
+  current-run immutable Publication through the Dataset Core.
 - The trusted Dataset Core owns acquisition for registered providers,
   validation, compatibility gating, integration, and immutable publication.
   Agent filesystem writes are restricted to staging — never write into

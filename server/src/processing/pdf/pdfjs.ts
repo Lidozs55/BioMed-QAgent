@@ -21,8 +21,12 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-/** Directory holding pdf.js standard font data (silences the font warning). */
-const STANDARD_FONTS_URL = pathToFileURL(
+/**
+ * Directory holding pdf.js standard font data (silences the font warning).
+ * Shared by every pdfjs consumer, including the page renderer
+ * (``processing/vlm/pdf-pages.ts``).
+ */
+export const PDFJS_STANDARD_FONTS_URL = pathToFileURL(
   path.resolve(MODULE_DIR, "..", "..", "..", "node_modules", "pdfjs-dist", "standard_fonts"),
 ).href + "/";
 
@@ -242,7 +246,7 @@ export async function openPdf(bytes: Uint8Array): Promise<OpenPdf> {
   const loadingTask = pdfjs.getDocument({
     data: bytes,
     useSystemFonts: true,
-    standardFontDataUrl: STANDARD_FONTS_URL,
+    standardFontDataUrl: PDFJS_STANDARD_FONTS_URL,
   });
   const doc = await loadingTask.promise;
   const cache = new Map<number, Promise<InternalPageExtract>>();
@@ -269,11 +273,11 @@ export async function openPdf(bytes: Uint8Array): Promise<OpenPdf> {
     getImage: async (pageNumber, name) => {
       const page = await doc.getPage(pageNumber);
       const image = await page.objs.get(name);
-      const data = image?.data;
-      if (!(data instanceof Uint8Array) || typeof image.width !== "number" || typeof image.height !== "number") {
+      const raster = toRgbaRaster(name, image);
+      if (raster === null) {
         throw new Error(`image object ${name} has no raster data`);
       }
-      return { data, width: image.width, height: image.height };
+      return raster;
     },
     close: async () => {
       try {
@@ -289,4 +293,53 @@ export async function openPdf(bytes: Uint8Array): Promise<OpenPdf> {
 export async function readPdfBytes(filePath: string): Promise<Uint8Array> {
   const buffer = await readFile(filePath);
   return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+/**
+ * pdfjs (legacy build) decodes image XObjects into typed pixel buffers keyed
+ * by ``ImageKind``: RGB_24BPP rows are ``Uint8ClampedArray`` (3 bytes per
+ * pixel) and RGBA_32BPP rows carry 4 bytes per pixel. The raster consumers
+ * (PNG encoding, VLM base64) need an ``Uint8Array`` RGBA buffer, so expand
+ * RGB rows with an opaque alpha channel; anything else is "no raster data".
+ */
+function toRgbaRaster(
+  name: string,
+  image: {
+    data?: unknown;
+    kind?: unknown;
+    width?: unknown;
+    height?: unknown;
+  } | undefined | null,
+): { data: Uint8Array; width: number; height: number } | null {
+  if (
+    image === null || image === undefined ||
+    typeof image.width !== "number" || typeof image.height !== "number" ||
+    (!(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray))
+  ) {
+    return null;
+  }
+  const pixelCount = image.width * image.height;
+  if (image.kind === 2 /* pdfjs ImageKind.RGB_24BPP */) {
+    const source = image.data;
+    if (source.length !== pixelCount * 3) return null;
+    const rgba = new Uint8Array(pixelCount * 4);
+    for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+      rgba[pixel * 4] = source[pixel * 3]!;
+      rgba[pixel * 4 + 1] = source[pixel * 3 + 1]!;
+      rgba[pixel * 4 + 2] = source[pixel * 3 + 2]!;
+      rgba[pixel * 4 + 3] = 255;
+    }
+    return { data: rgba, width: image.width, height: image.height };
+  }
+  if (image.kind === 3 /* pdfjs ImageKind.RGBA_32BPP */) {
+    const source = image.data;
+    if (source.length !== pixelCount * 4) return null;
+    return {
+      data: source instanceof Uint8Array ? source : Uint8Array.from(source),
+      width: image.width,
+      height: image.height,
+    };
+  }
+  void name;
+  return null;
 }

@@ -2,12 +2,24 @@ import { once } from "node:events";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { EventEnvelope } from "@biomed/contracts";
 import { packageDigest } from "../src/dataset/publish/manifest.js";
+import { canonicalDigest } from "../src/dataset/adapters/identity.js";
+import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
+import {
+  completePublicationAcceptanceContinuation,
+} from "../src/dataset/dynamic-family/publication.js";
+import {
+  readPublicationAcceptanceContinuation,
+  savePublicationAcceptanceContinuation,
+  type PublicationAcceptanceContinuationV1,
+} from "../src/runtime/execution-continuation.js";
+import { DurableHILStore } from "../src/runtime/hil-store.js";
+import { DurableTaskRepository } from "../src/runtime/task-repository.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 
@@ -1408,5 +1420,369 @@ describe("durable formal Agent runtime", () => {
     // no terminal event.
     expect(resumeEvents.map((event) => event.type)).toEqual(["tool_started"]);
     await runtimeB.close();
+  });
+});
+
+describe("publication acceptance restart continuation (Gold6 T6)", () => {
+  const REQUIREMENT_ID = "build_pub_resume";
+  const PRIMARY_CSV = "record_id,value\nr1,1\nr2,2\n";
+  const REGISTERED_ASSET_ID = `asset_${"a".repeat(64)}`;
+
+  function sha256(text: string): string {
+    return createHash("sha256").update(text, "utf8").digest("hex");
+  }
+
+  function candidateFixture(taskId: string) {
+    const primarySha = sha256(PRIMARY_CSV);
+    return {
+      schema_version: "1.0",
+      candidate_id: "candidate_pub_resume",
+      task_id: taskId,
+      requirement_id: REQUIREMENT_ID,
+      dataset_family: "gene_expression",
+      row_granularity: "gene_sample_measurement",
+      tables: [{
+        definition: {
+          table_id: "primary",
+          schema_ref: "gene_expression.long.v1",
+          role: "primary",
+          required: true,
+          allow_empty: false,
+          primary_key: ["record_id"],
+          field_names: ["record_id", "value"],
+        },
+        data_ref: {
+          result_manifest_id: "result_pub_resume",
+          output_kind: "integrated_table",
+          output_file_index: 0,
+          output_file_sha256: primarySha,
+        },
+        row_count: 2,
+      }],
+      relations: [],
+      provenance_refs: [{
+        result_manifest_id: "result_pub_resume",
+        output_kind: "integrated_table",
+        output_file_index: 0,
+        output_file_sha256: primarySha,
+      }],
+      confidence_refs: [{
+        result_manifest_id: "result_pub_resume",
+        output_kind: "integrated_table",
+        output_file_index: 0,
+        output_file_sha256: primarySha,
+      }],
+      audit_refs: [],
+      registered_asset_ids: [REGISTERED_ASSET_ID],
+    } as const;
+  }
+
+  interface StagedPublication {
+    taskId: string;
+    runId: string;
+    requestId: string;
+    evidenceDigest: string;
+    continuation: PublicationAcceptanceContinuationV1;
+  }
+
+  /** Stage what publishDynamicFamily leaves on disk while the review pends. */
+  async function stagePendingPublication(root: string): Promise<StagedPublication> {
+    const repository = new DurableTaskRepository(root);
+    const accepted = await repository.createTask({
+      requestId: `request_pub_resume_${root.length}`,
+      input: "publish the dynamic family",
+      databases: [],
+      mode: "agent",
+    });
+    const taskId = accepted.task_id;
+    const runId = accepted.run_id;
+    await repository.appendRunEvent(taskId, runId, { type: "run_started" });
+
+    const outputDir = path.join(root, taskId, "dataset_runs", runId, REQUIREMENT_ID);
+    await mkdir(path.join(outputDir, "tables"), { recursive: true });
+    await writeFile(path.join(outputDir, "tables", "primary.csv"), PRIMARY_CSV, "utf8");
+    await writeFile(path.join(outputDir, "schema.json"), `${JSON.stringify({
+      schema_version: "1.0",
+      schema_id: "gene_expression.long.v1",
+    })}\n`, "utf8");
+    const assessment = {
+      schema_version: "1.0",
+      requirement_id: "dynamic_family_structural_b3.v1",
+      package_id: "candidate_pub_resume",
+      package_version: "1.0",
+      product_status: "incomplete",
+      scores: [],
+      missing_requirements: ["dynamic_family_hil_acceptance.v1"],
+      blockers: [{
+        requirement_id: "dynamic_family_hil_acceptance.v1",
+        dimension: "confidence",
+        code: "human_review_pending",
+        message: "review-status fields require genuine HIL acceptance evidence before publication",
+      }],
+    };
+    const assessmentText = JSON.stringify(assessment);
+    await writeFile(path.join(outputDir, "product_assessment.json"), assessmentText, "utf8");
+
+    const candidate = candidateFixture(taskId);
+    const primarySha = sha256(PRIMARY_CSV);
+    const reviewItems = [{
+      item_id: candidate.candidate_id,
+      summary: "Review the evidence-bound dynamic publication candidate",
+      subject: {
+        candidate_ids: [candidate.candidate_id],
+        table_ids: ["primary"],
+      },
+      evidence: { reviewed_snapshot: { candidate: candidate.candidate_id } },
+      proposed_value: { action: "publish" },
+      confidence_level: null,
+    }];
+    const requestInput = {
+      task_id: taskId,
+      run_id: runId,
+      requirement_id: REQUIREMENT_ID,
+      kind: "data_review" as const,
+      review_type: "publication_acceptance" as const,
+      blocking: true,
+      subject: { candidate_ids: [candidate.candidate_id], table_ids: ["primary"] },
+      review_items: reviewItems,
+      summary: "Accept the evidence-bound dynamic publication candidate",
+      evidence: { reviewed_snapshot: { candidate: candidate.candidate_id } },
+      policy_ref: "dynamic_family_hil_acceptance.v1",
+      idempotency_key: `dynamic-family-publication:${REQUIREMENT_ID}:candidate_pub_resume:${sha256(assessmentText)}`,
+    };
+    const store = new DurableHILStore(repository);
+    const request = await store.createRequest(requestInput);
+    await repository.appendRunEvent(taskId, runId, {
+      type: "user_input_required",
+      request_id: request.request_id,
+      prompt_kind: "data_correction",
+      summary: requestInput.summary,
+      expires_at: null,
+      fixture_exempt: false,
+      detail: {},
+      hil_request: request,
+    });
+
+    const b3Checks = [
+      { check_id: "fixture_check", scope: "fixture", passed: true, detail: "ok" },
+    ];
+    const continuation: PublicationAcceptanceContinuationV1 = {
+      schema_version: 1,
+      continuation_kind: "publication_acceptance",
+      task_id: taskId,
+      run_id: runId,
+      requirement_id: REQUIREMENT_ID,
+      candidate_digest: canonicalDigest(candidate),
+      candidate: candidate,
+      registered_input_asset_ids: [REGISTERED_ASSET_ID],
+      assessment_digest: sha256(assessmentText),
+      assessment_size_bytes: Buffer.byteLength(assessmentText, "utf8"),
+      expected_evidence_digest: computeHILEvidenceDigest({
+        kind: requestInput.kind,
+        review_type: requestInput.review_type,
+        subject: requestInput.subject,
+        review_items: reviewItems,
+        summary: requestInput.summary,
+        evidence: requestInput.evidence,
+        policy_ref: requestInput.policy_ref,
+      }),
+      requested_review_id: request.request_id,
+      submission_receipt_digest: sha256("submission-receipt"),
+      reviewed_snapshot: { candidate: candidate.candidate_id },
+      validation_profile_ref: "gene_expression.release.v1",
+      b3_checked_count: b3Checks.length,
+      b3_checks_sha256: canonicalDigest(b3Checks),
+      b3_checks: b3Checks,
+      provenance_base: {
+        schema_version: "1.0",
+        task_id: taskId,
+        requirement_id: REQUIREMENT_ID,
+        registered_asset_ids: [REGISTERED_ASSET_ID],
+        execution_kind: "transform",
+        operation_result_manifest_ids: ["result_pub_resume"],
+        sources: [{ asset_id: REGISTERED_ASSET_ID }],
+        source_receipts: [],
+        core_acquisition_provenance: [],
+      },
+      tables: [{
+        table_id: "primary",
+        schema_ref: "gene_expression.long.v1",
+        role: "primary",
+        relative_path: "tables/primary.csv",
+        row_count: 2,
+        sha256: primarySha,
+        size_bytes: Buffer.byteLength(PRIMARY_CSV, "utf8"),
+      }],
+      published_publication_id: null,
+      created_at: "2026-08-30T00:00:00.000Z",
+    };
+    await savePublicationAcceptanceContinuation(path.join(root, taskId), continuation);
+    return {
+      taskId,
+      runId,
+      requestId: request.request_id,
+      evidenceDigest: request.evidence_digest,
+      continuation,
+    };
+  }
+
+  test("publishes exactly once after a restart with a resolved acceptance review", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "durable-pub-continuation-"));
+    roots.push(root);
+    const staged = await stagePendingPublication(root);
+
+    // Host restart: the pending publication acceptance must survive the
+    // restart (no fail-closed run_failed) while it waits for the user.
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: { async createSession(): Promise<never> { throw new Error("unused"); } },
+      workspaceFactory: async () => ({
+        root: path.join(root, "workspace"),
+        tools: [],
+        dispose: async () => undefined,
+      }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const eventsBefore = await runtime.repository.listEvents(staged.taskId, 0);
+    expect(eventsBefore.some(
+      (event) =>
+        event.type === "run_failed" &&
+        event.payload.type === "run_failed" &&
+        event.payload.error.includes("Dynamic publication HIL cannot continue"),
+    )).toBe(false);
+    expect((await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status).toBe(
+      "awaiting_user_input",
+    );
+
+    // The user resolves the SAME pending review after the restart.
+    const resumed = await fetch(`${base}/api/v1/tasks/${staged.taskId}/runs/${staged.runId}/resume`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: staged.requestId,
+        evidence_digest: staged.evidenceDigest,
+        decision: { action: "accept" },
+        reason: null,
+      }),
+    });
+    expect(resumed.status).toBe(200);
+
+    await expect.poll(async () =>
+      (await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status,
+    ).toBe("completed");
+
+    // Exactly ONE immutable publication, bound to the ORIGINAL candidate.
+    const publishDir = path.join(
+      root, staged.taskId, "dataset_runs", staged.runId, REQUIREMENT_ID, "publish",
+    );
+    const versions = (await readdir(publishDir)).filter((name) => !name.startsWith("."));
+    expect(versions).toHaveLength(1);
+    const versionDir = path.join(publishDir, versions[0] ?? "");
+    const publication = JSON.parse(
+      await readFile(path.join(versionDir, "publication.json"), "utf8"),
+    ) as { publication_id: string; manifest_sha256: string };
+    const manifest = JSON.parse(
+      await readFile(path.join(versionDir, "dataset_manifest.json"), "utf8"),
+    ) as {
+      sha256: string;
+      candidate_refs: Array<{
+        provenance_refs: string[];
+      }>;
+      artifacts: Array<{ role: string; sha256: string; relative_path: string }>;
+    };
+    expect(versions[0]).toBe(`${REQUIREMENT_ID}_${manifest.sha256.slice(0, 16)}`);
+    expect(publication.manifest_sha256).toBeTypeOf("string");
+    // The original candidate digest survives the restart: the promoted primary
+    // table is byte-identical and matches the candidate's bound digest.
+    const promotedPrimary = await readFile(path.join(versionDir, "tables", "primary.csv"), "utf8");
+    expect(promotedPrimary).toBe(PRIMARY_CSV);
+    expect(manifest.artifacts.find((artifact) => artifact.role === "primary_dataset")?.sha256).toBe(
+      sha256(PRIMARY_CSV),
+    );
+    expect(manifest.candidate_refs[0]?.provenance_refs[0]).toBe(
+      `result_pub_resume:integrated_table:0:${sha256(PRIMARY_CSV)}`,
+    );
+    // Review provenance is recorded and the run completed exactly once.
+    const events = await runtime.repository.listEvents(staged.taskId, 0);
+    expect(events.some((event) => event.type === "publication_created")).toBe(true);
+    expect(events.filter((event) => event.type === "user_input_resumed")).toHaveLength(1);
+    expect(events.some(
+      (event) => event.type === "run_failed" &&
+        event.payload.type === "run_failed" &&
+        event.payload.error.includes("Dynamic publication HIL cannot continue"),
+    )).toBe(false);
+
+    // The consumed continuation records the publication (resume-once fence).
+    const consumed = await readPublicationAcceptanceContinuation(
+      path.join(root, staged.taskId),
+      REQUIREMENT_ID,
+    );
+    expect(consumed?.published_publication_id).toBe(publication.publication_id);
+
+    // A second resolution attempt must not publish again.
+    const replay = await fetch(`${base}/api/v1/tasks/${staged.taskId}/runs/${staged.runId}/resume`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: staged.requestId,
+        evidence_digest: staged.evidenceDigest,
+        decision: { action: "reject" },
+        reason: null,
+      }),
+    });
+    expect([200, 409]).toContain(replay.status);
+    expect((await readdir(publishDir)).filter((name) => !name.startsWith("."))).toHaveLength(1);
+    await runtime.close();
+  });
+
+  test("rejects the publication continuation on staged drift or a different run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "durable-pub-continuation-drift-"));
+    roots.push(root);
+    const staged = await stagePendingPublication(root);
+    const taskRoot = path.join(root, staged.taskId);
+    const outputDir = path.join(taskRoot, "dataset_runs", staged.runId, REQUIREMENT_ID);
+    const store = new DurableHILStore(new DurableTaskRepository(root));
+    const review = await store.resolveRequest(staged.taskId, staged.runId, {
+      request_id: staged.requestId,
+      evidence_digest: staged.evidenceDigest,
+      decision: { action: "accept" },
+      reason: null,
+    });
+
+    // Digest drift: the staged provisional assessment was edited after the
+    // candidate was persisted.
+    await writeFile(
+      path.join(outputDir, "product_assessment.json"),
+      JSON.stringify({ tampered: true }),
+      "utf8",
+    );
+    await expect(completePublicationAcceptanceContinuation({
+      continuation: staged.continuation,
+      taskRoot,
+      runId: staged.runId,
+      review,
+    })).rejects.toThrow(/drift/i);
+
+    // A different run must not drive this continuation.
+    const fresh = await stagePendingPublication(root);
+    const freshReview = await store.resolveRequest(fresh.taskId, fresh.runId, {
+      request_id: fresh.requestId,
+      evidence_digest: fresh.evidenceDigest,
+      decision: { action: "accept" },
+      reason: null,
+    });
+    await expect(completePublicationAcceptanceContinuation({
+      continuation: fresh.continuation,
+      taskRoot: path.join(root, fresh.taskId),
+      runId: "run_other",
+      review: freshReview,
+    })).rejects.toThrow(/run/i);
   });
 });

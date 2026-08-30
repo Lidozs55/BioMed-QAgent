@@ -93,6 +93,15 @@ export interface ModelSettings extends ContextBudgetSettings {
   /** Non-null when task creation needs explicit user confirmation (e.g. context budget warning). */
   run_block_reason: string | null;
   runtime_limits: RuntimeLimits;
+  /** Explicit visual-extraction role: managed-model record id, or null when unset. */
+  vision_model_id: string | null;
+  /** Read-only facts about the effective visual model (assignment, else active model when visual). */
+  vision_model_name: string | null;
+  vision_provider_name: string | null;
+  /** True when the effective visual model exists, is enabled, image-capable, and has credentials. */
+  vision_model_ready: boolean;
+  /** Actionable reason the visual role is not ready, or null. */
+  vision_block_reason: string | null;
 }
 
 export interface ModelSettingsUpdate {
@@ -110,6 +119,8 @@ export interface ModelSettingsUpdate {
   compaction_trigger_ratio?: number;
   compaction_target_ratio?: number;
   runtime_limits?: Partial<RuntimeLimits> | null;
+  /** Visual-extraction model assignment; null clears the role. */
+  vision_model_id?: string | null;
 }
 
 /* ---- Personalization ---- */

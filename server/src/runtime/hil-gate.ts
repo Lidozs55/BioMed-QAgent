@@ -38,6 +38,15 @@ interface PendingReview {
   reject: (error: Error) => void;
 }
 
+/**
+ * In-flight credential decisions keyed by ``<run_id>:<operation>``. Parallel
+ * governed tool calls in one run share one credential approval: the first
+ * caller creates the durable request, later callers await the SAME pending
+ * decision instead of conflict-failing with "another HIL request is already
+ * pending".
+ */
+type CredentialDecision = Promise<"approve" | "reject">;
+
 export class DurableHILGate implements HILGateHandle {
   private readonly taskId: string;
   private readonly repository: DurableTaskRepository;
@@ -46,6 +55,7 @@ export class DurableHILGate implements HILGateHandle {
   private runId: string | null;
   private permissionInvocation = 0;
   private readonly pending = new Map<string, PendingReview>();
+  private readonly credentialRequests = new Map<string, CredentialDecision>();
 
   constructor(
     taskId: string,
@@ -75,6 +85,30 @@ export class DurableHILGate implements HILGateHandle {
   }
 
   async request(
+    operation: string,
+    signal?: AbortSignal,
+    invocationId?: string,
+  ): Promise<"approve" | "reject"> {
+    const runId = this.runId;
+    if (runId === null) throw new Error("HIL gate is not bound to a run");
+    // Coalesce concurrent credential approvals per run + operation scope:
+    // parallel governed tool calls await ONE durable decision.
+    const key = `${runId}:${operation}`;
+    const existing = this.credentialRequests.get(key);
+    if (existing !== undefined) return existing;
+    const decision = this.requestCredential(operation, signal, invocationId);
+    this.credentialRequests.set(key, decision);
+    void decision
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.credentialRequests.get(key) === decision) {
+          this.credentialRequests.delete(key);
+        }
+      });
+    return decision;
+  }
+
+  private async requestCredential(
     operation: string,
     signal?: AbortSignal,
     invocationId?: string,

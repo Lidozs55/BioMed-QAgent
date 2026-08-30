@@ -156,6 +156,9 @@ export function reduceTaskEvents(
         finished_at: null,
         error: null,
         summary: null,
+        // Events persisted before the frozen-context feature lack the field;
+        // replay normalizes them to null.
+        execution_context: event.payload.execution_context ?? null,
       });
       messages.push(message(metadata, event, "user", event.payload.input, messages.length + 1));
       continue;

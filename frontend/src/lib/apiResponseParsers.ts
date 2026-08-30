@@ -18,6 +18,7 @@ import {
   assertNonNegativeInt,
   assertPositiveInt,
   assertJsonRecord,
+  parseTaskExecutionContext,
   ERROR_CODES,
   MESSAGE_ROLES,
   RUN_STATUSES,
@@ -158,6 +159,11 @@ function parseRunRecord(json: unknown, idx: number): TaskSnapshot["runs"][number
       Reflect.get(obj, "summary"),
       `runs[${idx}].summary`,
       (value, path) => parseRunSummary(value, path),
+    ),
+    execution_context: assertOptionalNull(
+      Reflect.get(obj, "execution_context"),
+      `runs[${idx}].execution_context`,
+      (value, path) => parseTaskExecutionContext(value, path),
     ),
   };
 }

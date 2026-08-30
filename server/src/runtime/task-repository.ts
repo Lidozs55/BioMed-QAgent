@@ -5,12 +5,14 @@ import path from "node:path";
 import type {
   EventEnvelope,
   EventPayload,
+  TaskExecutionContext,
   TaskPage,
   TaskMode,
   TaskRunAccepted,
   TaskSnapshot,
   TaskSummary,
 } from "@biomed/contracts";
+import { stableTaskExecutionContextJson } from "@biomed/contracts";
 
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
@@ -28,11 +30,15 @@ export interface CreateDurableTaskInput {
   input: string;
   databases: string[];
   mode: TaskMode;
+  /** Frozen evaluation contract admitted with the run; absent/null when none. */
+  executionContext?: TaskExecutionContext | null;
 }
 
 export interface CreateDurableRunInput {
   requestId: string;
   input: string;
+  /** Frozen evaluation contract admitted with the run; absent/null when none. */
+  executionContext?: TaskExecutionContext | null;
 }
 
 export class DurableTaskConflictError extends Error {
@@ -119,6 +125,20 @@ function taskTitle(input: string): string {
 }
 
 /**
+ * Byte-equivalent execution-context comparison for request-id idempotency:
+ * the stable serialization has fixed key order, so equal contexts serialize
+ * identically regardless of replay or wire key order.
+ */
+function sameExecutionContext(
+  left: TaskExecutionContext | null | undefined,
+  right: TaskExecutionContext | null | undefined,
+): boolean {
+  if (left === null || left === undefined) return right === null || right === undefined;
+  if (right === null || right === undefined) return false;
+  return stableTaskExecutionContextJson(left) === stableTaskExecutionContextJson(right);
+}
+
+/**
  * Parse event lines with strict sequence-continuity validation.
  *
  * ``startSequence`` is the sequence of the event immediately BEFORE this text
@@ -188,12 +208,14 @@ export class DurableTaskRepository {
     requireSafeId(input.requestId, "requestId");
     if (input.input.trim() === "") throw new TypeError("input must not be empty");
     requireCleanUtf8(input.input);
+    const executionContext = input.executionContext ?? null;
     const existing = await this.findRequest(input.requestId);
     if (existing !== null) {
       const same = existing.snapshot.task.mode === input.mode &&
         existing.snapshot.task.databases.length === input.databases.length &&
         existing.snapshot.task.databases.every((value, index) => value === input.databases[index]) &&
-        existing.run.input === input.input;
+        existing.run.input === input.input &&
+        sameExecutionContext(existing.run.execution_context, executionContext);
       if (!same) {
         throw new DurableTaskConflictError(
           "request_id_reused",
@@ -223,6 +245,7 @@ export class DurableTaskRepository {
       type: "run_queued",
       request_id: input.requestId,
       input: input.input,
+      execution_context: executionContext,
     });
     return this.accepted(input.requestId, taskId, runId);
   }
@@ -232,6 +255,7 @@ export class DurableTaskRepository {
     requireSafeId(input.requestId, "requestId");
     if (input.input.trim() === "") throw new TypeError("input must not be empty");
     requireCleanUtf8(input.input);
+    const executionContext = input.executionContext ?? null;
     const existing = await this.findRequest(input.requestId);
     if (existing !== null) {
       if (existing.snapshot.task.task_id !== taskId) {
@@ -240,7 +264,10 @@ export class DurableTaskRepository {
           "Request ID belongs to another task",
         );
       }
-      if (existing.run.input !== input.input) {
+      if (
+        existing.run.input !== input.input ||
+        !sameExecutionContext(existing.run.execution_context, executionContext)
+      ) {
         throw new DurableTaskConflictError(
           "request_id_reused",
           "Request ID was reused with different request content",
@@ -262,6 +289,7 @@ export class DurableTaskRepository {
       type: "run_queued",
       request_id: input.requestId,
       input: input.input,
+      execution_context: executionContext,
     });
     return this.accepted(input.requestId, taskId, runId);
   }
