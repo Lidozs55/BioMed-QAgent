@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
 import { APIError } from "@/api/errors";
+import type { QuarantineReceipt } from "@/api/quarantine";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -10,9 +11,9 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const receipt = {
+const receipt: QuarantineReceipt = {
   schema_version: "1.0",
-  submission_id: "submission/1",
+  submission_id: "ua_0123456789abcdef01234567",
   task_id: "task/1",
   name: "notes.csv",
   media_type: "text/csv",
@@ -34,8 +35,8 @@ describe("quarantine API boundary", () => {
 
     await expect(api.fetchQuarantine?.("task/1")).resolves.toEqual([receipt]);
     expect(fetcher).toHaveBeenCalledWith("/api/v1/tasks/task%2F1/quarantine", undefined);
-    expect(api.getQuarantineContentUrl?.("task/1", "submission/1")).toBe(
-      "/api/v1/tasks/task%2F1/quarantine/submission%2F1/content",
+    expect(api.getQuarantineContentUrl?.("task/1", receipt.submission_id)).toBe(
+      `/api/v1/tasks/task%2F1/quarantine/${receipt.submission_id}/content`,
     );
   });
 
@@ -43,39 +44,43 @@ describe("quarantine API boundary", () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(receipt));
     const api = createAPIClient({ fetcher });
 
-    await expect(api.fetchQuarantineReceipt?.("task/1", "submission/1")).resolves.toEqual(receipt);
-    expect(fetcher).toHaveBeenCalledWith("/api/v1/tasks/task%2F1/quarantine/submission%2F1", undefined);
+    await expect(api.fetchQuarantineReceipt?.("task/1", receipt.submission_id)).resolves.toEqual(receipt);
+    expect(fetcher).toHaveBeenCalledWith(
+      `/api/v1/tasks/task%2F1/quarantine/${receipt.submission_id}`,
+      undefined,
+    );
   });
 
-  it("posts JSON bytes with an idempotency request ID", async () => {
+  it("posts metadata and file as multipart form data", async () => {
     const fetcher = vi.fn<FetchLike>().mockResolvedValue(jsonResponse(receipt, 201));
-    const api = createAPIClient({
-      fetcher,
-      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-    });
+    const api = createAPIClient({ fetcher });
+    const file = new File(["x"], "notes.csv", { type: "text/csv" });
 
     await expect(api.submitQuarantine?.("task/1", {
-      name: "notes.csv",
-      media_type: "text/csv",
+      file,
+      source_note: "manual export",
       coverage_status: "unknown",
       covered_scope: [],
       missing_scope: [],
-      bytes_base64: "eA==",
     })).resolves.toEqual(receipt);
 
-    expect(fetcher).toHaveBeenCalledWith("/api/v1/tasks/task%2F1/quarantine", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "notes.csv",
-        media_type: "text/csv",
-        coverage_status: "unknown",
-        covered_scope: [],
-        missing_scope: [],
-        bytes_base64: "eA==",
-        idempotency_key: "req_12345678-1234-1234-1234-123456789abc",
-      }),
+    const call = fetcher.mock.calls[0];
+    expect(call?.[0]).toBe("/api/v1/tasks/task%2F1/quarantine");
+    const init = call?.[1];
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toBeUndefined();
+    expect(init?.body).toBeInstanceOf(FormData);
+    const form = init?.body as FormData;
+    expect(JSON.parse(String(form.get("metadata")))).toEqual({
+      schema_version: "1.0",
+      name: "notes.csv",
+      media_type: "text/csv",
+      source_note: "manual export",
+      coverage_status: "unknown",
+      covered_scope: [],
+      missing_scope: [],
     });
+    expect(form.get("file")).toBe(file);
   });
 
   it("rejects a receipt that claims authority or has a malformed digest", async () => {

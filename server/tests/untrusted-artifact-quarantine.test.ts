@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,12 +13,21 @@ import type {
   BioMedAgentEvent,
   BioMedAgentSession,
 } from "../src/agent/contracts.js";
-import {
-  createDurableAgentRuntime,
-} from "../src/runtime/durable-agent-runtime.js";
+import { createDurableAgentRuntime } from "../src/runtime/durable-agent-runtime.js";
 
 const servers: Server[] = [];
 const roots: string[] = [];
+
+const PAYLOAD = "gene,value\nTP53,1\n";
+const VALID_METADATA = {
+  schema_version: "1.0",
+  name: "paper_supplement.csv",
+  media_type: "text/csv",
+  source_note: null,
+  coverage_status: "partial",
+  covered_scope: ["gene_expression"],
+  missing_scope: ["variant_level"],
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -110,38 +119,31 @@ async function fixture(): Promise<RuntimeFixture> {
   };
 }
 
-function submissionBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    name: "paper_supplement.csv",
-    media_type: "text/csv",
-    source_note: null,
-    coverage_status: "partial",
-    covered_scope: ["gene_expression"],
-    missing_scope: ["variant_level"],
-    bytes_base64: Buffer.from("gene,value\nTP53,1\n", "utf8").toString("base64"),
-    idempotency_key: null,
-  };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value === undefined) delete body[key];
-    else body[key] = value;
-  }
-  return body;
+function submissionForm(
+  metadata: Record<string, unknown> = VALID_METADATA,
+  payload = PAYLOAD,
+): FormData {
+  const form = new FormData();
+  form.set("metadata", JSON.stringify(metadata));
+  form.set("file", new File([payload], "upload.csv", { type: "text/csv" }));
+  return form;
 }
 
-async function submit(base: string, taskId: string, body: unknown): Promise<Response> {
+function submit(base: string, taskId: string, form = submissionForm()): Promise<Response> {
   return fetch(`${base}/api/v1/tasks/${taskId}/quarantine`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: form,
   });
 }
 
 describe("untrusted artifact quarantine routes", () => {
-  test("stores a submission, serves receipt and bytes, and never enters the formal chain", async () => {
+  test("stores, lists, and downloads a submission without entering the formal chain", async () => {
     const fx = await fixture();
     await fx.close();
 
-    const submitted = await submit(fx.base, fx.taskId, submissionBody());
+    const taskRoot = path.join(fx.tasksRoot, fx.taskId);
+    const eventsBefore = await readFile(path.join(taskRoot, "events.jsonl"), "utf8");
+    const submitted = await submit(fx.base, fx.taskId);
     expect(submitted.status).toBe(201);
     const receipt = await submitted.json() as {
       submission_id: string;
@@ -159,39 +161,38 @@ describe("untrusted artifact quarantine routes", () => {
       schema_version: string;
       source_note: string | null;
     };
-    const payload = Buffer.from("gene,value\nTP53,1\n", "utf8");
-    const expectedSha256 = createHash("sha256").update(payload).digest("hex");
-    expect(receipt.authoritative).toBe(false);
-    expect(receipt.trust).toBe("untrusted");
-    expect(receipt.task_id).toBe(fx.taskId);
-    expect(receipt.size_bytes).toBe(payload.length);
-    expect(receipt.sha256).toBe(expectedSha256);
-    expect(receipt.schema_version).toBe("1.0");
-    expect(receipt.coverage_status).toBe("partial");
-    expect(receipt.covered_scope).toEqual(["gene_expression"]);
-    expect(receipt.missing_scope).toEqual(["variant_level"]);
-    expect(receipt.source_note).toBeNull();
+    const payload = Buffer.from(PAYLOAD, "utf8");
+    expect(receipt).toMatchObject({
+      task_id: fx.taskId,
+      authoritative: false,
+      trust: "untrusted",
+      name: "paper_supplement.csv",
+      media_type: "text/csv",
+      schema_version: "1.0",
+      coverage_status: "partial",
+      covered_scope: ["gene_expression"],
+      missing_scope: ["variant_level"],
+      source_note: null,
+      size_bytes: payload.length,
+      sha256: createHash("sha256").update(payload).digest("hex"),
+    });
     expect(receipt.submission_id).toMatch(/^ua_[0-9a-f]{24}$/);
-    expect(receipt.submitted_at).toBeTruthy();
-
-    // Storage lives under <taskRoot>/quarantine/<submission_id>/ with
-    // receipt.json + artifact.bin (+ key.json only when a key was given).
-    const submissionDir = path.join(fx.tasksRoot, fx.taskId, "quarantine", receipt.submission_id);
-    const files = (await readdir(submissionDir)).sort();
-    expect(files).toEqual(["artifact.bin", "receipt.json"]);
-    expect(await readFile(path.join(submissionDir, "artifact.bin"))).toEqual(payload);
     expect(new Date(receipt.submitted_at).toString()).not.toBe("Invalid Date");
 
-    // Listing returns the receipt; single receipt endpoint returns it too.
+    const submissionDir = path.join(taskRoot, "quarantine", receipt.submission_id);
+    expect((await readdir(submissionDir)).sort()).toEqual(["artifact.bin", "receipt.json"]);
+    expect(await readFile(path.join(submissionDir, "artifact.bin"))).toEqual(payload);
+
     const listing = await fetch(`${fx.base}/api/v1/tasks/${fx.taskId}/quarantine`);
     expect(listing.status).toBe(200);
-    const listingBody = await listing.json() as { quarantine: Array<{ submission_id: string; authoritative: boolean; trust: string }> };
-    expect(listingBody.quarantine).toHaveLength(1);
-    expect(listingBody.quarantine[0]).toMatchObject({
+    const listingBody = await listing.json() as {
+      items: Array<{ submission_id: string; authoritative: boolean; trust: string }>;
+    };
+    expect(listingBody.items).toEqual([expect.objectContaining({
       submission_id: receipt.submission_id,
       authoritative: false,
       trust: "untrusted",
-    });
+    })]);
 
     const single = await fetch(
       `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/${receipt.submission_id}`,
@@ -199,7 +200,6 @@ describe("untrusted artifact quarantine routes", () => {
     expect(single.status).toBe(200);
     expect(await single.json()).toMatchObject({ submission_id: receipt.submission_id });
 
-    // Content endpoint re-verifies digest + size before serving bytes.
     const content = await fetch(
       `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/${receipt.submission_id}/content`,
     );
@@ -208,100 +208,87 @@ describe("untrusted artifact quarantine routes", () => {
     expect(content.headers.get("content-disposition")).toContain("paper_supplement.csv");
     expect(Buffer.from(await content.arrayBuffer())).toEqual(payload);
 
-    // No formal-chain writes: no publish/, no source_assets, no extra events.
-    const taskRoot = path.join(fx.tasksRoot, fx.taskId);
+    expect(await readFile(path.join(taskRoot, "events.jsonl"), "utf8")).toBe(eventsBefore);
     await expect(stat(path.join(taskRoot, "publish"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(path.join(taskRoot, "dataset_runs"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(stat(path.join(taskRoot, "source_assets"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  test("rejects unknown task, malformed input, empty bytes, and bad ids", async () => {
+  test("rejects unknown tasks, malformed multipart input, empty files, and bad ids", async () => {
     const fx = await fixture();
     await fx.close();
 
-    expect((await submit(fx.base, "task_ts_does_not_exist", submissionBody())).status).toBe(404);
-    expect((await submit(fx.base, fx.taskId, { name: "only-name" })).status).toBe(422);
-    expect((await submit(fx.base, fx.taskId, submissionBody({ bytes_base64: "" }))).status).toBe(422);
-    expect(
-      (await submit(fx.base, fx.taskId, submissionBody({ bytes_base64: "!!!!" }))).status,
-    ).toBe(422);
-    expect(
-      (await submit(fx.base, fx.taskId, submissionBody({ coverage_status: "verified" }))).status,
-    ).toBe(422);
-    // Note: any parser-valid base64 decodes to ≥1 byte, so the store-level
-    // zero-byte guard is defense in depth; the wire-level empty rejection is
-    // the "" case asserted above.
+    expect((await submit(fx.base, "task_ts_does_not_exist")).status).toBe(404);
+    const jsonRequest = await fetch(`${fx.base}/api/v1/tasks/${fx.taskId}/quarantine`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(jsonRequest.status).toBe(422);
 
-    const listingUnknown = await fetch(`${fx.base}/api/v1/tasks/task_ts_none/quarantine`);
-    expect(listingUnknown.status).toBe(404);
-    const getUnknown = await fetch(`${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/ua_deadbeef`);
-    expect(getUnknown.status).toBe(404);
-    const contentUnknown = await fetch(
+    const missingMetadata = new FormData();
+    missingMetadata.set("file", new File([PAYLOAD], "upload.csv"));
+    expect((await submit(fx.base, fx.taskId, missingMetadata)).status).toBe(422);
+
+    const missingFile = new FormData();
+    missingFile.set("metadata", JSON.stringify(VALID_METADATA));
+    expect((await submit(fx.base, fx.taskId, missingFile)).status).toBe(422);
+
+    expect((await submit(fx.base, fx.taskId, submissionForm(VALID_METADATA, ""))).status).toBe(422);
+    expect((await submit(fx.base, fx.taskId, submissionForm({
+      ...VALID_METADATA,
+      coverage_status: "verified",
+    }))).status).toBe(422);
+    expect((await submit(fx.base, fx.taskId, submissionForm({
+      ...VALID_METADATA,
+      unexpected: true,
+    }))).status).toBe(422);
+
+    expect((await fetch(`${fx.base}/api/v1/tasks/task_ts_none/quarantine`)).status).toBe(404);
+    expect((await fetch(
+      `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/ua_deadbeef`,
+    )).status).toBe(404);
+    expect((await fetch(
       `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/ua_deadbeef/content`,
-    );
-    expect(contentUnknown.status).toBe(404);
-    // Path-like submission ids never resolve.
-    const traversal = await fetch(
+    )).status).toBe(404);
+    expect((await fetch(
       `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/..%2F..%2Fstate/content`,
-    );
-    expect(traversal.status).toBe(404);
+    )).status).toBe(404);
   });
 
-  test("idempotency key replays the same receipt and conflicts on digest mismatch", async () => {
+  test("creates independent receipts and rejects tampered bytes on download", async () => {
     const fx = await fixture();
     await fx.close();
 
-    const first = await submit(
-      fx.base,
-      fx.taskId,
-      submissionBody({ idempotency_key: "review-round-1" }),
-    );
+    const first = await submit(fx.base, fx.taskId);
+    const second = await submit(fx.base, fx.taskId);
     expect(first.status).toBe(201);
-    const firstReceipt = await first.json() as { submission_id: string; sha256: string };
-
-    // Same key + same digest → same receipt returned, no new submission.
-    const replay = await submit(
-      fx.base,
-      fx.taskId,
-      submissionBody({ idempotency_key: "review-round-1" }),
-    );
-    expect(replay.status).toBe(201);
-    const replayReceipt = await replay.json() as { submission_id: string };
-    expect(replayReceipt.submission_id).toBe(firstReceipt.submission_id);
+    expect(second.status).toBe(201);
+    const firstReceipt = await first.json() as { submission_id: string };
+    const secondReceipt = await second.json() as { submission_id: string };
+    expect(secondReceipt.submission_id).not.toBe(firstReceipt.submission_id);
 
     const listing = await fetch(`${fx.base}/api/v1/tasks/${fx.taskId}/quarantine`);
-    expect((await listing.json() as { quarantine: unknown[] }).quarantine).toHaveLength(1);
+    expect((await listing.json() as { items: unknown[] }).items).toHaveLength(2);
 
-    // Same key + different digest → 409 conflict.
-    const conflict = await submit(
-      fx.base,
+    await writeFile(path.join(
+      fx.tasksRoot,
       fx.taskId,
-      submissionBody({
-        idempotency_key: "review-round-1",
-        bytes_base64: Buffer.from("different bytes", "utf8").toString("base64"),
-      }),
+      "quarantine",
+      firstReceipt.submission_id,
+      "artifact.bin",
+    ), "tampered");
+    const content = await fetch(
+      `${fx.base}/api/v1/tasks/${fx.taskId}/quarantine/${firstReceipt.submission_id}/content`,
     );
-    expect(conflict.status).toBe(409);
-
-    // A different key stores a new submission even for the same digest.
-    const secondKey = await submit(
-      fx.base,
-      fx.taskId,
-      submissionBody({ idempotency_key: "review-round-2" }),
-    );
-    expect(secondKey.status).toBe(201);
-    const secondReceipt = await secondKey.json() as { submission_id: string };
-    expect(secondReceipt.submission_id).not.toBe(firstReceipt.submission_id);
+    expect(content.status).toBe(409);
   });
 
   test("deleting the task removes the quarantine directory with the task root", async () => {
     const fx = await fixture();
     await fx.close();
 
-    const submitted = await submit(fx.base, fx.taskId, submissionBody());
-    expect(submitted.status).toBe(201);
-    await submitted.json() as unknown;
-
-    // The run must be terminal before deletion is allowed.
+    expect((await submit(fx.base, fx.taskId)).status).toBe(201);
     fx.adapter.gates[0]?.resolve();
     await expect.poll(async () => {
       const snapshot = await fetch(`${fx.base}/api/v1/tasks/${fx.taskId}`);

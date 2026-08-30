@@ -22,10 +22,9 @@ import {
   APIError,
   parseJsonTextStrict,
   parseResumeHILInput,
+  parseUntrustedArtifactMetadata,
   parseUntrustedArtifactReceipt,
-  parseUntrustedArtifactSubmissionInput,
   type UntrustedArtifactReceipt,
-  type UntrustedArtifactSubmissionInput,
 } from "@biomed/contracts";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
@@ -54,7 +53,6 @@ import {
   getUntrustedArtifactContent,
   listUntrustedArtifacts,
   storeUntrustedArtifact,
-  UntrustedArtifactConflictError,
 } from "./untrusted-artifact-store.js";
 import {
   DurableTaskConflictError,
@@ -324,13 +322,11 @@ function isDynamicPublicationAcceptance(
 
 /** GET quarantine listing response body (receipts are not formal artifacts). */
 interface QuarantineListing {
-  quarantine: UntrustedArtifactReceipt[];
+  items: UntrustedArtifactReceipt[];
 }
 
 function quarantineListing(receipts: UntrustedArtifactReceipt[]): QuarantineListing {
-  // Round-trip through the exact-keys wire parser so served receipts share
-  // the persisted-receipt guarantee (authoritative:false, trust:"untrusted").
-  return { quarantine: receipts.map((receipt) => parseUntrustedArtifactReceipt(receipt)) };
+  return { items: receipts.map((receipt) => parseUntrustedArtifactReceipt(receipt)) };
 }
 
 function sanitizeQuarantineFilename(value: string): string {
@@ -914,18 +910,33 @@ export async function createDurableAgentRuntime(
    * events.jsonl append, no formal projection, no source_assets write.
    */
   async function submitQuarantineArtifact(taskId: string, request: IncomingMessage): Promise<unknown> {
-    const snapshot = await repository.getSnapshot(taskId);
-    if (snapshot === null) throw new ReferenceError("Task not found");
-    let input: UntrustedArtifactSubmissionInput;
+    if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
+    const contentType = request.headers["content-type"];
+    if (contentType === undefined || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+      throw new TypeError("Quarantine submission requires multipart/form-data");
+    }
+    const form = await new Response(Readable.toWeb(request), {
+      headers: { "content-type": contentType },
+    }).formData();
+    const metadataValue = form.get("metadata");
+    const fileValue = form.get("file");
+    if (typeof metadataValue !== "string") throw new TypeError("metadata is required");
+    if (fileValue === null || typeof fileValue === "string") throw new TypeError("file is required");
+    if (fileValue.size === 0) throw new TypeError("Submitted file is empty");
+    if (fileValue.size > MAX_IMPORT_FILE_BYTES) throw new RangeError("Submitted file exceeds limit");
+    let metadata;
     try {
-      input = parseUntrustedArtifactSubmissionInput(await readJsonBody(request));
+      metadata = parseUntrustedArtifactMetadata(parseJsonTextStrict(metadataValue));
     } catch (error) {
-      // Contract APIError is a wire-level rejection; map it onto the same
-      // 422 convention as every other malformed runtime body (resumeRunOnce).
       if (error instanceof APIError) throw new TypeError(error.message, { cause: error });
       throw error;
     }
-    return storeUntrustedArtifact(pathForTask(options.tasksRoot, taskId), taskId, input);
+    return storeUntrustedArtifact(
+      pathForTask(options.tasksRoot, taskId),
+      taskId,
+      metadata,
+      Buffer.from(await fileValue.arrayBuffer()),
+    );
   }
 
   async function listQuarantineArtifacts(taskId: string): Promise<QuarantineListing> {
@@ -947,6 +958,9 @@ export async function createDurableAgentRuntime(
     if (await repository.getSnapshot(taskId) === null) throw new ReferenceError("Task not found");
     const stored = await getUntrustedArtifactContent(pathForTask(options.tasksRoot, taskId), submissionId);
     if (stored === null) throw new ReferenceError("Quarantine submission not found");
+    if (stored.bytes.length !== stored.receipt.size_bytes || sha256Bytes(stored.bytes) !== stored.receipt.sha256) {
+      throw new ArtifactIntegrityError("Quarantine artifact bytes do not match its receipt");
+    }
     return stored;
   }
 
@@ -1672,8 +1686,6 @@ export async function createDurableAgentRuntime(
       sendJson(response, 404, { detail: "Not Found" });
     } catch (error) {
       if (error instanceof DurableTaskConflictError || error instanceof HILConflictError) {
-        sendJson(response, 409, { detail: error.message });
-      } else if (error instanceof UntrustedArtifactConflictError) {
         sendJson(response, 409, { detail: error.message });
       } else if (error instanceof ArtifactIntegrityError) {
         sendJson(response, 409, { detail: error.message });

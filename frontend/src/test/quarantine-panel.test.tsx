@@ -13,7 +13,7 @@ vi.mock("@/hooks/useAPI", async (importOriginal) => {
 
 const receipt: QuarantineReceipt = {
   schema_version: "1.0",
-  submission_id: "submission_1",
+  submission_id: "ua_0123456789abcdef01234567",
   task_id: "task_1",
   name: "manual.csv",
   media_type: "text/csv",
@@ -53,11 +53,9 @@ describe("QuarantinePanel", () => {
   it("uploads selected file fields and refreshes the list", async () => {
     const fetcher = vi.fn<FetchLike>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] })))
-      .mockResolvedValueOnce(new Response(JSON.stringify(receipt)));
-    const api = createAPIClient({
-      fetcher,
-      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
-    });
+      .mockResolvedValueOnce(new Response(JSON.stringify(receipt)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [receipt] })));
+    const api = createAPIClient({ fetcher });
     mockedUseAPI.mockReturnValue(api);
 
     const { container } = render(<QuarantinePanel taskId="task_1" />);
@@ -66,19 +64,22 @@ describe("QuarantinePanel", () => {
     fireEvent.change(fileInput, { target: { files: [new File(["x"], "manual.csv", { type: "text/csv" })] } });
     fireEvent.click(await screen.findByRole("button", { name: "提交到隔离区" }));
 
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/v1/tasks/task_1/quarantine", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "manual.csv",
-        media_type: "text/csv",
-        coverage_status: "unknown",
-        covered_scope: [],
-        missing_scope: [],
-        bytes_base64: "eA==",
-        idempotency_key: "req_12345678-1234-1234-1234-123456789abc",
-      }),
-    }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    const uploadCall = fetcher.mock.calls[1];
+    expect(uploadCall?.[0]).toBe("/api/v1/tasks/task_1/quarantine");
+    expect(uploadCall?.[1]?.method).toBe("POST");
+    expect(uploadCall?.[1]?.headers).toBeUndefined();
+    expect(uploadCall?.[1]?.body).toBeInstanceOf(FormData);
+    const form = uploadCall?.[1]?.body as FormData;
+    expect(JSON.parse(String(form.get("metadata")))).toEqual({
+      schema_version: "1.0",
+      name: "manual.csv",
+      media_type: "text/csv",
+      source_note: null,
+      coverage_status: "unknown",
+      covered_scope: [],
+      missing_scope: [],
+    });
+    expect(form.get("file")).toBeInstanceOf(File);
   });
 });

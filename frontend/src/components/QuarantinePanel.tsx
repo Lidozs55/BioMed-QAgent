@@ -29,16 +29,6 @@ function splitScope(value: string): string[] {
   return value.split(/[\n,]/u).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 }
 
-async function fileToBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
-
 function formatScope(scope: readonly string[]): string {
   return scope.length === 0 ? "无" : scope.join("、");
 }
@@ -89,13 +79,11 @@ export default function QuarantinePanel({ taskId }: QuarantinePanelProps) {
     setSubmitError(null);
     try {
       await api.submitQuarantine(taskId, {
-        name: file.name,
-        media_type: file.type || "application/octet-stream",
+        file,
         ...(sourceNote.trim().length > 0 ? { source_note: sourceNote.trim() } : {}),
         coverage_status: coverageStatus,
         covered_scope: splitScope(coveredScope),
         missing_scope: splitScope(missingScope),
-        bytes_base64: await fileToBase64(file),
       });
       setFile(null);
       setSourceNote("");
@@ -134,7 +122,7 @@ export default function QuarantinePanel({ taskId }: QuarantinePanelProps) {
                   type="file"
                   onChange={(event) => setFile(event.target.files?.[0] ?? null)}
                 />
-                <FieldDescription>文件内容会以 Base64 JSON 上传到该任务的隔离区。</FieldDescription>
+                <FieldDescription>文件会保存到该任务的本地隔离区，不进入正式发布。</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor={`quarantine-note-${taskId}`}>来源备注（可选）</FieldLabel>
