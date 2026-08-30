@@ -254,21 +254,22 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                     const Icon = item.icon;
                     const active = activeSection === item.id;
                     return (
-                      <button
+                      <Button
                         key={item.id}
                         type="button"
+                        variant="ghost"
                         aria-current={active ? "page" : undefined}
                         onClick={() => navigate(item.id)}
                         className={cn(
-                          "flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                          "h-8 w-full justify-start gap-2.5 rounded-lg px-2.5 text-sm font-normal",
                           active
-                            ? "bg-primary/10 font-medium text-primary"
+                            ? "bg-primary/10 font-medium text-primary hover:bg-primary/10"
                             : "text-foreground hover:bg-muted",
                         )}
                       >
-                        <Icon className="size-4 shrink-0" />
+                        <Icon aria-hidden="true" />
                         {item.label}
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>
@@ -284,18 +285,22 @@ export function SettingsPage({ api, onClose, onExportCache }: SettingsPageProps)
                 const Icon = item.icon;
                 const active = activeSection === item.id;
                 return (
-                  <button
+                  <Button
                     key={item.id}
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => navigate(item.id)}
                     className={cn(
-                      "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium",
-                      active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                      "h-7 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs font-medium",
+                      active
+                        ? "bg-primary/10 text-primary hover:bg-primary/10"
+                        : "text-muted-foreground hover:bg-muted",
                     )}
                   >
-                    <Icon className="size-3.5" />
+                    <Icon aria-hidden="true" />
                     {item.label}
-                  </button>
+                  </Button>
                 );
               }),
             )}

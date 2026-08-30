@@ -74,9 +74,11 @@ export function ContextUsageInline({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <button
+          <Button
             type="button"
-            className="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-muted/60"
+            variant="ghost"
+            size="xs"
+            className="h-auto cursor-pointer gap-1 rounded px-1 py-0.5 font-normal hover:bg-muted/60"
             aria-label={`上下文窗口已使用 ${pct}%${source === "ui_estimate" ? "（估算）" : "（运行时）"}`}
           >
             {/* Mini progress bar */}
@@ -89,7 +91,7 @@ export function ContextUsageInline({
             <span className={cn("font-mono text-[9px] tabular-nums", textColor(pct))}>
               {pct}%
             </span>
-          </button>
+          </Button>
         }
       />
       <PopoverContent align="start" side="top" className="w-80">

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
 
 import { getSettingsNavGroup } from "@/components/settings/settingsNavConfig";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -90,17 +91,19 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
           className="h-8 pr-7 pl-8"
         />
         {query && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             aria-label="清空搜索"
-            className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             onClick={() => {
               setQuery("");
               inputRef.current?.focus();
             }}
           >
-            <XIcon className="size-3.5" />
-          </button>
+            <XIcon aria-hidden="true" />
+          </Button>
         )}
       </div>
       <PopoverContent
@@ -118,13 +121,16 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
                 const group = getSettingsNavGroup(entry.section);
                 return (
                   <li key={entry.id}>
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
                       role="option"
                       aria-selected={index === activeIndex}
                       className={cn(
-                        "flex w-full items-baseline justify-between gap-3 rounded-md px-2.5 py-2 text-left text-xs",
-                        index === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-muted",
+                        "h-auto min-h-0 w-full items-baseline justify-between rounded-md px-2.5 py-2 text-left text-xs font-normal",
+                        index === activeIndex
+                          ? "bg-accent text-accent-foreground hover:bg-accent"
+                          : "hover:bg-muted",
                       )}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectResult(entry)}
@@ -133,7 +139,7 @@ export function SettingsSearch({ onNavigate, className }: SettingsSearchProps) {
                       <span className="shrink-0 text-muted-foreground">
                         {group?.label ?? entry.section} › {entry.section}
                       </span>
-                    </button>
+                    </Button>
                   </li>
                 );
               })}
