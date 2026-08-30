@@ -83,6 +83,29 @@
 - **正样本（保留进教学素材）**：execute 一次失败后自纠参数重试成功；124 样本组标签拒绝用模型知识填充（宁 NO_DATA）；拒绝 provisional CSV；请求清单可直接执行（含安装命令与授权选项）；发布后收敛比 gold1 快 2.2 倍（267s vs 592s）。
 - 基础设施观察：supervisor 第 3 次死于 `operation_progress` 事件风暴时段的 Host 瞬时 HTTP 500（journal 停在 seq≤200）；本 run 起改用"人工监控+durable 归档"，证据完整性不再依赖 supervisor 存活。
 
+## gold3 @ qwen3.8-flash（2026-08-30，main@2c511efc5080，task_ts_307966b1-4398-4600-94c8-6c6886290b39）
+
+> 身份断言通过。终态 **succeeded_publication（1/5 交付）**：`pub_egfr_uniprot_target_cefd96a001558066`（target_evidence 族，UniProt P00533 蛋白身份 + 3 supporting 表，7 artifacts）。题面五类数据：UniProt ✔ 正式；ClinVar 变异 ✘；COSMIC ✘（源边界，合理）；临床试验 ✘；PDB 结构 ✘；药物信息 ✘。
+> 全程仅 137s / 20 calls / 峰值上下文 44k——三案最省，但**省的原因是提前收手**（见 E3/E4），不是高效。
+>
+> | 阶段 | 调用 | input | output | cache_read | 总计费 token | 墙钟 |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 发布前 | 13 | 53,555 | 3,783 | 427,008 | 484,346 | 95s |
+> | 发布后 | 7 | 23,798 | 1,893 | 273,408 | 299,099 | 36s |
+> | 合计 | 20 | 77,353 | 5,676 | 700,416 | **783,445** | 137s |
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| E1 | **ClinVar 变异行结构性不可闭合**：`clinvar.files.v1` 固定 provider 要求逐条 variant UID（VCV/SCV）绑定，gene 级工具只回计数；会话内**无变异 accession 发现通道** → 模型拒绝臆造 accession，整类报 blocker（判断正确，路是死的） | 产品（工具链缺口） | 终答 blocker 表行 2；tools 计数无任何 clinvar 发现调用 | 补 ClinVar esearch/efetch 受控发现工具（gene→VCV 列表），同 GEO esearch 家族 |
+| E2 | **临床试验 NCT 发现通道缺失**：`clinicaltrials.files.v1` 只接受具体 NCT；无 NCT 检索工具；唯一替代探测 navigate_page(clinicaltrials API) → 400（Chromium 未装，D1-④ 环境复现） | 产品 + 环境 | seq 187-190；终答 blocker 表行 4 | 补 controlled trial 检索工具（query→NCT 列表）或装浏览器后教走 API 页 |
+| E3 | **已激活的发现工具零使用（本轮最重行为卡点）**：`search_uniprot`/`search_chembl`/`search_pdb`/`lookup_clinvar_counts` 全部激活（seq 27），实际调用数 = 0。其中 PDB 结构表本可自解：search_pdb 枚举 EGFR-TKI 复合物 → 选 top-8/15 → 动态 protein_structure 构建——模型却把"需要 PDB 子集"作为"范围决策"上交用户；正文写"Let me verify controlled IDs"之后并未调用任何 lookup | prompt + 模型 | tools 计数 vs seq 27 激活清单；终答求助清单 1/2/4 条 | 提示词规则：**把"需要用户提供 X"写进终答前，必须先穷尽已激活的对应发现工具并在正文附调用证据** |
+| E4 | **动态路线 0 调用复现（B2 变种，包装更精致）**：PDB（动态族可用）与 ChEMBL 药物信息（bioactivity family 可建，CHEMBL203 现成）均被声明"须单独 build/超合理轮次"而未尝试一次 `prepare_dynamic_family_publication`；模型特意注明"不把它包装成 NO_DATA"——诚实但仍是零尝试 | prompt | 终答"本轮没有任何一次 prepare_dynamic 调用"自述；20 次调用时间线 | 同 B2 修法（blocked/上交前至少一次实际 preflight/构建尝试） |
+| E5 | **执行结果不回传产物 asset_id → 模型无法字节级自检自己刚发布的表**：execute 成功只返回 publication/manifest id；模型试猜 `asset_<16hex>`（manifest 后缀）被 schema 拒，遂如实声明"不能声称逐行核验"（对照 gold1-r3 靠 workspace_read 绕过——本 run 连 workspace 路径都没探）。观察缺口家族第 4 个变体（B1/C1/D1/D3 同族） | 产品 | seq 200-202；终答"未能读取产物字节"段 | execute/publication detail 返回 artifact asset_ids；或 publication artifacts 提供 preview 通道 |
+| E6 | COSMIC 受保护源（登录/API key）按边界规则拒绝访问 | 非损失（合理阻断） | 终答 blocker 表行 3 | 无需修；如纳入标准集需授权导出 |
+
+- **正样本**：6 次 execute 失败每次只修一个具体输入事实（"Fixing only that fact"，对照 gold1-r1 的乱猜参数是质变）；拒绝臆造 VCV/NCT/asset；终答逐 blocker 标注路由判定+归因+求助清单，且明确区分"失败事实 vs 范围决策"。
+- 行为形态变化（三案对比）：gold1-r1=乱撞墙后幻觉时限放弃；gold1-r3=成功但发布后无界复核（79% token）；gold3=**未撞墙但提前收手**（工具在手不用）。C2 与 E3/E4 是两个方向的极端，提示词需要同时含"发布后收敛界"与"上交前穷尽界"。
+
 ## gold7–gold10 @ 复跑（2026-08-29 之后，待组员执行）
 
 （空。每完成一个案例，按模板追加；同步把 `closure.json` 的 `run_usage` 抄入本表上方案例头部，便于比较提示词/路线变化对 token 的影响。）
