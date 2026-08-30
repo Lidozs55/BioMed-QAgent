@@ -10,6 +10,14 @@
 - **现象：** 快速点击主题切换或其他按钮时，可能出现一次点击触发两次或未触发。
 - **下一步：** 用 pointer/click 事件测试确定是否为重复 handler、事件穿透或状态节流问题；确认后先提交失败测试。
 
+### 历史超过 10 条后"加载更多"请求 404（任务分页 cursor 未实现）
+
+- **状态：** 已定位、未修复（2026-08-30 随历史列表性能优化排查发现）；自 durable runtime 首个提交（`fa0e57d4`）起即如此，非回归。
+- **现象：** `GET /api/v1/tasks` 带 `cursor` 参数时 `durable-agent-runtime.handle` 显式放行（`return false`），hostApi 各子 API 也没有该路由，请求最终落到 404 "Not Found"。前端 `loadMoreTasks`（侧边栏滚动到底触发）收到 404 后抛错并 toast「历史任务加载失败」。`repository.listTasks` 的 `next_cursor` 语义是"最后一条包含项的 task_id"，服务端从未消费过该参数。
+- **影响：** 历史任务 ≤10 条时 `next_cursor` 恒为 null，用户无感知；超过 10 条后侧边栏只能显示前 10 条历史，无法加载更多。
+- **最小复现：** 制造 11 个已完成任务，打开主界面把侧边栏滚到底部；或直接 `curl "http://<host>/api/v1/tasks?limit=10&cursor=task_ts_x"`，得到 404。
+- **下一步：** 在 `GET /api/v1/tasks` 路由消费 `cursor`，按"排他续读"（`findIndex(cursor) + 1`）过滤 history 后再切片，配分页契约测试；前端无需改动。
+
 ## 数据族与 Gold 评测
 
 ### gold7 trait association 请求没有形成正式 publication

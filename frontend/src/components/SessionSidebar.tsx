@@ -4,7 +4,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
@@ -62,7 +62,12 @@ interface SessionSidebarProps {
   onDeleteTask?: (taskId: string) => Promise<void>;
 }
 
-function TaskRow({
+/**
+ * Memoized because ``tasksById`` in the agent store changes on every runtime
+ * event (including assistant stream frames); without memoization every event
+ * re-rendered every history row, which is noticeable with a long sidebar.
+ */
+const TaskRow = memo(function TaskRow({
   task,
   selected,
   pendingCancel,
@@ -73,9 +78,9 @@ function TaskRow({
   task: TaskProjection;
   selected: boolean;
   pendingCancel: boolean;
-  onSelect: () => void;
-  onCancel: () => void;
-  onDelete: () => void;
+  onSelect: (taskId: string) => void;
+  onCancel: (task: TaskProjection) => void;
+  onDelete: (taskId: string) => void;
 }) {
   const { summary } = task;
   const status = TASK_STATUS_META[summary.status];
@@ -94,7 +99,7 @@ function TaskRow({
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={selected}
-        onClick={onSelect}
+        onClick={() => onSelect(task.summary.task_id)}
         tooltip={summary.title}
         aria-label={`${summary.title} ${status.label}`}
         className={
@@ -120,7 +125,7 @@ function TaskRow({
           }
           title={cancelling ? "正在取消" : "取消任务"}
           disabled={cancelling}
-          onClick={onCancel}
+          onClick={() => onCancel(task)}
         >
           {cancelling ? <Spinner /> : <XIcon />}
         </SidebarMenuAction>
@@ -130,14 +135,14 @@ function TaskRow({
           showOnHover
           aria-label={`删除 ${summary.title}`}
           title="删除任务"
-          onClick={onDelete}
+          onClick={() => onDelete(task.summary.task_id)}
         >
           <TrashIcon />
         </SidebarMenuAction>
       )}
     </SidebarMenuItem>
   );
-}
+});
 
 export function SessionSidebar({
   onNewDraft,
@@ -174,14 +179,22 @@ export function SessionSidebar({
     if (isMobile) setOpenMobile(false);
   }, [isMobile, setOpenMobile]);
 
-  const selectTask = async (taskId: string) => {
+  const selectTask = useCallback(async (taskId: string) => {
     closeMobile();
     try {
       await onSelectTask(taskId);
     } catch (error) {
       toast.error("打开任务失败", { description: errorMessage(error) });
     }
-  };
+  }, [closeMobile, onSelectTask]);
+
+  const handleSelectTask = useCallback((taskId: string) => {
+    void selectTask(taskId);
+  }, [selectTask]);
+
+  const handleDeleteTask = useCallback((taskId: string) => {
+    setDeleteTargetId(taskId);
+  }, []);
 
   const showNewDraft = useCallback(() => {
     onNewDraft();
@@ -224,7 +237,7 @@ export function SessionSidebar({
     }
   };
 
-  const cancelTask = async (task: TaskProjection) => {
+  const cancelTask = useCallback(async (task: TaskProjection) => {
     const runId = task.summary.active_run_id;
     if (runId === null || onCancelRun === undefined) return;
     setPendingCancels((current) => new Set(current).add(task.summary.task_id));
@@ -239,7 +252,11 @@ export function SessionSidebar({
         return next;
       });
     }
-  };
+  }, [onCancelRun]);
+
+  const handleCancelTask = useCallback((task: TaskProjection) => {
+    void cancelTask(task);
+  }, [cancelTask]);
 
   const confirmDelete = async () => {
     if (deleteTargetId === null || onDeleteTask === undefined || deleting) return;
@@ -262,9 +279,9 @@ export function SessionSidebar({
           task={task}
           selected={task.summary.task_id === activeTaskId}
           pendingCancel={pendingCancels.has(task.summary.task_id)}
-          onSelect={() => void selectTask(task.summary.task_id)}
-          onCancel={() => void cancelTask(task)}
-          onDelete={() => setDeleteTargetId(task.summary.task_id)}
+          onSelect={handleSelectTask}
+          onCancel={handleCancelTask}
+          onDelete={handleDeleteTask}
         />
       ))}
     </SidebarMenu>

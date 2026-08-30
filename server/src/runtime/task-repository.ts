@@ -9,6 +9,7 @@ import type {
   TaskMode,
   TaskRunAccepted,
   TaskSnapshot,
+  TaskSummary,
 } from "@biomed/contracts";
 
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
@@ -83,6 +84,26 @@ const EVENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
  */
 const EVENT_CACHE_MEMORY_FACTOR = 3;
 
+/**
+ * Bump when the TaskSummary derivation changes (``task-reducer.ts`` logic or
+ * the ``TaskSummary`` DTO shape): persisted ``state/summary.json`` sidecars
+ * written by an older revision must be ignored instead of served stale.
+ */
+const SUMMARY_CACHE_REDUCER_REVISION = 1;
+
+/** Derived task summary persisted beside the metadata to speed up list calls. */
+interface SummarySidecar {
+  schema_version: 1;
+  cache_key: string;
+  task: TaskSummary;
+}
+
+/** In-memory copy of a validated sidecar summary keyed by stat invalidation. */
+interface SummaryCacheEntry {
+  key: string;
+  summary: TaskSummary;
+}
+
 function requireCleanUtf8(value: string): void {
   if (/\uFFFD/u.test(value)) {
     throw new TypeError(
@@ -142,6 +163,7 @@ export class DurableTaskRepository {
   private readonly latestSequence = new Map<string, number>();
   private readonly eventCache = new Map<string, EventCacheEntry>();
   private eventCacheBytes = 0;
+  private readonly summaryCache = new Map<string, SummaryCacheEntry>();
 
   constructor(tasksRoot: string, options: DurableTaskRepositoryOptions = {}) {
     this.tasksRoot = path.resolve(tasksRoot);
@@ -331,19 +353,106 @@ export class DurableTaskRepository {
     }
     await mkdir(this.tasksRoot, { recursive: true });
     const entries = await readdir(this.tasksRoot, { withFileTypes: true });
-    const snapshots = (await Promise.all(entries
+    const tasks = (await Promise.all(entries
       .filter((entry) => entry.isDirectory() && SAFE_ID.test(entry.name))
-      .map((entry) => this.getSnapshot(entry.name))))
-      .filter((snapshot): snapshot is TaskSnapshot => snapshot !== null)
-      .sort((left, right) => right.task.updated_at.localeCompare(left.task.updated_at));
-    const active = snapshots.filter((snapshot) => snapshot.task.active_run_id !== null);
-    const history = snapshots.filter((snapshot) => snapshot.task.active_run_id === null);
+      .map((entry) => this.taskSummary(entry.name))))
+      .filter((task): task is TaskSummary => task !== null)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    const active = tasks.filter((task) => task.active_run_id !== null);
+    const history = tasks.filter((task) => task.active_run_id === null);
     return {
       schema_version: "1.0",
-      active_items: active.map((snapshot) => snapshot.task),
-      items: history.slice(0, limit).map((snapshot) => snapshot.task),
-      next_cursor: history.length > limit ? history[limit - 1]?.task.task_id ?? null : null,
+      active_items: active,
+      items: history.slice(0, limit),
+      next_cursor: history.length > limit ? history[limit - 1]?.task_id ?? null : null,
     };
+  }
+
+  /**
+   * List-path task summary served from a stat-keyed cache.
+   *
+   * ``listTasks`` previously folded EVERY task's full ``events.jsonl`` through
+   * ``reduceTaskEvents`` on EVERY page request — O(total events on disk) per
+   * call — so the sidebar history slowed down linearly with history size and
+   * each page request repeated the whole computation. Unchanged tasks are now
+   * served from ``state/summary.json`` (survives restarts, validated by the
+   * stat key) or the in-memory copy without ever reading their event log;
+   * only tasks whose files changed (typically the actively running one) are
+   * recomputed. Listing also no longer pulls every history task's parsed
+   * events into the bounded event cache.
+   */
+  private async taskSummary(taskId: string): Promise<TaskSummary | null> {
+    requireSafeId(taskId, "taskId");
+    const key = await this.summaryCacheKey(taskId);
+    if (key === null) return null;
+    const cached = this.summaryCache.get(taskId);
+    if (cached !== undefined && cached.key === key) return cached.summary;
+    const sidecar = await this.readSummarySidecar(taskId, key);
+    if (sidecar !== null) {
+      this.summaryCache.set(taskId, { key, summary: sidecar });
+      return sidecar;
+    }
+    const snapshot = await this.getSnapshot(taskId);
+    if (snapshot === null) return null;
+    this.summaryCache.set(taskId, { key, summary: snapshot.task });
+    await this.writeSummarySidecar(taskId, key, snapshot.task);
+    return snapshot.task;
+  }
+
+  /**
+   * Invalidation key for the cached summary: the stat (mtime + size) of the
+   * task metadata and event log. Returns null when the task has no metadata
+   * (matching ``getSnapshot``). Appends already in flight are awaited so the
+   * key reflects the settled files; an append that starts after the stat is
+   * picked up by the next list call.
+   */
+  private async summaryCacheKey(taskId: string): Promise<string | null> {
+    await this.pending.get(taskId);
+    let metadata: string;
+    try {
+      const stats = await stat(this.metadataPath(taskId));
+      metadata = `${stats.mtimeMs}:${stats.size}`;
+    } catch {
+      return null;
+    }
+    let events = "none";
+    try {
+      const stats = await stat(this.eventsPath(taskId));
+      events = `${stats.mtimeMs}:${stats.size}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return `${SUMMARY_CACHE_REDUCER_REVISION}|${metadata}|${events}`;
+  }
+
+  private async readSummarySidecar(taskId: string, key: string): Promise<TaskSummary | null> {
+    // Any read failure (missing/corrupt/shape drift) degrades to a recompute.
+    const sidecar = await readJsonFileOrNull<SummarySidecar>(this.summaryPath(taskId)).catch(() => null);
+    if (
+      sidecar === null ||
+      sidecar.schema_version !== 1 ||
+      sidecar.cache_key !== key ||
+      typeof sidecar.task !== "object" ||
+      sidecar.task === null
+    ) {
+      return null;
+    }
+    return sidecar.task;
+  }
+
+  private async writeSummarySidecar(taskId: string, key: string, task: TaskSummary): Promise<void> {
+    const sidecar: SummarySidecar = { schema_version: 1, cache_key: key, task };
+    try {
+      await writeJsonAtomic(this.summaryPath(taskId), sidecar);
+    } catch {
+      // The sidecar is a pure cache: the durable event log and metadata are
+      // untouched, and the next list call recomputes. A failed sidecar write
+      // must not fail listing.
+    }
+  }
+
+  private summaryPath(taskId: string): string {
+    return path.join(this.taskRoot(taskId), "state", "summary.json");
   }
 
   async deleteTask(taskId: string): Promise<void> {
@@ -358,6 +467,7 @@ export class DurableTaskRepository {
     await rm(this.taskRoot(taskId), { recursive: true, force: false });
     this.evictEventCache(taskId);
     this.latestSequence.delete(taskId);
+    this.summaryCache.delete(taskId);
   }
 
   async listEvents(taskId: string, afterSequence: number, limit = 1_000): Promise<EventEnvelope[]> {
