@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { BrainIcon, CaretDownIcon } from "@phosphor-icons/react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import type { ReasoningItem } from "@/runtime/types";
@@ -41,34 +47,32 @@ export function ReasoningBlock({ item }: ReasoningBlockProps) {
 
   const expanded = userToggled ?? graceExpanded;
 
-  const handleToggle = () => {
-    setUserToggled(!expanded);
-  };
-
   return (
-    <div>
-      <button
-        type="button"
-        onClick={handleToggle}
-        aria-expanded={expanded}
-        className="flex items-center gap-2 text-sm text-muted-foreground"
+    <Collapsible open={expanded} onOpenChange={setUserToggled}>
+      <CollapsibleTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-auto justify-start gap-2 px-1 text-sm font-normal text-muted-foreground"
+          />
+        }
       >
         {item.isStreaming ? (
-          <Spinner className="size-4" aria-hidden="true" />
+          <Spinner aria-hidden="true" />
         ) : (
-          <BrainIcon className="size-4" aria-hidden="true" />
+          <BrainIcon aria-hidden="true" />
         )}
         <span>{item.isStreaming ? "思考中..." : "思维链"}</span>
         <CaretDownIcon
-          className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          className={cn("transition-transform", expanded && "rotate-180")}
           aria-hidden="true"
         />
-      </button>
-      {expanded && (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-muted pl-6 text-sm text-muted-foreground">
-          {item.content}
-        </div>
-      )}
-    </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 whitespace-pre-wrap border-l-2 border-muted pl-6 text-sm text-muted-foreground">
+        {item.content}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

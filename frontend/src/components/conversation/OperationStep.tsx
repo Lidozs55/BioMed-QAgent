@@ -3,6 +3,12 @@ import { CaretDownIcon, SpinnerGapIcon } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Message, MessageContent } from "@/components/ui/message";
 import type { OperationItem } from "@/runtime/types";
@@ -61,57 +67,63 @@ export function OperationStep({ item }: OperationStepProps) {
       <MessageContent>
         <Bubble variant="ghost" className="w-full">
           <BubbleContent className="w-full gap-2 text-sm">
-            <button
-              type="button"
-              onClick={() => setExpanded((prev) => !prev)}
-              aria-expanded={expanded}
-              className="flex w-full items-center gap-2 text-left"
-            >
-              <span
-                data-testid="operation-icon"
-                data-operation-category={item.category ?? ""}
-                className={cn("shrink-0", categoryMeta.color)}
-              >
-                {isRunning ? (
-                  <SpinnerGapIcon
-                    className="size-4 animate-spin"
-                    aria-hidden="true"
+            <Collapsible open={expanded} onOpenChange={setExpanded}>
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto w-full justify-start gap-2 px-1 text-left font-normal"
                   />
-                ) : (
-                  <CategoryIcon className="size-4" aria-hidden />
-                )}
-              </span>
-              <span className="font-medium">{label}</span>
-              {isRunning && !isDownload && item.progress !== null && (
-                <span className="text-sm text-muted-foreground">
-                  {item.progress.current}/
-                  {item.progress.total ?? "…"}
+                }
+              >
+                <span
+                  data-testid="operation-icon"
+                  data-operation-category={item.category ?? ""}
+                  className={cn("shrink-0", categoryMeta.color)}
+                >
+                  {isRunning ? (
+                    <SpinnerGapIcon
+                      className="animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CategoryIcon aria-hidden />
+                  )}
                 </span>
-              )}
-              <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
-              <CaretDownIcon
-                className={cn(
-                  "ml-auto size-3.5 shrink-0 transition-transform",
-                  expanded && "rotate-180",
+                <span className="font-medium">{label}</span>
+                {isRunning && !isDownload && item.progress !== null && (
+                  <span className="text-sm text-muted-foreground">
+                    {item.progress.current}/
+                    {item.progress.total ?? "…"}
+                  </span>
                 )}
-                aria-hidden="true"
-              />
-            </button>
-            {showDetail ? (
-              <div className="mt-1 flex flex-col gap-1">
-                {item.progress !== null && (
-                  <p className="text-xs text-muted-foreground">
-                    {item.progress.kind}：
-                    <span>
-                      {item.progress.current}/{item.progress.total ?? "…"}
-                    </span>
-                  </p>
-                )}
-                {item.error !== null && (
-                  <p className="text-xs text-destructive">{item.error}</p>
-                )}
-              </div>
-            ) : null}
+                <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
+                <CaretDownIcon
+                  className={cn(
+                    "ml-auto shrink-0 transition-transform",
+                    expanded && "rotate-180",
+                  )}
+                  aria-hidden="true"
+                />
+              </CollapsibleTrigger>
+              {showDetail ? (
+                <CollapsibleContent className="mt-1 flex flex-col gap-1">
+                  {item.progress !== null && (
+                    <p className="text-xs text-muted-foreground">
+                      {item.progress.kind}：
+                      <span>
+                        {item.progress.current}/{item.progress.total ?? "…"}
+                      </span>
+                    </p>
+                  )}
+                  {item.error !== null && (
+                    <p className="text-xs text-destructive">{item.error}</p>
+                  )}
+                </CollapsibleContent>
+              ) : null}
+            </Collapsible>
           </BubbleContent>
         </Bubble>
       </MessageContent>

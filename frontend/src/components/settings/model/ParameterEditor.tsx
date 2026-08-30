@@ -1,6 +1,13 @@
 import { useState } from "react";
-import { TrashIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, TrashIcon } from "@phosphor-icons/react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -156,15 +163,15 @@ export function ParameterEditor({
       {regularSpecs.map((spec) => {
         const error = paramValueError(spec, params[spec.key]);
         return (
-          <div key={spec.key} className="flex flex-col gap-1">
+          <Field key={spec.key} data-invalid={Boolean(error) || undefined}>
             <div className="flex items-center justify-between gap-3">
-              <label
+              <FieldLabel
                 htmlFor={`param-${spec.key}`}
                 className="text-sm text-foreground"
                 title={spec.description}
               >
                 {spec.label}
-              </label>
+              </FieldLabel>
               <div className="w-40 shrink-0">
                 <SpecField
                   spec={spec}
@@ -174,58 +181,63 @@ export function ParameterEditor({
                 />
               </div>
             </div>
-            {error && (
-              <p className="text-xs text-destructive" role="alert">
-                {error}
-              </p>
-            )}
-          </div>
+            {error && <FieldError>{error}</FieldError>}
+          </Field>
         );
       })}
       {advancedSpecs.length > 0 && (
-        <div className="border-t pt-2">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground"
-            onClick={() => setAdvancedOpen((next) => !next)}
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="border-t pt-2"
+        >
+          <CollapsibleTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-between px-2 text-xs font-medium text-muted-foreground"
+              />
+            }
           >
             <span>高级参数（{advancedSpecs.length}）</span>
-            <span>{advancedOpen ? "收起" : "展开"}</span>
-          </button>
-              {advancedOpen && (
-                <div className="mt-2 flex flex-col gap-2">
-                  {advancedSpecs.map((spec) => {
-                    const error = paramValueError(spec, params[spec.key]);
-                    return (
-                      <div key={spec.key} className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between gap-3">
-                          <label
-                            htmlFor={`param-${spec.key}`}
-                            className="text-sm text-foreground"
-                            title={spec.description}
-                          >
-                            {spec.label}
-                          </label>
-                          <div className="w-40 shrink-0">
-                            <SpecField
-                              spec={spec}
-                              value={currentValue(params, spec)}
-                              controlId={`param-${spec.key}`}
-                              onChange={(next) => patch(spec.key, next)}
-                            />
-                          </div>
-                        </div>
-                        {error && (
-                          <p className="text-xs text-destructive" role="alert">
-                            {error}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-        </div>
+            <span className="flex items-center gap-1">
+              {advancedOpen ? "收起" : "展开"}
+              <CaretDownIcon
+                className={advancedOpen ? "rotate-180" : undefined}
+                aria-hidden="true"
+              />
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2 flex flex-col gap-2">
+            {advancedSpecs.map((spec) => {
+              const error = paramValueError(spec, params[spec.key]);
+              return (
+                <Field key={spec.key} data-invalid={Boolean(error) || undefined}>
+                  <div className="flex items-center justify-between gap-3">
+                    <FieldLabel
+                      htmlFor={`param-${spec.key}`}
+                      className="text-sm text-foreground"
+                      title={spec.description}
+                    >
+                      {spec.label}
+                    </FieldLabel>
+                    <div className="w-40 shrink-0">
+                      <SpecField
+                        spec={spec}
+                        value={currentValue(params, spec)}
+                        controlId={`param-${spec.key}`}
+                        onChange={(next) => patch(spec.key, next)}
+                      />
+                    </div>
+                  </div>
+                  {error && <FieldError>{error}</FieldError>}
+                </Field>
+              );
+            })}
+          </CollapsibleContent>
+        </Collapsible>
       )}
       {extraKeys.length > 0 && (
         <div className="border-t pt-2">
@@ -240,14 +252,16 @@ export function ParameterEditor({
                   aria-label={`额外参数 ${key}`}
                   onChange={(event) => patch(key, event.target.value)}
                 />
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   className="text-muted-foreground hover:text-destructive"
                   aria-label={`删除额外参数 ${key}`}
                   onClick={() => patch(key, undefined)}
                 >
-                  <TrashIcon className="size-3.5" />
-                </button>
+                  <TrashIcon aria-hidden="true" />
+                </Button>
               </div>
             ))}
           </div>

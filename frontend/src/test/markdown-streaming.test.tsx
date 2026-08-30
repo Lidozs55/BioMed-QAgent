@@ -105,6 +105,19 @@ describe("streaming Markdown cursor", () => {
     });
   });
 
+  it("renders Markdown separators and tables through shadcn primitives", () => {
+    const { container } = render(
+      <MarkdownContent
+        content={"---\n\n| Gene | Score |\n| --- | ---: |\n| TP53 | 0.98 |"}
+      />,
+    );
+
+    expect(container.querySelector('[data-slot="separator"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="table"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="table-header"]')).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-slot="table-cell"]')).toHaveLength(2);
+  });
+
   it("marks only actively streaming Markdown as busy", () => {
     const { container, rerender } = render(
       <MarkdownContent content="正在生成" streaming />,

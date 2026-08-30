@@ -5,6 +5,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export interface QueuedMessage {
@@ -89,13 +90,13 @@ export function QueuedMessages({
             {entry.input}
           </span>
           <div className="flex shrink-0 items-center gap-0.5">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               className={cn(
-                "rounded p-1 text-muted-foreground",
-                steering
-                  ? "cursor-wait opacity-50"
-                  : "hover:bg-accent hover:text-foreground",
+                "text-muted-foreground",
+                steering && "cursor-wait",
               )}
               onClick={() => onInject(entry.id)}
               aria-label={`注入上下文：${entry.input}`}
@@ -106,26 +107,30 @@ export function QueuedMessages({
                   : "立即把这段文字注入当前轮次并重新生成（类似 Codex 的调整方向）"
               }
             >
-              <ArrowDownLeftIcon className="size-3.5" />
-            </button>
-            <button
+              <ArrowDownLeftIcon aria-hidden="true" />
+            </Button>
+            <Button
               type="button"
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              variant="ghost"
+              size="icon-xs"
+              className="text-muted-foreground"
               onClick={() => onEdit(entry.id)}
               aria-label={`编辑：${entry.input}`}
               title="编辑"
             >
-              <PencilSimpleIcon className="size-3.5" />
-            </button>
-            <button
+              <PencilSimpleIcon aria-hidden="true" />
+            </Button>
+            <Button
               type="button"
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
+              variant="ghost"
+              size="icon-xs"
+              className="text-muted-foreground hover:text-destructive"
               onClick={() => onDelete(entry.id)}
               aria-label={`删除：${entry.input}`}
               title="删除"
             >
-              <TrashIcon className="size-3.5" />
-            </button>
+              <TrashIcon aria-hidden="true" />
+            </Button>
           </div>
         </div>
       ))}

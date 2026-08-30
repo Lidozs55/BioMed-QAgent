@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { formatContextWindow } from "@/lib/tokenFormat";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -518,19 +520,17 @@ export function ModelImportSheet({
             {/* Left: provider returned model list */}
             <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
               <div className="flex shrink-0 items-center gap-2 border-b p-3">
-                <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="size-3.5 cursor-pointer"
+                <Label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <Checkbox
+                    className="size-3.5"
                     checked={multiSelect}
-                    onChange={(event) => {
-                      setMultiSelect(event.target.checked);
-                      if (!event.target.checked) setSelectedIds(new Set());
+                    onCheckedChange={(checked) => {
+                      setMultiSelect(checked);
+                      if (!checked) setSelectedIds(new Set());
                     }}
-                    aria-label="复选"
                   />
                   复选
-                </label>
+                </Label>
                 <div className="relative min-w-0 flex-1">
                   <MagnifyingGlassIcon
                     data-icon="inline-start"
@@ -594,21 +594,22 @@ export function ModelImportSheet({
                           )}
                         >
                           {multiSelect && (
-                            <input
-                              type="checkbox"
-                              className="size-4 shrink-0 cursor-pointer"
+                            <Checkbox
+                              className="size-4 shrink-0"
                               checked={selectedIds.has(item.id)}
-                              onChange={() => toggleSelect(item.id)}
+                              onCheckedChange={() => toggleSelect(item.id)}
                               aria-label={`选择 ${item.name}`}
                             />
                           )}
-                          <button
+                          <Button
                             type="button"
-                            className="min-w-0 flex-1 truncate text-left"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto min-w-0 flex-1 justify-start truncate px-0 text-left font-normal hover:bg-transparent"
                             onClick={() => selectDiscovered(item)}
                           >
                             <span className="truncate text-sm font-medium">{item.name}</span>
-                          </button>
+                          </Button>
                           <div className="flex shrink-0 items-center gap-2">
                             <span className="text-xs text-muted-foreground">
                               {formatContextWindow(item.context_window)}
@@ -660,16 +661,18 @@ export function ModelImportSheet({
                     {providerModels.map((model) => (
                       <li key={model.id}>
                         <div className="flex items-center justify-between gap-2 px-3 py-2">
-                          <button
+                          <Button
                             type="button"
-                            className="min-w-0 flex-1 text-left"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto min-w-0 flex-1 flex-col items-start justify-start gap-0 px-0 text-left font-normal hover:bg-transparent"
                             onClick={() => selectModel(model)}
                           >
                             <span className="truncate text-sm">{model.name}</span>
                             <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                               {model.model_id}
                             </span>
-                          </button>
+                          </Button>
                           <div className="flex shrink-0 items-center gap-1">
                             <Button
                               variant="ghost"

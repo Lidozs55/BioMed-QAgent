@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react";
 
+import { Button } from "@/components/ui/button";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { Spinner } from "@/components/ui/spinner";
@@ -35,7 +36,14 @@ export function ToolCallMarker({
       render={
         <Marker
           className="cursor-pointer select-none"
-          render={<button type="button" className="w-full text-left" />}
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-auto w-full justify-start px-0 text-left font-normal hover:bg-transparent"
+            />
+          }
         />
       }
     >
