@@ -15,6 +15,10 @@ import {
 } from "@biomed/contracts";
 
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
+import {
+  listCoreProductTopologyRequirements,
+} from "../../dataset/dynamic-family/product-requirement-registry.js";
+import { coreProductProfileScaffold } from "../../dataset/dynamic-family/profile-scaffold.js";
 import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import type {
   BioMedAgentTool,
@@ -63,6 +67,9 @@ export interface DynamicFamilyPublicationToolOptions {
     context: BioMedToolExecutionContext | undefined,
     preflightReceipt: DynamicFamilyPreflightReceipt,
   ) => Promise<unknown>;
+  readonly resolvePreparedSubmission?: (
+    preflightReceipt: DynamicFamilyPreflightReceipt,
+  ) => unknown | Promise<unknown>;
   /**
    * Resolves the server-side prepared submission for receipt-only submit.
    * When absent, receipt-only requests are rejected with an explicit error and
@@ -79,6 +86,10 @@ export interface PrepareDynamicFamilyPublicationToolOptions {
     signal: AbortSignal | undefined,
     context: BioMedToolExecutionContext | undefined,
   ) => Promise<DynamicFamilyPreflightReceipt>;
+  readonly onPrepared?: (
+    preparedSubmission: Readonly<Record<string, unknown>>,
+    preflightReceipt: DynamicFamilyPreflightReceipt,
+  ) => void | Promise<void>;
 }
 
 /**
@@ -99,26 +110,90 @@ function structuredError(error: unknown): Record<string, unknown> {
   return body;
 }
 
+function preflightRecovery(value: unknown, error: unknown): Record<string, unknown> {
+  let profileRef: string | null = null;
+  if (
+    value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && !types.isProxy(value)
+  ) {
+    const family = Object.getOwnPropertyDescriptor(value, "family_spec")?.value;
+    if (
+      family !== null
+      && typeof family === "object"
+      && !Array.isArray(family)
+      && !types.isProxy(family)
+    ) {
+      const candidate = Object.getOwnPropertyDescriptor(
+        family,
+        "assessment_policy_ref",
+      )?.value;
+      if (typeof candidate === "string") profileRef = candidate;
+    }
+  }
+  let scaffold: ReturnType<typeof coreProductProfileScaffold> | null = null;
+  if (profileRef !== null) {
+    try {
+      scaffold = coreProductProfileScaffold(profileRef);
+    } catch {
+      scaffold = null;
+    }
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    retryable: false,
+    next_action: scaffold === null
+      ? "select_available_profile_and_scaffold"
+      : "modify_submission_from_scaffold_and_reprepare",
+    unchanged_retry_forbidden: true,
+    expected_family: scaffold?.dataset_family ?? null,
+    expected_tables: scaffold?.family_spec.table_definitions.map((table) => ({
+      table_id: table.table_id,
+      role: table.role,
+      schema_ref: table.schema_ref,
+      required: table.required,
+      allow_empty: table.allow_empty,
+    })) ?? [],
+    scaffold,
+    available_profiles: listCoreProductTopologyRequirements().map((item) => item.profile_ref),
+    rejection: message,
+  };
+}
+
 export function createDynamicFamilyPublicationTool(
   options: DynamicFamilyPublicationToolOptions,
 ): BioMedAgentTool {
+  const resolveSubmission = options.resolveSubmission ?? (
+    options.resolvePreparedSubmission === undefined
+      ? undefined
+      : async (receipt: DynamicFamilyPreflightReceipt) => {
+          const prepared = await options.resolvePreparedSubmission?.(receipt);
+          if (prepared === undefined || prepared === null) {
+            throw new Error("prepared dynamic submission is unavailable or superseded");
+          }
+          return parseDynamicFamilyPublicationSubmission(prepared);
+        }
+  );
   return {
     name: "submit_dynamic_family_publication",
     label: "Submit Dynamic Family Publication",
     description:
-      "Submit a prepared Dynamic Family publication. Preferred wire: pass schema_version plus the unchanged preflight_receipt returned by prepare_dynamic_family_publication — the server resolves the stored prepared submission, so no payload re-echo is needed. Re-echoing the full prepared_submission together with the receipt is still accepted. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; the acquisition_requests schema is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
-    parameters: dynamicFamilyPublicationParameters("submit"),
+      "Submit a prepared Dynamic Family publication. Preferred wire: pass schema_version plus the unchanged preflight_receipt returned by prepare_dynamic_family_publication — the server resolves the stored prepared submission, so no payload re-echo is needed. A full prepared submission plus its receipt remains accepted for non-runtime callers. The receipt binds the Core-owned product requirement profile and exact table/relation closure. Use only providers reported in inspect_dataset_execution_routes.dynamic.direct_bindings; acquisition_requests is the execution contract, not proof of semantic or publication closure. This is not a sandbox, isolation mechanism, or security boundary. Direct paths and discovery bytes are forbidden.",
+    parameters: resolveSubmission === undefined
+      ? dynamicFamilyPublicationParameters("submit")
+      : dynamicFamilyReceiptOnlyParameters(),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
         const parsed = await parseDynamicFamilyPublicationSubmitRequest(value);
         let submission = parsed.submission;
         if (submission === null) {
-          if (options.resolveSubmission === undefined) {
+          if (resolveSubmission === undefined) {
             throw new Error(
               "receipt-only submit is not available for this task; re-echo the full prepared_submission with the preflight_receipt",
             );
           }
-          submission = await options.resolveSubmission(parsed.preflightReceipt);
+          submission = await resolveSubmission(parsed.preflightReceipt);
         }
         const details = await options.submit(submission, signal, context, parsed.preflightReceipt);
         return { content: JSON.stringify(details), details };
@@ -142,7 +217,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Use after inspect_dataset_execution_routes when no registered static family expresses the required topology and every input is dynamic-bindable or a prior task-owned Core asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Submit semantic fields without derived digest properties. This deterministic, side-effect-free preflight derives all digest bindings, validates topology and acquisition planning, and returns prepared_submission plus a task/requirement/generation-bound preflight_receipt; pass both unchanged to submit_dynamic_family_publication. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal.",
+      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, without derived digest properties. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. For a runtime-retained submission, send schema_version plus only that receipt to submit_dynamic_family_publication; never reconstruct the large submission. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -155,15 +230,23 @@ export function createPrepareDynamicFamilyPublicationTool(
         const details = {
           ok: true,
           status: "prepared",
-          prepared_submission: preparedSubmission,
           preflight_receipt: receipt,
+          prepared_submission: preparedSubmission,
         };
+        await options.onPrepared?.(preparedSubmission, receipt);
         return { content: JSON.stringify(details), details };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const recovery = preflightRecovery(value, error);
         return {
-          content: JSON.stringify({ ok: false, error: { code: "dynamic_preflight_rejected", message } }),
-          details: { ok: false, error: { code: "dynamic_preflight_rejected", message } },
+          content: JSON.stringify({
+            ok: false,
+            error: { code: "dynamic_preflight_rejected", message, recovery },
+          }),
+          details: {
+            ok: false,
+            error: { code: "dynamic_preflight_rejected", message, recovery },
+          },
           isError: true,
         };
       }
@@ -175,10 +258,35 @@ export function createDynamicFamilyPublicationTools(options: {
   readonly prepare: PrepareDynamicFamilyPublicationToolOptions["prepare"];
   readonly submit: DynamicFamilyPublicationToolOptions["submit"];
 }): readonly [BioMedAgentTool, BioMedAgentTool] {
+  const prepared = new Map<string, Readonly<Record<string, unknown>>>();
   return [
-    createPrepareDynamicFamilyPublicationTool({ prepare: options.prepare }),
-    createDynamicFamilyPublicationTool({ submit: options.submit }),
+    createPrepareDynamicFamilyPublicationTool({
+      prepare: options.prepare,
+      onPrepared: (submission, receipt) => {
+        prepared.clear();
+        prepared.set(receipt.receipt_digest, submission);
+      },
+    }),
+    createDynamicFamilyPublicationTool({
+      submit: options.submit,
+      resolvePreparedSubmission: (receipt) => prepared.get(receipt.receipt_digest),
+    }),
   ];
+}
+
+function dynamicFamilyReceiptOnlyParameters(): Record<string, unknown> {
+  const full = dynamicFamilyPublicationParameters("submit") as {
+    properties: { schema_version: unknown; preflight_receipt: unknown };
+  };
+  return {
+    type: "object",
+    properties: {
+      schema_version: full.properties.schema_version,
+      preflight_receipt: full.properties.preflight_receipt,
+    },
+    required: ["preflight_receipt"],
+    additionalProperties: false,
+  };
 }
 
 function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<string, unknown> {
@@ -369,7 +477,10 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     properties: {
       source: { type: "string", enum: ["pubmed"] },
       accession: { type: "string", pattern: "^PMC[1-9][0-9]*$" },
-      entities: { type: "object", properties: {}, additionalProperties: false },
+      entities: {
+        type: "object",
+        additionalProperties: { type: "array", items: { type: "string" } },
+      },
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   };
@@ -390,9 +501,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     },
     required: ["source", "accession", "entities"], additionalProperties: false,
   };
-  const acquisition = {
-    type: "object",
-    oneOf: DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => {
+  const acquisitionAlternatives = DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS.map((descriptor) => {
       const parameters = descriptor.parameterContract === "pubchem"
         ? pubchemParameters
         : descriptor.parameterContract === "pubmed"
@@ -400,13 +509,13 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
           : fixedParameters(descriptor.source, descriptor.inputHint);
       return {
         properties: {
+          binding_id: safeId,
           provider_id: { type: "string", enum: [descriptor.providerId] },
           parameters,
         },
-        required: ["provider_id", "parameters"], additionalProperties: false,
+        required: ["binding_id", "provider_id", "parameters"], additionalProperties: false,
       };
-    }),
-  };
+    });
   const preflightReceipt = {
     type: "object",
     properties: {
@@ -416,6 +525,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       generation: { type: "integer", minimum: 0 },
       family_spec_digest: digest,
       projection_digest: digest,
+      product_requirement_digest: digest,
       host_descriptor_digest: digest,
       submission_digest: digest,
       required_input_roles: ids,
@@ -455,7 +565,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     },
     required: [
       "schema_version", "task_id", "requirement_id", "generation", "family_spec_digest", "projection_digest",
-      "host_descriptor_digest", "submission_digest", "required_input_roles", "output_closure",
+      "product_requirement_digest", "host_descriptor_digest", "submission_digest", "required_input_roles", "output_closure",
       "topology_diagnostics", "acquisition_plan", "receipt_digest",
     ],
     additionalProperties: false,
@@ -473,17 +583,25 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       projection_id: safeId,
       transform_source: {
         type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
-        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like execution_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. locator_ref must be non-empty and may use the same first.receipt_id for every table derived from that source.",
+        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like execution_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. EVERY CSV field must be double-quoted and embedded double quotes doubled, including IDs and JSON source locators; never concatenate raw unquoted fields. locator_ref must be non-empty and must cite one admitted input receipt. For literature_experiment_chart, chart_series.source_locator must be a JSON string with exactly {locator_version:'2.0',locator_type:'image_bbox',asset_id,logical_file,raw_value,page_number,figure_id,bbox}; chart_points.pixel_or_coordinate_locator uses the same exact shape and both must byte-match Core VLM evidence. supplementary_asset_records.source_locator should use exactly {locator_version:'2.0',locator_type:'json_pointer',asset_id,logical_file,raw_value,json_pointer:'/'} with archive evidence values. Never use {locator:...}, source_logical_file, source_raw_value, or other invented locator keys.",
       },
       transform_metadata: transformMetadata,
       execution_proposal: buildProposal,
       registered_sources: {
-        type: "object", description: "Usually {}. Only Core-acquired asset IDs are accepted.",
-        additionalProperties: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+        type: "array", description: "Task-owned Core-acquired or Core-derived asset entries only. Use one {binding_id,asset_id} item per registered binding. Derived inputs must have a persisted OperationResult and complete parent closure.",
+        items: {
+          type: "object",
+          properties: {
+            binding_id: safeId,
+            asset_id: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+          },
+          required: ["binding_id", "asset_id"],
+          additionalProperties: false,
+        },
       },
       acquisition_requests: {
-        type: "object", description: "Preferred formal input path. Every provider listed here is runtime-wired for Dynamic Family acquisition; absence means unavailable through this route. Keys exactly match unresolved execution_proposal source binding IDs. Create one binding/request per formal carrier.",
-        additionalProperties: acquisition,
+        type: "array", description: "Preferred for direct providers. Use one {binding_id,provider_id,parameters} item per acquisition binding. Every provider listed here is runtime-wired for Dynamic Family acquisition; Core-derived VLM/archive/parser assets instead belong in registered_sources.",
+        items: { type: "object", oneOf: acquisitionAlternatives },
       },
     },
     additionalProperties: false,
@@ -699,6 +817,19 @@ export async function parseDynamicFamilyPublicationSubmitRequest(
     const ownKeys = new Set(
       Reflect.ownKeys(value).filter((key): key is string => typeof key === "string"),
     );
+    if (ownKeys.has("prepared_submission")) {
+      const envelope = exactDataRecord(
+        value,
+        new Set(["preflight_receipt", "prepared_submission"]),
+        label,
+      );
+      const submission = await parseDynamicFamilyPublicationSubmission(envelope.prepared_submission);
+      const preflightReceipt = parseDynamicFamilyPreflightReceipt(
+        envelope.preflight_receipt,
+        "$.preflight_receipt",
+      );
+      return Object.freeze({ submission, preflightReceipt });
+    }
     if (ownKeys.has("preflight_receipt") && !ownKeys.has("family_spec")) {
       const allowed = new Set(["schema_version", "preflight_receipt"]);
       const unexpected = [...ownKeys].filter((key) => !allowed.has(key));
@@ -707,7 +838,10 @@ export async function parseDynamicFamilyPublicationSubmitRequest(
           `${label} receipt-only submit accepts schema_version and preflight_receipt only; unexpected keys: ${unexpected.join(", ")}`,
         );
       }
-      const record = exactDataRecord(value, allowed, label);
+      const record = subsetDataRecord(value, allowed, label);
+      if (record.schema_version !== undefined && record.schema_version !== "1.0") {
+        throw new TypeError(`${label}.schema_version must be 1.0 for receipt-only submit`);
+      }
       const preflightReceipt = parseDynamicFamilyPreflightReceipt(record.preflight_receipt, "$.preflight_receipt");
       return Object.freeze({ submission: null, preflightReceipt });
     }
@@ -728,6 +862,27 @@ function parseRegisteredSources(
   proposal: DatasetExecutionProposal2,
 ): Readonly<Record<string, string>> {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
+  if (Array.isArray(value) && !types.isProxy(value)) {
+    const result = Object.create(null) as Record<string, string>;
+    for (const [index, raw] of value.entries()) {
+      const entry = exactDataRecord(
+        raw,
+        new Set(["binding_id", "asset_id"]),
+        `$.registered_sources[${index}]`,
+      );
+      if (typeof entry.binding_id !== "string" || !bindingIds.has(entry.binding_id)) {
+        throw new TypeError(`$.registered_sources[${index}].binding_id is not a declared source binding`);
+      }
+      if (Object.hasOwn(result, entry.binding_id)) {
+        throw new TypeError(`registered_sources contains duplicate binding '${entry.binding_id}'`);
+      }
+      if (typeof entry.asset_id !== "string" || !/^asset_[0-9a-f]{64}$/.test(entry.asset_id)) {
+        throw new TypeError(`registered_sources.${entry.binding_id} must be a task-owned asset_<sha256> ID`);
+      }
+      result[entry.binding_id] = entry.asset_id;
+    }
+    return Object.freeze(result);
+  }
   const record = subsetDataRecord(value, bindingIds, "$.registered_sources");
   const result = Object.create(null) as Record<string, string>;
   for (const [bindingId, assetId] of Object.entries(record)) {
@@ -744,7 +899,29 @@ function parseAcquisitionRequests(
   proposal: DatasetExecutionProposal2,
 ): ParsedDynamicFamilyPublicationSubmission["acquisition_requests"] {
   const bindingIds = new Set(proposal.source_bindings.map((binding) => binding.binding_id));
-  const record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
+  let record: DataRecord;
+  if (Array.isArray(value) && !types.isProxy(value)) {
+    record = Object.create(null) as DataRecord;
+    for (const [index, raw] of value.entries()) {
+      const entry = exactDataRecord(
+        raw,
+        new Set(["binding_id", "provider_id", "parameters"]),
+        `$.acquisition_requests[${index}]`,
+      );
+      if (typeof entry.binding_id !== "string" || !bindingIds.has(entry.binding_id)) {
+        throw new TypeError(`$.acquisition_requests[${index}].binding_id is not a declared source binding`);
+      }
+      if (Object.hasOwn(record, entry.binding_id)) {
+        throw new TypeError(`acquisition_requests contains duplicate binding '${entry.binding_id}'`);
+      }
+      record[entry.binding_id] = {
+        provider_id: entry.provider_id,
+        parameters: entry.parameters,
+      };
+    }
+  } else {
+    record = subsetDataRecord(value, bindingIds, "$.acquisition_requests");
+  }
   const result = Object.create(null) as Record<string, { provider_id: string; parameters: Readonly<Record<string, import("@biomed/contracts").JsonValue>> }>;
   for (const [bindingId, raw] of Object.entries(record)) {
     const request = exactDataRecord(raw, new Set(["provider_id", "parameters"]), `$.acquisition_requests.${bindingId}`);

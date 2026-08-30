@@ -20,6 +20,8 @@ Two tools belong to this skill:
 
 Governed promotion (`extract_registered_paper_chart_evidence`):
 
+- Pass a task-owned Core source_asset_id returned by Core acquisition,
+  `extract_supplementary_archive`, or another governed registration step.
 - Registered asset ids only (asset_<sha256>): never absolute paths,
   workspace-relative paths, or browser screenshots.
 - One paper full-text XML asset (application/xml or text/xml) and one paper
@@ -27,6 +29,8 @@ Governed promotion (`extract_registered_paper_chart_evidence`):
 
 Exploratory staging (`extract_chart_data_vlm`):
 
+- A source path accepts preparation-only screenshots/PDFs and never creates a
+  formal carrier.
 - Outputs of `capture_web_page` and `capture_page_section` (screenshots).
 - PDFs from `download_supplementary`; standalone JPG/WEBP figure images.
 
@@ -40,6 +44,9 @@ Governed promotion:
 - VLM candidates become paper_records, experiment_records,
   activity_value_records, supplementary_asset_records, chart_series,
   chart_points, papers, and sources rows in one registered JSON carrier.
+- With source_asset_id, Dataset Core registers the evidence manifest and a
+  matching OperationResult. The manifest binds model/version, prompt digest,
+  page/figure/bbox, confidence and point-level HIL facts.
 - Every VLM-derived chart point is estimated and pending; unclear axis or
   legend semantics yield an explicit unclear no-points series, never exact
   points.
@@ -54,9 +61,12 @@ Governed promotion:
 
 Exploratory staging:
 
-- Three-tier degradation: L1 visual model → L2 pdfplumber tables → L3 caption
-  text. Raises on full failure — no silent empty-data fallback.
+- Three-tier degradation: L1 Qwen-VL/visual model → L2 pdfplumber tables → L3
+  caption text. Raises on full failure — no silent empty-data fallback.
 - Writes chart_data.csv and chart_data_points.csv under parsed/chart_data/.
+- Concurrent tool calls are queued and executed one at a time. Each invocation
+  keeps its own credential and data-review HIL; a pending review must never
+  cause sibling figure extractions to fail or bypass review.
 
 ## When not to use
 
@@ -68,6 +78,9 @@ Exploratory staging:
 
 - Extracted data is preparation material, not a formal artifact: it may inform
   research but never replaces the trusted Dataset Core publication path.
+- Path-based extracted data is preparation material, not a formal artifact.
+  Only the Core-registered evidence manifest returned for source_asset_id may
+  enter a profile-scaffolded formal build.
 - Only `extract_registered_paper_chart_evidence` promotes paper chart evidence
   toward a formal product; `extract_chart_data_vlm` cannot publish.
 - A literature-derived quantitative product uses the tables paper_records,

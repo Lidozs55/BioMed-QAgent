@@ -14,7 +14,7 @@
 6. **Publication authority**：只有Core创建PublicationCandidate、B3结果、ProductAssessment和Publication。Agent/Transform/FamilySpec/workspace不能直接publish。
 7. **Conservative semantics**：FamilySpec没有科学field type时只生成`dynamic_string_preserving.v1`；不得推断numeric/unit/ontology/domain语义。
 8. **Provenance closure**：每个table必须有disjoint data/provenance/confidence refs，并闭合到registered assets和native OperationResults。
-9. **HIL fail closed**：含`review_status`/`human_review_status`字段的产品必须保持`human_review_pending`，直到Core在B3后创建、候选/assessment/table字节证据绑定的`publication_acceptance` HIL并收到matching `accept`；credential `approve`不能满足此门。accepted review identity/snapshot必须进入immutable assessment/provenance。当前动态publication HIL支持同一live process内suspend/resume；跨Host重启的deterministic dynamic continuation尚未完成，重启场景必须fail closed，不能声称自动恢复。
+9. **HIL fail closed**：含`review_status`/`human_review_status`字段，或含`confidence`/`confidence_level`/`extraction_confidence`抽取置信度字段的动态产品（字段分隔符`_`/`-`等价），必须保持`human_review_pending`，直到Core在B3后创建、候选/assessment/table字节证据绑定的`publication_acceptance` HIL并收到matching `accept`；credential `approve`不能满足此门。accepted review identity/snapshot必须进入immutable assessment/provenance。当前动态publication HIL支持同一live process内suspend/resume；跨Host重启的deterministic dynamic continuation尚未完成，重启场景必须fail closed，不能声称自动恢复。
 10. **Scope/trust分离**：scope不表示trust；example scope不可执行；正式引用使用exact scope/id/version/digest。
 11. **Identity分层**：dataset/revision/asset/build/transform/publication identity不可互换；不得从buildId、用户参数、注册时间或本地执行事实合成dataset/provider revision identity。
 12. **Resource/cancellation fences**：deadline、generation、cancel fence、bounded input/output/log在admission前生效；当前进程内backend不能声称OS级RSS/PID/open-file enforcement。
@@ -22,11 +22,17 @@
 14. **No stale publication reuse**：mutable staging可重建，但immutable`publish/`不得删除、覆盖或静默复用；每次promotion重新验证hash/release invariants。
 15. **Single Host during evidence runs**：在event-log multiprocess race修复前，同一data root只能运行一个BioMed-QAgent Host；不得启动多个`tsx watch`实例。
 16. **Product success**：Host exit、OperationResult committed、B3 passed或文件存在都不能代替ProductAssessment.publishable + immutable Publication + Artifact API byte-hash verification。
+17. **Core-owned product closure**：动态 `assessment_policy_ref` 必须命中 Core 注册的产品拓扑清单；scaffold 由该清单直接生成 FamilySpec、Projection、表定义和关系，Agent 只绑定来源/抽取事实；prepare receipt 绑定清单 digest，submit 时重算。候选在 B3/HIL 前必须精确闭合清单要求的 family、table ID/role/schema、relation ID 与最小行数。Agent 自报清单、未知 policy、手写漂移 topology 或缩减后的单表 projection 均 fail closed，不能进入 `publication_acceptance`。
+18. **Formal derived evidence**：VLM manifest 与 archive member/parser output 必须是 task-owned derived SourceAsset，并有持久 OperationResult；动态输入验证递归父资产 closure。低可信点先完成 `vlm_extraction` HIL，六表 publication 再逐点核对 manifest/model/prompt/bbox/confidence/review 后进入最终 `publication_acceptance`。
+19. **Output locator closure**：Transform output 的 `locator_ref` 必须等于 Core 预期 locator，或精确命中本 invocation 已 admission 的 input asset/result locator；不同表可选择各自真实输入 locator。未知、外部或未登记 locator 仍以 `OUTPUT_CLOSURE_MISMATCH` 拒绝。
 
 ## 当前受支持流程
 
 ```text
 registered immutable source receipts
+  -> Core-owned profile scaffold (FamilySpec/Projection/tables/relations)
+  -> Core-owned archive member/parser or VLM evidence OperationResults when needed
+  -> Core-owned product topology profile resolution + digest binding
   -> strict FamilySpec/Projection/transform submission
   -> Host compile + content-addressed bundle verification
   -> explicit in_process_unisolated execution
@@ -35,7 +41,7 @@ registered immutable source receipts
   -> dynamic_string_preserving.v1 materialization
   -> generic multi-table B3
   -> Core provenance/confidence evidence + provisional ProductAssessment
-  -> evidence-bound publication_acceptance HIL（仅review-status产品）
+  -> evidence-bound publication_acceptance HIL（review-status或抽取置信度产品）
   -> accepted review re-hash + final ProductAssessment/provenance
   -> atomic immutable Publication
   -> Artifact API download + SHA-256 verification

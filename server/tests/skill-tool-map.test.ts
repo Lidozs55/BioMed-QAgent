@@ -69,6 +69,7 @@ describe("stable Skill ↔ Tool mapping", () => {
     expect(core).toBeDefined();
     expect(core?.tools).toEqual([
       "inspect_dataset_execution_routes",
+      "scaffold_dataset_profile",
       "scaffold_dataset_execution_spec",
       "preflight_cleaning_rules",
       "inspect_source_coverage",

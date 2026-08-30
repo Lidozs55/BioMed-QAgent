@@ -173,6 +173,10 @@ function pointRow(chartId: string, index: number, yValue: string): ChartPointRow
     confidence_reason: "",
     human_review_state: "not_required",
     review_id: "",
+    review_evidence_digest: "",
+    review_reviewer: "",
+    reviewed_at: "",
+    review_reason: "",
     original_x_value: "",
     original_y_value: "",
   };

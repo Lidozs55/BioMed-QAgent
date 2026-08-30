@@ -88,7 +88,9 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   不可变 `SourceAsset`（带 hash / media type / size 校验，ADR-029）；
 - 通过 `Schema-driven RegisteredSourceAssetAdapter` 支持 CSV / TSV / JSON 的严格
   表头 / 行宽 / 类型校验，失败行进入审计拒绝记录（ADR-034）；
-- 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）；
+- 论文 / 附件 / 网页 / 图表数据的解析支持（PDF、VLM 图表抽取）；正式补充材料路线由
+  Core 获取 Europe PMC ZIP，bounded member extractor 记录父 ZIP/member hash，随后固定
+  CSV/TSV、XLSX、PDF table parser 生成可绑定的 UTF-8 derived assets；
 - 压缩载体成员提取：`acquire_core_carrier` 把 zip 成员与 xlsx 工作表确定性转换为
   CSV extraction assets（Core 拥有并登记 provenance）；
 - **Core 资产预览/解压工具**：`preview_core_asset` 只读列出 zip 成员清单并预览
@@ -100,6 +102,8 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
   [reports/2026-08-29-gold-qwen-direct-validation-study.md](reports/2026-08-29-gold-qwen-direct-validation-study.md)）；
 - 注册式多表 family 可由服务端 `scaffold_dataset_execution_spec` 从 live Family
   Registry 组合出 validate-ready 的完整执行规格，Agent 只提供 family、实体和来源绑定。
+- 文献定量产品使用 Core-owned `literature_experiment_chart.release.v1` 六表 projection，
+  profile scaffold 固定表/关系，Agent 只提交来源与抽取事实。
 
 ### 3.3 数据清洗与字段对齐 · 可靠性核心
 
@@ -150,7 +154,11 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 ### 3.6 图表 / 图像数据提取 · 视觉证据
 
 - 可选使用 Playwright 对网页 / 论文页面截图；
-- 以 **Qwen-VL / PDF 解析 / caption 文本** 组成**降级链路**提取图表数据；
+- 以 **Qwen-VL / PDF 解析 / caption 文本** 组成**降级链路**提取图表数据；正式输入
+  必须来自 Core asset ID，提取后注册带模型/版本、prompt digest、page/bbox、confidence
+  与点级 HIL 的 evidence manifest 和 OperationResult；
+- 低置信图点先经过 `vlm_extraction` HIL，Core 在 B3 前逐点核对 evidence manifest；
+  最终 Publication 仍需独立 `publication_acceptance`，二者不能由 credential approval 代替。
 - 提取产物带 `estimated` / `axis_unclear` / `legend_unclear` / `human_review_status`
   质量字段，可复用 Durable HIL / Confidence 协议做人工审核。
 - 能力分两段：**canonical `chart-evidence` 数据 → 生产 `bioactivity_measurement`

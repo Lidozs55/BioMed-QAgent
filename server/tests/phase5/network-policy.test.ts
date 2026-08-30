@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultExecutor,
   PublicHttpClient,
   UnsafeUrlError,
   resolvePublicHttpTarget,
@@ -21,6 +22,29 @@ const PUBLIC_HOST = { "example.com": [PUBLIC_IP] };
 async function expectUnsafe(promise: Promise<unknown>, message: string): Promise<void> {
   await expect(promise).rejects.toThrow(new UnsafeUrlError(message));
 }
+
+describe("defaultExecutor connection timeout", () => {
+  it("does not treat a slow response on an established socket as a connect timeout", async () => {
+    const fixture = await startFixtureServer(async (_request, response) => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("ok");
+    });
+    try {
+      const response = await defaultExecutor({
+        url: new URL(`http://127.0.0.1:${fixture.port}/slow-response`),
+        method: "GET",
+        headers: {},
+        body: null,
+        connectTimeoutMs: 30,
+        pinned: null,
+      });
+      expect(response.status).toBe(200);
+    } finally {
+      await fixture.close();
+    }
+  });
+});
 
 describe("resolvePublicHttpTarget (SSRF guards)", () => {
   it("rejects localhost", async () => {

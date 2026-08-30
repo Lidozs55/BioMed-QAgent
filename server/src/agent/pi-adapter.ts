@@ -169,6 +169,15 @@ const LENGTH_CONTINUATION_MESSAGE =
   "The previous assistant turn was truncated by the model length limit. " +
   "Continue the same task from the compacted context without repeating completed work. " +
   "Finish the remaining tool calls, required data artifacts, validation, and final response.";
+const STREAM_RECOVERY_MESSAGE =
+  "The previous assistant turn was interrupted by a transient provider stream read failure. " +
+  "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
+const MAX_STREAM_RECOVERY_ATTEMPTS = 3;
+const PROVIDER_RECOVERY_MESSAGE =
+  "The previous assistant turn exhausted its normal retries because the provider was temporarily rate limited or unavailable. " +
+  "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
+const MAX_PROVIDER_RECOVERY_ATTEMPTS = 3;
+const PROVIDER_RECOVERY_DELAY_MS = 60_000;
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
 
@@ -572,6 +581,66 @@ export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBu
 }
 
 /**
+ * Formal dataset runs often span many provider turns. Keep transient 429/5xx
+ * failures inside one durable run long enough for a short upstream throttle
+ * window to clear, while Pi's retry classifier still fails non-transient
+ * errors immediately.
+ */
+export function resolvePiRetryOverrides(): {
+  retry: {
+    enabled: true;
+    maxRetries: number;
+    baseDelayMs: number;
+    provider: { maxRetryDelayMs: number };
+  };
+} {
+  return {
+    retry: {
+      enabled: true,
+      maxRetries: 6,
+      baseDelayMs: 3_000,
+      provider: { maxRetryDelayMs: 60_000 },
+    },
+  };
+}
+
+export function isRecoverablePiStreamError(message: string | undefined): boolean {
+  return typeof message === "string" && (
+    /(?:^|\b)stream_read_error(?:\b|$)/iu.test(message)
+    || /^stream error:\s*stream disconnected before completion:\s*stream closed before response\.completed$/iu
+      .test(message.trim())
+  );
+}
+
+export function isRecoverablePiProviderError(message: string | undefined): boolean {
+  if (typeof message !== "string") return false;
+  const normalized = message.trim();
+  return (
+    /^429:/u.test(normalized)
+    && /(?:upstream rate limit exceeded|rate_limit_error)/iu.test(normalized)
+    && !/(?:insufficient_quota|billing|quota exhausted)/iu.test(normalized)
+  ) || (
+    /^503:/u.test(normalized)
+    && /(?:service temporarily unavailable|api_error)/iu.test(normalized)
+  );
+}
+
+async function waitForStreamRecovery(delayMs: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return false;
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve(true);
+    }, delayMs);
+    const abort = (): void => {
+      clearTimeout(timeout);
+      resolve(false);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
  * Whether a freshly resolved product config requires re-applying the Pi
  * session model / context window / compaction budgets.
  */
@@ -772,7 +841,7 @@ async function createRealUpstreamSession(
       "Configured Pi model is unavailable",
     );
   }
-  const settingsManager = SettingsManager.inMemory();
+  const settingsManager = SettingsManager.inMemory(resolvePiRetryOverrides());
   if (
     current.compactionTriggerRatio !== undefined &&
     current.compactionTargetRatio !== undefined
@@ -840,6 +909,58 @@ async function createRealUpstreamSession(
   if (configuredTools.length > 0) {
     session.setActiveToolsByName([...initialToolNames, TOOL_ACTIVATION_NAME]);
   }
+  let lastAssistantOutcome: { stopReason: string | undefined; errorMessage: string | undefined } | undefined;
+  let streamRecoveryController: AbortController | undefined;
+  const recoverySubscription = session.subscribe((event) => {
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      lastAssistantOutcome = {
+        stopReason: event.message.stopReason,
+        errorMessage: event.message.errorMessage,
+      };
+    }
+  });
+  const shouldRecoverInterruptedStream = (): boolean =>
+    lastAssistantOutcome !== undefined
+    && lastAssistantOutcome.stopReason === "error"
+    && isRecoverablePiStreamError(lastAssistantOutcome.errorMessage);
+  const shouldRecoverProviderFailure = (): boolean =>
+    lastAssistantOutcome !== undefined
+    && lastAssistantOutcome.stopReason === "error"
+    && isRecoverablePiProviderError(lastAssistantOutcome.errorMessage);
+  const promptWithStreamRecovery = async (input: string): Promise<void> => {
+    const controller = new AbortController();
+    streamRecoveryController?.abort();
+    streamRecoveryController = controller;
+    try {
+      lastAssistantOutcome = undefined;
+      await session.prompt(input);
+      let streamAttempt = 0;
+      let providerAttempt = 0;
+      while (shouldRecoverInterruptedStream() || shouldRecoverProviderFailure()) {
+        const streamInterrupted = shouldRecoverInterruptedStream();
+        if (streamInterrupted) {
+          streamAttempt += 1;
+          if (streamAttempt > MAX_STREAM_RECOVERY_ATTEMPTS) break;
+        } else {
+          providerAttempt += 1;
+          if (providerAttempt > MAX_PROVIDER_RECOVERY_ATTEMPTS) break;
+        }
+        const delayMs = streamInterrupted
+          ? 3_000 * 2 ** (streamAttempt - 1)
+          : PROVIDER_RECOVERY_DELAY_MS;
+        const ready = await waitForStreamRecovery(delayMs, controller.signal);
+        if (!ready) return;
+        lastAssistantOutcome = undefined;
+        await session.sendCustomMessage({
+          customType: streamInterrupted ? "biomed_stream_recovery" : "biomed_provider_recovery",
+          content: streamInterrupted ? STREAM_RECOVERY_MESSAGE : PROVIDER_RECOVERY_MESSAGE,
+          display: false,
+        }, { triggerTurn: true });
+      }
+    } finally {
+      if (streamRecoveryController === controller) streamRecoveryController = undefined;
+    }
+  };
   const reconcileConfig = resolveModel === undefined
     ? undefined
     : async (): Promise<void> => {
@@ -894,7 +1015,7 @@ async function createRealUpstreamSession(
     };
   return {
     sessionId: session.sessionId,
-    prompt: (input) => session.prompt(input),
+    prompt: promptWithStreamRecovery,
     resetRunProgress: () => runProgressTracker?.reset(),
     continueAfterLength: () => session.sendCustomMessage({
       customType: "biomed_length_continuation",
@@ -972,8 +1093,15 @@ async function createRealUpstreamSession(
         listener(mapped);
       });
     },
-    abort: () => session.abort(),
-    dispose: () => session.dispose(),
+    abort: () => {
+      streamRecoveryController?.abort();
+      return session.abort();
+    },
+    dispose: () => {
+      streamRecoveryController?.abort();
+      recoverySubscription();
+      session.dispose();
+    },
   };
 }
 

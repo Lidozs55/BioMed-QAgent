@@ -4,6 +4,11 @@ import {
   type CoreAcquisitionProviderDescriptor,
 } from "../../dataset/acquisition/provider-catalog.js";
 import { createDefaultDatasetFamilyRegistry } from "../../dataset/families/index.js";
+import { listCoreProductTopologyRequirements } from "../../dataset/dynamic-family/product-requirement-registry.js";
+import {
+  buildCoreProfilePrepareSubmission,
+  coreProductProfileScaffold,
+} from "../../dataset/dynamic-family/profile-scaffold.js";
 import type { BioMedAgentTool } from "../contracts.js";
 
 type DirectDynamicProvider = {
@@ -22,6 +27,94 @@ type AcquisitionOnlyProvider = {
   route_status: "requires_formal_extraction";
   blocker: string;
 };
+
+const LITERATURE_EXPERIMENT_CHART_PROFILE = "literature_experiment_chart.release.v1";
+
+function sourceEntryRecord(value: unknown): Record<string, string> {
+  if (!Array.isArray(value)) return value as Record<string, string>;
+  const result: Record<string, string> = {};
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError("registered_sources entries must be objects");
+    }
+    const entry = raw as Record<string, unknown>;
+    if (typeof entry.binding_id !== "string" || typeof entry.asset_id !== "string") {
+      throw new TypeError("registered_sources entries require binding_id and asset_id");
+    }
+    if (Object.hasOwn(result, entry.binding_id)) {
+      throw new TypeError(`registered_sources contains duplicate binding '${entry.binding_id}'`);
+    }
+    result[entry.binding_id] = entry.asset_id;
+  }
+  return result;
+}
+
+function acquisitionEntryRecord(value: unknown): Record<string, { provider_id: string; parameters: Record<string, unknown> }> {
+  if (!Array.isArray(value)) {
+    return value as Record<string, { provider_id: string; parameters: Record<string, unknown> }>;
+  }
+  const result: Record<string, { provider_id: string; parameters: Record<string, unknown> }> = {};
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError("acquisition_requests entries must be objects");
+    }
+    const entry = raw as Record<string, unknown>;
+    if (
+      typeof entry.binding_id !== "string"
+      || typeof entry.provider_id !== "string"
+      || entry.parameters === null
+      || typeof entry.parameters !== "object"
+      || Array.isArray(entry.parameters)
+    ) {
+      throw new TypeError("acquisition_requests entries require binding_id, provider_id, and parameters");
+    }
+    if (Object.hasOwn(result, entry.binding_id)) {
+      throw new TypeError(`acquisition_requests contains duplicate binding '${entry.binding_id}'`);
+    }
+    result[entry.binding_id] = {
+      provider_id: entry.provider_id,
+      parameters: entry.parameters as Record<string, unknown>,
+    };
+  }
+  return result;
+}
+
+function agentPrepareSubmission(
+  submission: ReturnType<typeof buildCoreProfilePrepareSubmission>,
+): Record<string, unknown> {
+  const registeredSources = submission.registered_sources as Readonly<Record<string, string>>;
+  const acquisitionRequests = submission.acquisition_requests as Readonly<Record<string, {
+    readonly provider_id: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+  }>>;
+  return {
+    ...submission,
+    registered_sources: Object.entries(registeredSources)
+      .map(([binding_id, asset_id]) => ({ binding_id, asset_id })),
+    acquisition_requests: Object.entries(acquisitionRequests)
+      .map(([binding_id, request]) => ({ binding_id, ...request })),
+  };
+}
+
+function productProfileGuidance(profileRef: string): {
+  use_when: string;
+  do_not_use_when: string;
+} {
+  if (profileRef === LITERATURE_EXPERIMENT_CHART_PROFILE) {
+    return {
+      use_when:
+        "The requested product requires paper_records, experiment_records, activity_value_records, chart_series/chart_points, and supplementary_asset_records as one literature experiment closure.",
+      do_not_use_when:
+        "The product is only a normalized compound-assay-target activity matrix without paper experiment or supplementary-asset tables.",
+    };
+  }
+  return {
+    use_when:
+      "The requested product is a normalized compound, assay, and target activity matrix with optional chart evidence.",
+    do_not_use_when:
+      "The request requires paper_records, experiment_records, or supplementary_asset_records; use literature_experiment_chart.release.v1 instead.",
+  };
+}
 
 function directProvider(
   descriptor: CoreAcquisitionProviderDescriptor,
@@ -99,17 +192,162 @@ export function datasetRouteCapabilities() {
       route_status: "task_scoped_family_spec",
       use_when:
         "No static entry expresses the required semantic topology, but every input can close through a direct binding below or a prior task-owned Core acquisition asset.",
-      next_tools: ["prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
+      next_tools: ["scaffold_dataset_profile", "prepare_dynamic_family_publication", "submit_dynamic_family_publication"],
       direct_bindings: directBindings,
+      product_requirement_profiles: [...listCoreProductTopologyRequirements()]
+        .sort((left, right) =>
+          left.profile_ref === LITERATURE_EXPERIMENT_CHART_PROFILE
+            ? -1
+            : right.profile_ref === LITERATURE_EXPERIMENT_CHART_PROFILE
+              ? 1
+              : left.profile_ref.localeCompare(right.profile_ref))
+        .map((requirements) => ({
+        profile_ref: requirements.profile_ref,
+        dataset_family: requirements.dataset_family,
+        ...productProfileGuidance(requirements.profile_ref),
+        route_status: "core_owned_topology_only" as const,
+        next_tool: "scaffold_dataset_profile" as const,
+        tables: requirements.tables,
+        relations: requirements.relations,
+        blocker:
+          "The Core profile proves required table/relation topology only; it does not prove source availability, extraction closure, validation success, or publication eligibility.",
+      })),
     },
     core_acquisition_only: acquisitionOnly,
     rules: [
       "A source missing from the static families can still use Dynamic Family when it appears in dynamic.direct_bindings.",
       "Provider wiring proves only trusted acquisition/input decoding; it does not prove semantic family, projection, transform, source availability, validation, or publication closure.",
       "A provider in core_acquisition_only is not a direct Dynamic Family input. Resolve its stated extraction blocker or report the affected projection as blocked/NO_DATA.",
+      "A literature experiment request requiring paper_records, experiment_records, activity_value_records, chart_series, chart_points, and supplementary_asset_records must use literature_experiment_chart.release.v1, not the legacy normalized bioactivity chart profile.",
       "Choose one route per family and row granularity. Do not send a task-scoped Dynamic FamilySpec to the static validator.",
     ],
   } as const;
+}
+
+export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
+  return {
+    name: "scaffold_dataset_profile",
+    label: "Scaffold Dataset Profile",
+    description:
+      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. Literature products requiring paper_records + experiment_records + activity_value_records + chart_series/points + supplementary_asset_records must select literature_experiment_chart.release.v1, never the legacy normalized bioactivity chart profile. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free.",
+    parameters: {
+      type: "object",
+      properties: {
+        profile_ref: { type: "string", minLength: 1 },
+        requirement_id: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$" },
+        source_bindings: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              source: { type: "string" },
+              input_requirement_ref: { type: "string" },
+              parameters: { type: "object" },
+            },
+            required: ["binding_id", "source", "input_requirement_ref", "parameters"],
+            additionalProperties: false,
+          },
+        },
+        registered_sources: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              asset_id: { type: "string", pattern: "^asset_[0-9a-f]{64}$" },
+            },
+            required: ["binding_id", "asset_id"],
+            additionalProperties: false,
+          },
+        },
+        acquisition_requests: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              binding_id: { type: "string" },
+              provider_id: { type: "string" },
+              parameters: { type: "object" },
+            },
+            required: ["binding_id", "provider_id", "parameters"],
+            additionalProperties: false,
+          },
+        },
+        transform_source: { type: "string", minLength: 1 },
+        transform_input_roles: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              role: { type: "string" },
+              media_type: { type: "string" },
+              constraint_ref: { anyOf: [{ type: "string" }, { type: "null" }] },
+            },
+            required: ["role", "media_type", "constraint_ref"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["profile_ref"],
+      additionalProperties: false,
+    },
+    async execute(value) {
+      try {
+        const profileRef = (value as { profile_ref?: unknown }).profile_ref;
+        if (typeof profileRef !== "string" || profileRef.trim() !== profileRef || profileRef === "") {
+          throw new TypeError("profile_ref must be a non-empty normalized string");
+        }
+        const scaffold = coreProductProfileScaffold(profileRef);
+        const record = value as Record<string, unknown>;
+        const submissionFields = [
+          "requirement_id", "source_bindings", "registered_sources",
+          "acquisition_requests", "transform_source", "transform_input_roles",
+        ] as const;
+        const provided = submissionFields.filter((field) => record[field] !== undefined);
+        if (provided.length !== 0 && provided.length !== submissionFields.length) {
+          throw new TypeError(`profile submission scaffold requires all fields: ${submissionFields.join(", ")}`);
+        }
+        const corePrepareSubmission = provided.length === 0
+          ? null
+          : buildCoreProfilePrepareSubmission({
+              profileRef,
+              requirementId: record.requirement_id as string,
+              sourceBindings: record.source_bindings as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["sourceBindings"],
+              registeredSources: sourceEntryRecord(record.registered_sources),
+              acquisitionRequests: acquisitionEntryRecord(record.acquisition_requests) as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["acquisitionRequests"],
+              transformSource: record.transform_source as string,
+              transformInputRoles: record.transform_input_roles as Parameters<typeof buildCoreProfilePrepareSubmission>[0]["transformInputRoles"],
+            });
+        const prepareSubmission = corePrepareSubmission === null
+          ? null
+          : agentPrepareSubmission(corePrepareSubmission);
+        const details = {
+          ok: true,
+          status: "scaffolded",
+          scaffold,
+          prepare_submission: prepareSubmission,
+          next_action: prepareSubmission === null
+            ? "supply_source_and_extraction_facts_to_scaffold"
+            : "prepare_generated_submission",
+        };
+        return { content: JSON.stringify(details), details };
+      } catch (error) {
+        const details = {
+          ok: false,
+          error: {
+            code: "profile_scaffold_rejected",
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false,
+            available_profiles: listCoreProductTopologyRequirements().map((item) => item.profile_ref),
+          },
+        };
+        return { content: JSON.stringify(details), details, isError: true };
+      }
+    },
+  };
 }
 
 export function createDatasetRoutePreflightTool(): BioMedAgentTool {

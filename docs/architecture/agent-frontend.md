@@ -99,6 +99,14 @@ failure-aware 后续动作。工具结果只记录名称与状态，不复制参
 不写 durable event，不改变 reducer，也不阻止或生成 `run_completed`。
 业务工具的共享失败形状为 `{ error, code, retryable, status_code? }`；只有底层错误
 明确携带 `retryable` 时才允许透传 true，普通参数/解析异常默认不可重试。
+Pi 模型调用只对其上游分类器认定的瞬时错误（如 429、503）自动重试：最多 6 次、
+3 秒指数退避；`provider.maxRetryDelayMs=60s` 只限制服务端 `Retry-After`，不是外层指数
+退避上限。正常重试耗尽后，adapter 只对明确的 `429 rate_limit_error` 或
+`503 service temporarily unavailable` 冷却 60 秒并执行隐藏 continuation，最多 3 轮。
+部分兼容 API 会把连接中断报告为裸 `stream_read_error`，或精确的
+`stream disconnected before completion: stream closed before response.completed`；adapter 对
+这两种已知流中断额外执行至多 3 次隐藏 continuation，不会把恢复扩展到配额/计费、认证、参数或普通业务
+错误。所有恢复保持在同一个 durable Run 内，不新建 task 或冒充成功。
 权限或 evidence-bound HIL 挂起的可信调用必须等待原调用恢复，不能以 workspace
 脚本产物替代。
 
@@ -109,6 +117,13 @@ exact static match 时才走 `validate -> execute`；否则仅在各输入被列
 只描述 static registry，不能用于判断 dynamic provider 是否接线。Dynamic 工具的
 `acquisition_requests` schema 仍是具体提交的执行契约，但 route capability view 来自同一
 `provider-catalog.ts`；handler/descriptor、route view/schema 均通过派生/闭包测试防止漂移。
+为兼容 strict function-tool schema，Agent wire 把动态绑定写成
+`registered_sources: [{binding_id, asset_id}]` 与
+`acquisition_requests: [{binding_id, provider_id, parameters}]`；adapter 在进入 Core 前将其
+归一化为以 binding ID 为键的 map，Core 提交/摘要契约不变。
+`literature_experiment_chart` 的图系列/点定位必须使用 SourceLocator 2.0 `image_bbox`
+精确字段，补充资产定位使用 SourceLocator 2.0 `json_pointer` 精确字段；JSON 作为 CSV 字段时
+仍需整体双引号转义。`locator`、`source_logical_file`、`source_raw_value` 等别名不在契约内。
 binary archive 即使已有 Core acquisition handler，也会显示为 acquisition-only，不能误报为
 Dynamic transform 已可直接消费。
 
@@ -212,6 +227,9 @@ base64 送 Qwen-VL；PDF 先用 `server/src/processing/vlm/pdf-images.ts` 提取
 产物 `parsed/chart_data/chart_data.csv` + `chart_data_points.csv`（UTF-8 BOM，
 Excel 兼容）。每行 `source_asset_id` 将 chart 追溯到原始图片 / PDF。超过 VLM
 尺寸/字节上限的图片不自动降采样，工具返回明确错误提示以更清晰的分辨率重新截图。
+框架在 `data/output/tasks/<taskId>/` 保留处理原件，同时把这三项 preparation-only
+输出（含 `confidence_records.json`）同步到 Agent Workspace 的同名相对路径，供后续
+`workspace_read` 使用；Workspace 副本不具有 Dataset Core Publication 权威。
 
 > 决策依据：ADR-003（保留可信内核）、ADR-007（Agent 不决定数据值）。
 

@@ -1674,8 +1674,16 @@ describe("publication acceptance restart continuation (Gold6 T6)", () => {
     });
     expect(resumed.status).toBe(200);
 
-    await expect.poll(async () =>
-      (await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status,
+    await expect.poll(async () => {
+      const status = (await runtime.repository.getSnapshot(staged.taskId))?.runs[0]?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(staged.taskId);
+    const finalEvents = await runtime.repository.listEvents(staged.taskId, 0);
+    const lastFailure = [...finalEvents].reverse().find((event) => event.type === "run_failed");
+    expect(
+      finalSnapshot?.runs[0]?.status,
+      JSON.stringify(lastFailure ?? finalSnapshot?.runs[0]),
     ).toBe("completed");
 
     // Exactly ONE immutable publication, bound to the ORIGINAL candidate.

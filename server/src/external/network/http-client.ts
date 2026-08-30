@@ -159,9 +159,17 @@ export const defaultExecutor: RequestExecutor = (request) =>
     );
     req.on("error", reject);
     if (request.connectTimeoutMs !== undefined) {
-      req.setTimeout(request.connectTimeoutMs, () => {
+      const connectTimer = setTimeout(() => {
         req.destroy(Object.assign(new Error("connect timeout"), { name: "TimeoutError" }));
+      }, request.connectTimeoutMs);
+      const clearConnectTimer = (): void => clearTimeout(connectTimer);
+      req.once("socket", (socket) => {
+        if (socket.connecting) socket.once("connect", clearConnectTimer);
+        else clearConnectTimer();
       });
+      req.once("response", clearConnectTimer);
+      req.once("error", clearConnectTimer);
+      req.once("close", clearConnectTimer);
     }
     if (request.signal !== undefined) {
       const abort = (): void => {

@@ -273,13 +273,19 @@ function operationExpectation(
     input_asset_ids: expected.input_asset_receipts.map((receipt) => receipt.asset_id),
     upstream_result_manifest_ids: expected.input_result_receipts.map((receipt) => receipt.result_manifest_id),
     declared_schemas: expected.expected_outputs.map((output) => output.schema_ref),
-    declared_locators: expectedOutputLocatorClosure(expected.expected_outputs),
+    declared_locators: runtimeOutputLocatorClosure(receipts),
     committed_at: input.now?.().toISOString(),
   };
 }
 
 export function expectedOutputLocatorClosure(
   outputs: ExpectedTransformInvocation["expected_outputs"],
+): string[] {
+  return [...new Set(outputs.map((output) => output.locator_ref))];
+}
+
+export function runtimeOutputLocatorClosure(
+  outputs: readonly { readonly locator_ref: string }[],
 ): string[] {
   return [...new Set(outputs.map((output) => output.locator_ref))];
 }

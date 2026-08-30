@@ -36,9 +36,14 @@ export {
   type PrepareDynamicFamilyPublicationToolOptions,
 } from "./dynamic-family-publication.js";
 export {
+  createDatasetProfileScaffoldTool,
   createDatasetRoutePreflightTool,
   datasetRouteCapabilities,
 } from "./dataset-route-preflight.js";
+export {
+  createSupplementaryArchiveExtractionTool,
+  type SupplementaryArchiveExtractionToolOptions,
+} from "./supplementary-archive.js";
 export {
   createBusinessToolBundle,
   type BusinessToolBundle,

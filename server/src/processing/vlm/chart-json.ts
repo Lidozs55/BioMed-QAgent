@@ -152,6 +152,10 @@ export const CHART_DATA_POINTS_COLUMNS = [
   "confidence_reason",
   "human_review_state",
   "review_id",
+  "review_evidence_digest",
+  "review_reviewer",
+  "reviewed_at",
+  "review_reason",
   "original_x_value",
   "original_y_value",
 ] as const;
@@ -187,6 +191,10 @@ export interface ChartPointRow {
   confidence_reason: string;
   human_review_state: "not_required" | "pending" | "accepted" | "corrected" | "rejected";
   review_id: string;
+  review_evidence_digest: string;
+  review_reviewer: string;
+  reviewed_at: string;
+  review_reason: string;
   original_x_value: string;
   original_y_value: string;
 }
@@ -285,6 +293,10 @@ export function normalizeChartJson(
       confidence_reason: confidenceReason,
       human_review_state: modelExtracted ? "pending" : "not_required",
       review_id: "",
+      review_evidence_digest: "",
+      review_reviewer: "",
+      reviewed_at: "",
+      review_reason: "",
       original_x_value: "",
       original_y_value: "",
     });

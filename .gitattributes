@@ -7,5 +7,11 @@ server/tests/fixtures/b3-memory-disk-parity-v1.json text eol=lf
 # (CRLF breaks the esbuild transform used by vitest on Windows)
 scripts/*.mjs text eol=lf
 
+# Gold evaluation checksums freeze byte-level inputs; keep all non-prompt
+# metadata and verifier files LF on every platform. Prompts remain binary under
+# the directory-local rule so their original bytes are never normalized.
+docs/evaluation/gold-v1/** text eol=lf
+docs/evaluation/gold-v1/prompts/*.txt -text
+
 # Shell hooks must remain LF (CRLF breaks sh execution on Windows)
 .husky/* -text

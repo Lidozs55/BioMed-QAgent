@@ -6,11 +6,16 @@ import { DEFAULT_RUNTIME_LIMITS, type DiscoveryQueryRecord, type RuntimeLimits }
 import type { BioMedAgentAdapter, BioMedModelConfig } from "../agent/contracts.js";
 import { PiAgentAdapter } from "../agent/pi-adapter.js";
 import { createDatasetExecutionTools } from "../agent/tools/dataset-execution.js";
-import { createDatasetRoutePreflightTool } from "../agent/tools/dataset-route-preflight.js";
+import { createSupplementaryArchiveExtractionTool } from "../agent/tools/supplementary-archive.js";
+import {
+  createDatasetProfileScaffoldTool,
+  createDatasetRoutePreflightTool,
+} from "../agent/tools/dataset-route-preflight.js";
 import { createCoreAssetTools } from "../agent/tools/core-asset-tools.js";
 import {
   createDynamicFamilyPublicationTool,
   dynamicFamilyPublicationWire,
+  parseDynamicFamilyPublicationSubmission,
   createPrepareDynamicFamilyPublicationTool,
   type ParsedDynamicFamilyPublicationSubmission,
 } from "../agent/tools/dynamic-family-publication.js";
@@ -39,6 +44,9 @@ import {
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-catalog.js";
+import { EXTENDED_PROVIDER_IDS } from "../dataset/acquisition/extended-providers.js";
+import { extractRegisteredZipMembers } from "../dataset/archive/zip-members.js";
+import { parseRegisteredArchiveMembers } from "../dataset/archive/member-parsers.js";
 import { createDefaultDatasetFamilyRegistry } from "../dataset/families/index.js";
 import {
   CoreAcquisitionRegistry,
@@ -55,6 +63,10 @@ import {
 } from "../dataset/dynamic-family/preflight.js";
 import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
+import {
+  resolveCoreProductTopologyRequirements,
+} from "../dataset/dynamic-family/product-requirement-registry.js";
+import type { CoreProductTopologyRequirements } from "../dataset/dynamic-family/product-requirements.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { BrowserParserRecipeRegistry, createDefaultBrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -361,6 +373,8 @@ export interface Phase3DynamicFamilySeams {
   }) => Phase3AcquisitionRuntime;
   readonly submitDynamicFamilyPublication?: typeof submitDynamicFamilyPublication;
   readonly publishDynamicFamily?: typeof publishDynamicFamily;
+  /** Test-only Core product profile resolver. Production uses the trusted registry. */
+  readonly resolveProductRequirements?: (profileRef: string) => CoreProductTopologyRequirements;
   /** Test-only observation seam for deterministic final-fence races. */
   readonly assertExecutionLockOwned?: (assertOwned: () => Promise<boolean>) => Promise<boolean>;
   /** Test-only gate immediately before the publisher's final rename fence. */
@@ -540,6 +554,7 @@ export async function createPhase3Runtime(
       );
       const bundle = await createBusinessToolBundle({
         taskRoot: taskRoot,
+        workspaceRoot,
         db: dbClient,
         approvalGate,
         hilGate: approvalGate,
@@ -584,12 +599,17 @@ export async function createPhase3Runtime(
       });
       const dynamicFamilyPrepareTool = createPrepareDynamicFamilyPublicationTool({
         prepare: async (submission) => {
+          const productRequirements = (
+            options.dynamicFamilySeams?.resolveProductRequirements
+            ?? resolveCoreProductTopologyRequirements
+          )(submission.family_spec.assessment_policy_ref);
           const preparation = dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
             requirementId: submission.execution_proposal.requirement_id,
             generation: preparation.generation,
             submission,
+            productRequirements,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
@@ -604,11 +624,17 @@ export async function createPhase3Runtime(
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
         resolveSubmission: async (preflightReceipt) =>
-          dynamicFamilyPreflight.resolveSubmission<ParsedDynamicFamilyPublicationSubmission>(preflightReceipt),
+          parseDynamicFamilyPublicationSubmission(
+            dynamicFamilyPreflight.resolveSubmission(preflightReceipt),
+          ),
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }
+          const productRequirements = (
+            options.dynamicFamilySeams?.resolveProductRequirements
+            ?? resolveCoreProductTopologyRequirements
+          )(submission.family_spec.assessment_policy_ref);
           await validateDynamicFamilyPreflightReceipt({
             receipt: preflightReceipt,
             submission,
@@ -617,6 +643,7 @@ export async function createPhase3Runtime(
             generation: preflightReceipt.generation,
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
+            productRequirements,
           });
           const executionLock = await acquireExecutionLock(
             { lockRoot: path.join(taskRoot, "state", "execution-locks") },
@@ -688,6 +715,7 @@ export async function createPhase3Runtime(
             generation: preflightReceipt.generation,
             preflightReceipt,
             preflightSubmission: submission,
+            productRequirements,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
             isGenerationCurrent: (candidateGeneration, cancelFence) =>
               candidateGeneration === reservation?.generation
@@ -711,6 +739,7 @@ export async function createPhase3Runtime(
             requirementId: submission.execution_proposal.requirement_id,
             execution: result,
             validationProfileRef: submission.family_spec.validation_policy_ref,
+            productRequirements,
             hilGate: approvalGate,
             signal,
             isGenerationCurrent: async () =>
@@ -759,6 +788,7 @@ export async function createPhase3Runtime(
             relations: result.materialization.candidate.relations.map((relation) => relation.relation_id),
             artifacts: product.manifest.artifacts,
             source_acquisition_provenance: result.sourceAcquisitionProvenance,
+            source_input_provenance: result.sourceInputProvenance,
             backend: result.receipt.execution_backend,
             security_boundary: false,
           };
@@ -816,6 +846,40 @@ export async function createPhase3Runtime(
         },
       });
       const datasetRoutePreflightTool = createDatasetRoutePreflightTool();
+      const datasetProfileScaffoldTool = createDatasetProfileScaffoldTool();
+      const supplementaryArchiveTool = createSupplementaryArchiveExtractionTool({
+        extract: async (pmcid, signal) => {
+          const requirementId = `supplementary_${pmcid.toLowerCase()}`;
+          const acquired = await acquisitionRuntime.acquire({
+            schema_version: "1.0",
+            request_id: `request_${randomUUID()}`,
+            task_id: taskId,
+            requirement_id: requirementId,
+            binding_id: `archive_${pmcid.toLowerCase()}`,
+            mode: "builtin",
+            provider_id: EXTENDED_PROVIDER_IDS.europePmcSupplementary,
+            recipe_id: null,
+            recipe_version: null,
+            parameters: { source: "europepmc_supplementary", accession: pmcid, entities: {} },
+          }, signal);
+          if (acquired.sourceAsset === null) {
+            throw new Error(`Europe PMC did not return a supplementary ZIP for ${pmcid}`);
+          }
+          const extraction = await extractRegisteredZipMembers({
+            taskId,
+            taskRoot,
+            archiveAssetId: acquired.sourceAsset.asset_id,
+            sourceAssetRegistry,
+          });
+          const parsed = await parseRegisteredArchiveMembers({
+            taskId,
+            taskRoot,
+            sourceAssetRegistry,
+            members: extraction.members,
+          });
+          return { ...extraction, ...parsed };
+        },
+      });
       // Import tasks (user-uploaded files): restore the LLM cleaning flow —
       // inspect the uploaded files and commit the cleaned raw files into the
       // global cache under the user_import namespace.
@@ -828,6 +892,8 @@ export async function createPhase3Runtime(
         ...dynamicTools,
         ...datasetTools,
         datasetRoutePreflightTool,
+        datasetProfileScaffoldTool,
+        supplementaryArchiveTool,
         dynamicFamilyPrepareTool,
         dynamicFamilyTool,
         ...coreAssetTools,
@@ -841,6 +907,8 @@ export async function createPhase3Runtime(
           ...dynamicTools,
           ...datasetTools,
           datasetRoutePreflightTool,
+          datasetProfileScaffoldTool,
+          supplementaryArchiveTool,
           dynamicFamilyPrepareTool,
           dynamicFamilyTool,
           ...coreAssetTools,

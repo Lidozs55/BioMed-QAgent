@@ -3,6 +3,7 @@
  * degradation, CSV outputs, provenance, size caps (Python parity).
  */
 
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,7 @@ import { extractPdfImages } from "../../src/processing/vlm/pdf-images.js";
 import { createChartDataVlmTool } from "../../src/agent/tools/extract-chart-data-vlm.js";
 import { PublicHttpClient } from "../../src/external/network/http-client.js";
 import { fakeResolver, localExecutor, PUBLIC_IP, startFixtureServer, type FixtureServer } from "./helpers.js";
+import { SourceAssetRegistry } from "../../src/runtime/source-assets/registry.js";
 import { SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-map.js";
 
 const VECTOR_PDF_FIXTURE = path.resolve(
@@ -240,6 +242,29 @@ describe("writeChartCsvs + validation", () => {
     expect(written.pointsCsv.endsWith(CHART_POINTS_CSV_NAME)).toBe(true);
   });
 
+  it("round-trips quoted CR/LF and quotes across successive merges", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-multiline-"));
+    roots.push(taskRoot);
+    const chartDataDir = path.join(taskRoot, "parsed", "chart_data");
+    const first = normalizeChartJson(
+      JSON.parse(GOOD_VLM_JSON) as Record<string, unknown>,
+      "asset_first", 0, "first.png", "qwen-vl-max",
+    );
+    first.chartRow.title = "line one\r\nline two, \"quoted\"";
+    first.pointRows[0]!.confidence_reason = "visible label\nwith quoted \"note\"";
+    await writeChartCsvs(chartDataDir, [first.chartRow], first.pointRows);
+
+    const second = normalizeChartJson(
+      JSON.parse(GOOD_VLM_JSON) as Record<string, unknown>,
+      "asset_second", 0, "second.png", "qwen-vl-max",
+    );
+    await expect(writeChartCsvs(chartDataDir, [second.chartRow], second.pointRows)).resolves.toBeDefined();
+    await expect(readFile(path.join(chartDataDir, CHART_CSV_NAME), "utf8"))
+      .resolves.toContain("line one\r\nline two, \"\"quoted\"\"");
+    await expect(readFile(path.join(chartDataDir, CHART_POINTS_CSV_NAME), "utf8"))
+      .resolves.toContain("visible label\nwith quoted \"\"note\"\"");
+  });
+
   it("reports violations for model-extracted charts missing model_name", () => {
     const { chartRow, pointRows } = normalizeChartJson(
       JSON.parse(GOOD_VLM_JSON) as Record<string, unknown>,
@@ -370,7 +395,8 @@ describe("extract_chart_data_vlm tool", () => {
 
   it("runs L1 over a fixture VLM server and writes chart CSVs with provenance", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
-    roots.push(taskRoot);
+    const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-workspace-"));
+    roots.push(taskRoot, workspaceRoot);
     const fixture = await startFixtureServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
@@ -382,6 +408,7 @@ describe("extract_chart_data_vlm tool", () => {
     });
     const [tool] = createChartDataVlmTool({
       taskRoot,
+      workspaceRoot,
       approvalGate: { request: async () => "approve" },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient,
@@ -416,6 +443,18 @@ describe("extract_chart_data_vlm tool", () => {
     expect(parsed.outputs.some((output) => output.endsWith(CHART_CSV_NAME))).toBe(true);
     expect(parsed.outputs.some((output) => output.endsWith(CHART_POINTS_CSV_NAME))).toBe(true);
     expect(parsed.outputs.some((output) => output.endsWith("confidence_records.json"))).toBe(true);
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", CHART_CSV_NAME),
+      "utf8",
+    )).resolves.toContain("bar");
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
+      "utf8",
+    )).resolves.toContain("S1");
+    await expect(readFile(
+      path.join(workspaceRoot, "parsed", "chart_data", "confidence_records.json"),
+      "utf8",
+    )).resolves.toContain("human_review_state");
     const confidenceArtifact = JSON.parse(
       await readFile(path.join(taskRoot, "parsed", "chart_data", "confidence_records.json"), "utf8"),
     ) as {
@@ -623,9 +662,19 @@ describe("extract_chart_data_vlm tool", () => {
       res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
     });
     fixtures.push(fixture);
+    let activeApprovals = 0;
+    let maximumActiveApprovals = 0;
     const [tool] = createChartDataVlmTool({
       taskRoot,
-      approvalGate: { request: async () => "approve" },
+      approvalGate: {
+        request: async () => {
+          activeApprovals += 1;
+          maximumActiveApprovals = Math.max(maximumActiveApprovals, activeApprovals);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          activeApprovals -= 1;
+          return "approve";
+        },
+      },
       vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       httpClient: new PublicHttpClient({
         resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
@@ -656,6 +705,7 @@ describe("extract_chart_data_vlm tool", () => {
       tool.execute({ source_path: "source_assets/figures/second.png" }),
     ]);
 
+    expect(maximumActiveApprovals).toBe(1);
     expect(results.every((result) => JSON.parse(result.content).status === "ok")).toBe(true);
     const pointCsv = await readFile(
       path.join(taskRoot, "parsed", "chart_data", CHART_POINTS_CSV_NAME),
@@ -668,6 +718,104 @@ describe("extract_chart_data_vlm tool", () => {
     )) as { record_overrides: unknown[] };
     expect(pointCount).toBe(4);
     expect(confidence.record_overrides).toHaveLength(pointCount);
+  }, 60_000);
+
+  it("registers a reviewed VLM evidence manifest only from a formal Core input asset", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-formal-"));
+    roots.push(taskRoot);
+    const fixture = await startFixtureServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
+    });
+    fixtures.push(fixture);
+    const figureDir = path.join(taskRoot, "source_assets", "figures");
+    await mkdir(figureDir, { recursive: true });
+    await writeFile(path.join(figureDir, "chart.png"), tinyPng());
+    const registry = new SourceAssetRegistry("task_vlm_formal", taskRoot, {
+      now: () => new Date("2026-08-28T00:00:00.000Z"),
+    });
+    const source = await registry.register({
+      sourceId: "source_figure",
+      relativePath: "source_assets/figures/chart.png",
+      role: "source",
+      mediaType: "image/png",
+    });
+    await registry.registerCoreAcquisitionProvenance(source, {
+      provider_id: "fixture.files.v1",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "b".repeat(64),
+    });
+    const [tool] = createChartDataVlmTool({
+      taskRoot,
+      taskId: "task_vlm_formal",
+      sourceAssetRegistry: registry,
+      approvalGate: { request: async () => "approve" },
+      hilGate: {
+        requestHIL: async (request) => ({
+          schema_version: "1.0",
+          review_id: "review_formal_vlm",
+          request_id: "request_formal_vlm",
+          decision: { action: "accept" },
+          reviewer: "user",
+          reviewed_at: "2026-08-28T00:00:00.000Z",
+          evidence_digest: createHash("sha256").update(JSON.stringify(request.evidence)).digest("hex"),
+          reason: "Formal point review",
+        }),
+      },
+      vlmConfig: { apiKey: "k", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      httpClient: new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: localExecutor(fixture.port),
+      }),
+    });
+
+    const result = await tool.execute({ source_asset_id: source.asset_ref.asset_id });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content) as {
+      formal_status: string;
+      prompt_digest: string;
+      operation_result: { result_manifest_id: string; operation_kind: string; output_kind: string };
+      formal_evidence_assets: Array<{
+        asset_id: string;
+        provenance: {
+          operation_kind: string;
+          parent_asset_ids: string[];
+          evidence: {
+            model_version: string;
+            manifest: { points: Array<{ human_review_state: string; review_evidence_digest: string }> };
+          };
+        };
+      }>;
+    };
+    expect(parsed.formal_status).toBe("core_registered");
+    expect(parsed.prompt_digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(parsed.formal_evidence_assets).toHaveLength(1);
+    expect(parsed.operation_result).toMatchObject({
+      operation_kind: "parse",
+      output_kind: "source_asset",
+    });
+    await expect(registry.resolveDerivedOperationResult(parsed.operation_result.result_manifest_id))
+      .resolves.toMatchObject({ output_kind: "source_asset" });
+    expect(parsed.formal_evidence_assets[0]).toMatchObject({
+      provenance: {
+        operation_kind: "vlm_extraction",
+        parent_asset_ids: [source.asset_ref.asset_id],
+        evidence: {
+          model_version: "qwen-vl-max",
+          manifest: {
+            points: [
+              expect.objectContaining({
+                human_review_state: "accepted",
+                review_evidence_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+              }),
+              expect.objectContaining({ human_review_state: "accepted" }),
+            ],
+          },
+        },
+      },
+    });
+    await expect(registry.resolveFormalInput(parsed.formal_evidence_assets[0]!.asset_id))
+      .resolves.toMatchObject({ acquisition_provenance: null });
   }, 60_000);
 
   it("marks a processor-returned error as a tool error (isError, not empty success)", async () => {

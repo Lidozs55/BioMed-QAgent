@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   parseProductAssessment,
+  type CoreDerivedAssetProvenance,
   type DatasetManifestV2,
   type HILReviewItem,
   type HILSubject,
@@ -28,6 +29,7 @@ import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
+import { validateLiteratureExperimentChartProfile } from "../families/index.js";
 import {
   readPublicationAcceptanceContinuation,
   savePublicationAcceptanceContinuation,
@@ -45,6 +47,11 @@ import {
 } from "../validation/b3-production-policy.js";
 import type { B3CleanupCapability } from "../validation/b3-backend-decision/index.js";
 import type { ResourceBaselinePolicy } from "../validation/resource-baseline.js";
+import {
+  assertProductTopology,
+  coreProductTopologyDigest,
+  type CoreProductTopologyRequirements,
+} from "./product-requirements.js";
 
 interface DynamicPublicationHILInput {
   readonly requirement_id: string | null;
@@ -84,6 +91,8 @@ export interface PublishDynamicFamilyInput {
   readonly requirementId: string;
   readonly execution: DynamicPublicationExecution;
   readonly validationProfileRef: string;
+  /** Core-owned requested-product closure; Agent FamilySpec cannot define it. */
+  readonly productRequirements: CoreProductTopologyRequirements;
   readonly signal?: AbortSignal;
   readonly publishedAt?: string;
   readonly hilGate?: DynamicPublicationHILGate | null;
@@ -145,6 +154,10 @@ export async function publishDynamicFamily(
   if (candidate.task_id !== input.taskId || candidate.requirement_id !== input.requirementId) {
     throw new TypeError("dynamic publication identity does not match the Core task/requirement");
   }
+  if (input.productRequirements === undefined) {
+    throw new TypeError("dynamic publication requires Core-owned product requirements");
+  }
+  assertProductTopology(candidate, input.productRequirements);
   await assertGenerationCurrent();
   const outputDir = path.join(input.taskRoot, "dataset_runs", runId, input.requirementId);
   await mkdir(outputDir, { recursive: true });
@@ -169,6 +182,7 @@ export async function publishDynamicFamily(
   const outputForRef = (ref: { result_manifest_id: string; output_file_index: number }) =>
     resultForRef(ref).output_files[ref.output_file_index];
   const validationTables = [];
+  const stagedTablePaths = new Map<string, string>();
   for (const [tableIndex, table] of candidate.tables.entries()) {
     await assertGenerationCurrent();
     const output = outputForRef(table.data_ref);
@@ -187,6 +201,7 @@ export async function publishDynamicFamily(
     if ((await sha256FileStream(destination)) !== output.sha256) {
       throw new Error(`dynamic product copy drifted for '${table.definition.table_id}'`);
     }
+    stagedTablePaths.set(table.definition.table_id, destination);
     const provenanceRef = candidate.provenance_refs[tableIndex];
     const confidenceRef = candidate.confidence_refs[tableIndex];
     if (provenanceRef === undefined || confidenceRef === undefined) {
@@ -207,6 +222,12 @@ export async function publishDynamicFamily(
       confidence_refs: [key(confidenceRef)],
     });
   }
+  await validateLiteratureExperimentChartProfile({
+    profileRef: input.productRequirements.profile_ref,
+    stagedTablePaths,
+    sourceInputProvenance: transformExecution?.sourceInputProvenance ?? [],
+    signal: input.signal,
+  });
   await assertGenerationCurrent();
   await mkdir(input.workspaceRoot, { recursive: true });
   const b3Policy = input.b3Validation?.policy ?? PRODUCTION_B3_RESOURCE_POLICY;
@@ -280,11 +301,24 @@ export async function publishDynamicFamily(
     });
   await assertGenerationCurrent();
   const failed = b3.checks.filter((check) => !check.passed);
+  const reviewFieldNames = new Set([
+    "review_status",
+    "human_review_status",
+    "confidence",
+    "confidence_level",
+    "extraction_confidence",
+  ]);
   const requiresHilAcceptance = input.execution.materialization.schemas.some((schema) =>
-    schema.fields.some((field) => field.name === "review_status" || field.name === "human_review_status"),
+    schema.fields.some((field) => reviewFieldNames.has(field.name.replaceAll("-", "_"))),
   );
   let assessment = parseProductAssessment(
-    structuralAssessment(candidate, failed.length === 0, requiresHilAcceptance, browserExecution !== null),
+    structuralAssessment(
+      candidate,
+      input.productRequirements,
+      failed.length === 0,
+      requiresHilAcceptance,
+      browserExecution !== null,
+    ),
   );
   let hilAcceptance: Record<string, JsonValue> | null = null;
   // Durable restart continuation for the acceptance review (HIL path only).
@@ -296,6 +330,33 @@ export async function publishDynamicFamily(
   const assessmentPath = path.join(outputDir, "product_assessment.json");
   await assertGenerationCurrent();
   await writeFile(assessmentPath, `${JSON.stringify(assessment, null, 2)}\n`, "utf8");
+  const acquisitionByAsset = new Map(
+    sourceAcquisitionProvenance.map((item) => [item.asset_id, item]),
+  );
+  const derivedByAsset = new Map(
+    (transformExecution?.sourceInputProvenance ?? [])
+      .filter((item): item is CoreDerivedAssetProvenance => "operation_kind" in item)
+      .map((item) => [item.asset_id, item]),
+  );
+  const inputReceiptByAsset = new Map(
+    (transformExecution?.receipt.input_asset_receipts ?? [])
+      .map((item) => [item.asset_id, item]),
+  );
+  const provenanceSources = candidate.registered_asset_ids.map((assetId) => {
+    const acquisition = acquisitionByAsset.get(assetId);
+    const derived = derivedByAsset.get(assetId);
+    const receipt = inputReceiptByAsset.get(assetId);
+    return {
+      asset_id: assetId,
+      locator_ref:
+        acquisition?.canonical_accession
+        ?? acquisition?.provider_id
+        ?? derived?.operation_result_id
+        ?? assetId,
+      sha256: receipt?.sha256 ?? assetId.slice("asset_".length),
+      size_bytes: receipt?.size_bytes ?? null,
+    };
+  });
   // Built before the acceptance review so the durable publication
   // continuation can carry the exact provenance base; ``hil_acceptance`` is
   // appended after the review (or on its post-restart resume).
@@ -311,14 +372,12 @@ export async function publishDynamicFamily(
       input_asset_receipts: transformExecution!.receipt.input_asset_receipts,
     } : {}),
     operation_result_manifest_ids: integratedResults.map((result) => result.result_manifest_id),
-    sources: sourceAcquisitionProvenance.map((provenance) => ({
-      asset_id: provenance.asset_id,
-      locator_ref: provenance.canonical_accession ?? provenance.provider_id,
-      sha256: null,
-      size_bytes: null,
-    })),
+    sources: provenanceSources,
     source_receipts: [],
     core_acquisition_provenance: sourceAcquisitionProvenance,
+    ...(browserExecution === null ? {
+      core_input_provenance: transformExecution!.sourceInputProvenance,
+    } : {}),
     ...(browserExecution === null ? {} : { browser_evidence_acceptance: browserExecution.browserEvidenceAcceptance }),
   })) as Record<string, unknown>;
 
@@ -367,6 +426,12 @@ export async function publishDynamicFamily(
         checks_sha256: canonicalDigest(b3.checks),
         checked_count: b3.checks.length,
         failed_count: 0,
+      },
+      product_requirements: {
+        profile_ref: input.productRequirements.profile_ref,
+        digest: coreProductTopologyDigest(input.productRequirements),
+        table_ids: input.productRequirements.tables.map((table) => table.table_id),
+        relation_ids: input.productRequirements.relations,
       },
       tables,
     });
@@ -484,7 +549,7 @@ export async function publishDynamicFamily(
       reason: review.reason,
     };
     assessment = parseProductAssessment({
-      ...structuralAssessment(candidate, true, true, true),
+      ...structuralAssessment(candidate, input.productRequirements, true, true, true),
       human_review_evidence: [reviewEvidence],
     });
     hilAcceptance = toJsonValue({ ...reviewEvidence, reviewed_snapshot: reviewedSnapshot }) as Record<string, JsonValue>;
@@ -608,19 +673,20 @@ export async function publishDynamicFamily(
  */
 export function structuralAssessment(
   candidate: PublicationCandidate,
+  productRequirements: CoreProductTopologyRequirements,
   passed: boolean,
   requiresHilAcceptance: boolean,
   hilAccepted: boolean,
 ): ProductAssessment {
-  const tableCount = candidate.tables.length;
-  const relationCount = candidate.relations.length;
+  const tableCount = productRequirements.tables.length;
+  const relationCount = productRequirements.relations.length;
   const score = (dimension: ProductAssessment["scores"][number]["dimension"], satisfied: number, required: number) => ({
     dimension, score: required === 0 ? 1 : satisfied / required, satisfied, required,
   });
   return {
     schema_version: "1.0",
-    requirement_id: "dynamic_family_structural_b3.v1",
-    package_id: candidate.candidate_id,
+    requirement_id: productRequirements.profile_ref,
+    package_id: productRequirements.dataset_family,
     package_version: "1.0",
     product_status: passed && (!requiresHilAcceptance || hilAccepted) ? "publishable" : "incomplete",
     scores: [
@@ -632,12 +698,12 @@ export function structuralAssessment(
       score("reproducibility", passed ? 1 : 0, 1),
     ],
     missing_requirements: [
-      ...(passed ? [] : ["dynamic_family_structural_b3.v1"]),
+      ...(passed ? [] : [productRequirements.profile_ref]),
       ...(requiresHilAcceptance && !hilAccepted ? ["dynamic_family_hil_acceptance.v1"] : []),
     ],
     blockers: [
       ...(passed ? [] : [{
-        requirement_id: "dynamic_family_structural_b3.v1",
+        requirement_id: productRequirements.profile_ref,
         dimension: "schema" as const,
         code: "artifact_incomplete" as const,
         message: "generic multi-table validation did not pass",
@@ -790,8 +856,20 @@ export async function completePublicationAcceptanceContinuation(
     reviewed_at: input.review.reviewed_at,
     reason: input.review.reason,
   };
+  const productRequirements: CoreProductTopologyRequirements = {
+    schema_version: "1.0",
+    profile_ref: record.validation_profile_ref,
+    dataset_family: candidate.dataset_family,
+    tables: candidate.tables.map((table) => ({
+      table_id: table.definition.table_id,
+      role: table.definition.role,
+      schema_ref: table.definition.schema_ref,
+      min_rows: table.definition.allow_empty ? 0 : 1,
+    })),
+    relations: candidate.relations.map((relation) => relation.relation_id),
+  };
   const assessment = parseProductAssessment({
-    ...structuralAssessment(candidate, true, true, true),
+    ...structuralAssessment(candidate, productRequirements, true, true, true),
     human_review_evidence: [reviewEvidence],
   });
   await writeFile(

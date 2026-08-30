@@ -13,8 +13,8 @@ import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import type { CoreAcquisitionPlan } from "../src/dataset/acquisition/runtime.js";
 import {
   dynamicFamilyPreflightSubmissionDigest,
-  prepareDynamicFamilyPublication,
-  validateDynamicFamilyPreflightReceipt,
+  prepareDynamicFamilyPublication as prepareDynamicFamilyPublicationCore,
+  validateDynamicFamilyPreflightReceipt as validateDynamicFamilyPreflightReceiptCore,
 } from "../src/dataset/dynamic-family/preflight.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
 import type { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
@@ -26,6 +26,33 @@ import {
 import { createDynamicFamilyPreflightCoordinator } from "../src/runtime/dynamic-family-preflight-coordinator.js";
 
 const DIGEST = "b".repeat(64);
+const PRODUCT_REQUIREMENTS = {
+  schema_version: "1.0" as const,
+  profile_ref: "policy_assessment",
+  dataset_family: "family_preflight",
+  tables: [
+    { table_id: "records", role: "primary" as const, schema_ref: "schema_records", min_rows: 1 },
+  ],
+  relations: [],
+};
+
+function prepareDynamicFamilyPublication(
+  input: Omit<Parameters<typeof prepareDynamicFamilyPublicationCore>[0], "productRequirements">,
+) {
+  return prepareDynamicFamilyPublicationCore({
+    ...input,
+    productRequirements: PRODUCT_REQUIREMENTS,
+  });
+}
+
+function validateDynamicFamilyPreflightReceipt(
+  input: Omit<Parameters<typeof validateDynamicFamilyPreflightReceiptCore>[0], "productRequirements">,
+) {
+  return validateDynamicFamilyPreflightReceiptCore({
+    ...input,
+    productRequirements: PRODUCT_REQUIREMENTS,
+  });
+}
 
 async function rawSubmission(): Promise<Record<string, unknown>> {
   const projection: Projection = {
@@ -101,6 +128,28 @@ async function redigestReceipt(
 }
 
 describe("dynamic family prepare/submit preflight", () => {
+  it("requires and digest-binds Core-owned product topology before preparation", async () => {
+    const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
+    await expect(prepareDynamicFamilyPublicationCore({
+      taskId: "task_preflight",
+      requirementId: "build_preflight",
+      generation: 0,
+      submission,
+    } as unknown as Parameters<typeof prepareDynamicFamilyPublicationCore>[0]))
+      .rejects.toThrow(/Core-owned product requirements/i);
+
+    const receipt = await prepareDynamicFamilyPublicationCore({
+      taskId: "task_preflight",
+      requirementId: "build_preflight",
+      generation: 0,
+      submission,
+      productRequirements: PRODUCT_REQUIREMENTS,
+    });
+    expect(receipt).toMatchObject({
+      product_requirement_digest: canonicalDigest(PRODUCT_REQUIREMENTS),
+    });
+  });
+
   it("exposes a fixed prepare tool and makes production submit receipt-only", async () => {
     let called = false;
     const raw = await rawSubmission();
@@ -132,6 +181,40 @@ describe("dynamic family prepare/submit preflight", () => {
     const accepted = await submit.execute(raw);
     expect(accepted.isError).not.toBe(true);
     expect(called).toBe(true);
+  });
+
+  it("returns the expected family, complete tables, scaffold, and reprepare action on rejection", async () => {
+    const prepare = createPrepareDynamicFamilyPublicationTool({
+      prepare: async () => { throw new Error("must not be called"); },
+    });
+    const result = await prepare.execute({
+      family_spec: {
+        assessment_policy_ref: "literature_experiment_chart.release.v1",
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({
+      ok: false,
+      error: {
+        code: "dynamic_preflight_rejected",
+        recovery: {
+          retryable: false,
+          unchanged_retry_forbidden: true,
+          next_action: "modify_submission_from_scaffold_and_reprepare",
+          expected_family: "literature_experiment_chart",
+          scaffold: {
+            projection: { projection_id: "literature_experiment_chart.six_table.v1" },
+          },
+        },
+      },
+    });
+    const recovery = (result.details as {
+      error: { recovery: { expected_tables: Array<{ table_id: string }> } };
+    }).error.recovery;
+    expect(recovery.expected_tables.map((table) => table.table_id)).toEqual([
+      "activity_value_records", "paper_records", "experiment_records",
+      "chart_series", "chart_points", "supplementary_asset_records",
+    ]);
   });
 
   it("resolves the stored prepared submission for receipt-only submit", async () => {
@@ -425,6 +508,7 @@ describe("dynamic family prepare/submit preflight", () => {
       generation: 0,
       preflightReceipt: stale,
       preflightSubmission: submission,
+      productRequirements: PRODUCT_REQUIREMENTS,
     })).rejects.toThrow(/tampered|digest/);
     expect(resolveCoreAcquired).not.toHaveBeenCalled();
   });
