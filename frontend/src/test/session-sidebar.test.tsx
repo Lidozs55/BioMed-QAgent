@@ -223,6 +223,46 @@ describe("SessionSidebar", () => {
     expect(useAgentStore.getState().activeTaskId).toBe("history_a");
   });
 
+  it("auto-fills the next page when the history list does not overflow", async () => {
+    useAgentStore.getState().mergeTaskPage(
+      {
+        active_items: [],
+        items: [summary("history_a", "completed", "History A")],
+        next_cursor: "page_2",
+      },
+      false,
+    );
+    const onLoadMore = vi.fn().mockResolvedValue(undefined);
+    renderSidebar({ onLoadMore });
+
+    // A short list can never scroll, so the near-bottom trigger never fires.
+    // Give the content a visible, non-overflowing box, then let a store update
+    // re-run the auto-fill check.
+    const content = document.querySelector(
+      '[data-slot="sidebar-content"]',
+    ) as HTMLElement;
+    Object.defineProperty(content, "clientHeight", {
+      value: 300,
+      configurable: true,
+    });
+    Object.defineProperty(content, "scrollHeight", {
+      value: 200,
+      configurable: true,
+    });
+    act(() => {
+      useAgentStore.getState().mergeTaskPage(
+        {
+          active_items: [],
+          items: [summary("history_b", "completed", "History B")],
+          next_cursor: "page_2",
+        },
+        true,
+      );
+    });
+
+    await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1));
+  });
+
   it("shows a visible error when loading another history page fails", async () => {
     useAgentStore.getState().mergeTaskPage(
       {

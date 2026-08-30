@@ -4,7 +4,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import biomedLogoV2 from "../../../assets/logo/Logo-title.svg";
@@ -161,6 +161,7 @@ export function SessionSidebar({
   const historyStatus = useAgentStore((state) => state.historyStatus);
   const historyError = useAgentStore((state) => state.historyError);
   const { isMobile, setOpenMobile } = useSidebar();
+  const historyContentRef = useRef<HTMLDivElement>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pendingCancels, setPendingCancels] = useState<Set<string>>(
     () => new Set(),
@@ -212,7 +213,7 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showNewDraft]);
 
-  const loadMore = async () => {
+  const loadMore = useCallback(async () => {
     if (loadingMore || onLoadMore === undefined || nextCursor === null) return;
     setLoadingMore(true);
     try {
@@ -224,7 +225,20 @@ export function SessionSidebar({
     } finally {
       setLoadingMore(false);
     }
-  };
+  }, [loadingMore, onLoadMore, nextCursor]);
+
+  // A page that does not overflow the viewport never fires the scroll
+  // handler, so the next history page is fetched automatically whenever
+  // the content still fits on screen. The zero-height guard keeps hidden
+  // sidebars and jsdom (which has no layout) from triggering the effect.
+  useEffect(() => {
+    if (nextCursor === null || loadingMore) return;
+    const element = historyContentRef.current;
+    if (element === null || element.clientHeight === 0) return;
+    if (element.scrollHeight <= element.clientHeight) {
+      void loadMore();
+    }
+  }, [loadMore, loadingMore, nextCursor, visibleTasks.length]);
 
   const retryHistory = async () => {
     if (onRetryHistory === undefined || historyStatus === "loading") return;
@@ -319,6 +333,7 @@ export function SessionSidebar({
         </SidebarHeader>
 
         <SidebarContent
+          ref={historyContentRef}
           onScroll={(event) => {
             const element = event.currentTarget;
             if (element.scrollHeight - element.scrollTop - element.clientHeight < 160) {

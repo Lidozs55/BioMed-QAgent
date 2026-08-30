@@ -28,6 +28,13 @@ TaskSummary 直接读取 `state/summary.json`（派生缓存，重启后仍有�
 递增 `task-repository.ts` 的 `SUMMARY_CACHE_REDUCER_REVISION`，否则旧
 sidecar 会带着旧字段继续被当作有效缓存服务。
 
+历史页 cursor 语义是**排他续读**：`next_cursor` 恒等于本页最后一条历史项的
+`task_id`，下一页从该条之后切片；`active_items` 在每一页（含 cursor 页）都
+原样返回，reducer 按 task_id 幂等去重。未知 cursor（如任务在翻页间隙被删除）
+返回空页且 `next_cursor: null`，客户端据此停止翻页而不是循环或报错。前端
+侧边栏在内容不足一屏（滚动事件永不触发）时依赖 auto-fill effect 自动拉取
+下一页，零高度容器（隐藏侧栏、jsdom）不触发。
+
 `RunStatus` 生命周期：
 
 ```text

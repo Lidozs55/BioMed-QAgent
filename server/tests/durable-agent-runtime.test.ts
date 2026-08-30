@@ -252,6 +252,71 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("serves cursor-paginated task history pages instead of falling through", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-cursor-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async () => ({ root, tools: [], dispose: async () => undefined }),
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const completed: string[] = [];
+    for (const requestId of ["request-cursor-a", "request-cursor-b"]) {
+      const accepted = await (await fetch(`${base}/api/v1/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          request_id: requestId,
+          input: `cursor ${requestId}`,
+          databases: [],
+          mode: "agent",
+        }),
+      })).json() as { task_id: string; run_id: string };
+      await fetch(`${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/cancel`, {
+        method: "POST",
+      });
+      completed.push(accepted.task_id);
+    }
+    // The cancel endpoint acknowledges before the terminal events land; poll
+    // the real list endpoint until both tasks left the active set.
+    await expect
+      .poll(async () => {
+        const page = (await (await fetch(`${base}/api/v1/tasks`)).json()) as {
+          active_items: unknown[];
+        };
+        return page.active_items.length;
+      }, { timeout: 15_000 })
+      .toBe(0);
+
+    const page1 = (await (await fetch(`${base}/api/v1/tasks?limit=1`)).json()) as {
+      active_items: unknown[];
+      items: { task_id: string }[];
+      next_cursor: string | null;
+    };
+    expect(page1).toMatchObject({ active_items: [], next_cursor: completed[1] });
+    expect(page1.items).toHaveLength(1);
+
+    const cursor = page1.next_cursor as string;
+    const page2Response = await fetch(`${base}/api/v1/tasks?limit=1&cursor=${cursor}`);
+    expect(page2Response.status).toBe(200);
+    const page2 = await page2Response.json();
+    expect(page2).toMatchObject({
+      active_items: [],
+      items: [{ task_id: completed[0] }],
+      next_cursor: null,
+    });
+    await runtime.close();
+  });
+
   test("does not execute an idempotent run admission retry twice", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-run-retry-"));
     roots.push(root);

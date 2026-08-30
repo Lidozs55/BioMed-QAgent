@@ -10,14 +10,6 @@
 - **现象：** 快速点击主题切换或其他按钮时，可能出现一次点击触发两次或未触发。
 - **下一步：** 用 pointer/click 事件测试确定是否为重复 handler、事件穿透或状态节流问题；确认后先提交失败测试。
 
-### 历史超过 10 条后"加载更多"请求 404（任务分页 cursor 未实现）
-
-- **状态：** 已定位、未修复（2026-08-30 随历史列表性能优化排查发现）；自 durable runtime 首个提交（`fa0e57d4`）起即如此，非回归。
-- **现象：** `GET /api/v1/tasks` 带 `cursor` 参数时 `durable-agent-runtime.handle` 显式放行（`return false`），hostApi 各子 API 也没有该路由，请求最终落到 404 "Not Found"。前端 `loadMoreTasks`（侧边栏滚动到底触发）收到 404 后抛错并 toast「历史任务加载失败」。`repository.listTasks` 的 `next_cursor` 语义是"最后一条包含项的 task_id"，服务端从未消费过该参数。
-- **影响：** 历史任务 ≤10 条时 `next_cursor` 恒为 null，用户无感知；超过 10 条后侧边栏只能显示前 10 条历史，无法加载更多。
-- **最小复现：** 制造 11 个已完成任务，打开主界面把侧边栏滚到底部；或直接 `curl "http://<host>/api/v1/tasks?limit=10&cursor=task_ts_x"`，得到 404。
-- **下一步：** 在 `GET /api/v1/tasks` 路由消费 `cursor`，按"排他续读"（`findIndex(cursor) + 1`）过滤 history 后再切片，配分页契约测试；前端无需改动。
-
 ## 数据族与 Gold 评测
 
 ### gold7 trait association 请求没有形成正式 publication
@@ -123,3 +115,4 @@
 - **影响：** 高负载时段（并行会话/评测）失败测试循环被噪音干扰，agent 容易把抖动误判为回归；每次归因都要额外跑对照轮，浪费 2 分钟级×N。
 - **最小复现：** 机器有并行测试/gold run 负载时连续跑 `pnpm --filter @biomed/server test` 数轮，观察失败文件/用例逐轮轮换。
 - **下一步：** (a) 高负载时段归因一律用"与纯净 main 对照"或还原 delta 法，勿直接按红测返工；(b) 给 durable/HIL/permission API 用例补独立临时 data 目录与确定性时钟（当前疑似受共享 `data/` 与真实定时器影响）；(c) 两条稳定基线由 settings/架构守卫对应领域收敛。
+- **2026-08-30 补强证据（单实例内竞态，非共享 data/ 所致）：** 在 `fix/task-history-cursor-pagination` 分支开发期间，`durable-agent-runtime.test.ts` 的多个用例（含新分页路由用例与既有 `does not execute an idempotent run admission retry twice`）在高负载下命中 `events.jsonl sequence gap at line 1: expected 4, got 3`，栈轨迹为 `cancelRun → getSnapshot → readAllEvents (task-repository.ts:655) → parseEvents`。测试各自使用独立 `mkdtemp` tasksRoot，排除共享 `data/` 假设——这是**单仓库实例内** `readAllEvents` 增量尾读与 `appendEvents` 写盘/`cacheAppend` 缓存同步之间的竞态窗口：并发 `readAllEvents` 可在 append 已落盘但 `cacheAppend` 未同步时重复消费同一段尾块（重复 sequence 入缓存、byteLength 错位），后续尾读即抛 gap。纯净 main（stash 还原 delta 后）同样 8/8 复现 admission-retry 失败、隔离复跑又通过，负载抖动特征与既有记录一致。**修复方向：** `readAllEvents` 尾读入缓存前对 chunk 首 sequence 做"必须等于缓存末 sequence + 1"防御（不符即整体冷读重建，与 `cacheAppend` 的外部变异防御对齐），或把尾读挂入 per-task `pending` 链；修复须先以受控并发写/读测试复现。
