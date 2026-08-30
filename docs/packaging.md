@@ -81,4 +81,4 @@ https_proxy=http://127.0.0.1:7897 pnpm run pack
 - Playwright 浏览器不随包（体积原因）；目标机用到浏览器工具时按 `README.txt` 中的命令安装 chromium。
 - Linux/macOS 目标机首次运行需按 README 执行一次 `chmod +x`（从 Windows 打 zip 会丢失执行位；跨平台分发建议打 tar.gz）。
 - bundle 内 `server/node_modules` 由 `pnpm deploy --prod --legacy` 物化，自包含、可随目录整体搬移；dev 依赖不进包。pnpm ≥10 要求 workspace 配置 `inject-workspace-packages=true` 才能用默认 deploy，本打包器改用 `--legacy`：注入式安装会在 install 时快照 workspace 包（早于 contracts 构建，dist 缺失），而 legacy deploy 在构建之后物化依赖，时序正确。
-- CI bundle 隐患注记：现有 `package.yml` 的 staging 清单不含 `scripts/` 与 `packages/contracts/dist`，而 server 对 `@biomed/contracts` 有大量运行时值导入，且根 `pnpm start`（`pnpm --filter` 递归调用）不会触发 `prestart` 预构建——解包运行大概率 `ERR_MODULE_NOT_FOUND`（流水线自 2026-08-15 修复后未经 tag 验证）。本打包器在打包时构建 contracts 并物化依赖，不受该问题影响；CI 侧修复不在本分支范围。
+- CI bundle 现状注记：上游 `package.yml` 已补上 `scripts/build-contracts-if-needed.mjs` 的 staging，并在冒烟测试里显式执行 `pnpm --filter @biomed/server run prestart` 后直接 `node server/dist/index.js --static` 启动（绕开根 `pnpm start` 递归调用不触发钩子的坑），同时新增端口回退与单实例锁验证——解包启动路径已可用，但 CI bundle 仍是"源码+产物"形态，目标机仍需全套构建环境。本打包器产出"便携整机"形态，打包时即构建 contracts 并物化依赖，二者互不影响。
