@@ -81,7 +81,11 @@ const PLATFORMS = {
     nodeAsset: `node-v${NODE_VERSION}-linux-x64.tar.gz`,
     nodeBin: "bin/node",
     pyTriple: "x86_64-unknown-linux-gnu",
-    pythonBin: "bin/python3",
+    // Versioned real binary, not the bin/python3 symlink: posix runtime
+    // tarballs order symlink aliases before their target, so extracting on a
+    // Windows host skips them (see tarBinaryFor). The real python3.12 file
+    // always lands, and the stdlib/libpython resolution is prefix-relative.
+    pythonBin: `bin/python${PYTHON_MAJOR_MINOR}`,
     sitePackages: `lib/python${PYTHON_MAJOR_MINOR}/site-packages`,
     // manylinux_2_28 also matches the manylinux_2_27.manylinux_2_28 compound wheels
     pipPlatforms: ["manylinux_2_28_x86_64"],
@@ -92,7 +96,7 @@ const PLATFORMS = {
     nodeAsset: `node-v${NODE_VERSION}-darwin-arm64.tar.gz`,
     nodeBin: "bin/node",
     pyTriple: "aarch64-apple-darwin",
-    pythonBin: "bin/python3",
+    pythonBin: `bin/python${PYTHON_MAJOR_MINOR}`,
     sitePackages: `lib/python${PYTHON_MAJOR_MINOR}/site-packages`,
     // numpy ships macosx_11_0, scipy macosx_12_0 — allow both
     pipPlatforms: ["macosx_11_0_arm64", "macosx_12_0_arm64"],
@@ -149,19 +153,36 @@ function download(url, destFile) {
 }
 
 // Windows ships bsdtar (libarchive, reads zip + tar.gz) at System32; MSYS GNU
-// tar cannot read .zip. Prefer the system bsdtar on win32.
+// tar cannot read .zip. Posix runtime tarballs contain symlink entries that
+// bsdtar refuses to extract on Windows (hard error, partial output), while GNU
+// tar degrades gracefully: every real file member lands and unresolvable alias
+// entries are skipped (exit 2, tolerated by extract for the runtime archives).
+// The launcher therefore execs versioned real binaries (bin/node,
+// bin/python3.12), never symlink aliases. So: bsdtar for .zip, GNU tar else.
 function tarBinaryFor(archiveFile) {
   if (process.platform === "win32") {
-    const bsdtar = "C:/Windows/System32/tar.exe";
-    if (existsSync(bsdtar)) return bsdtar;
     if (archiveFile.endsWith(".zip")) {
+      const bsdtar = "C:/Windows/System32/tar.exe";
+      if (existsSync(bsdtar)) return bsdtar;
       fail("cannot extract .zip: C:/Windows/System32/tar.exe not found and GNU tar cannot read zip");
     }
+    for (const candidate of [
+      "tar",
+      "C:/Program Files/Git/usr/bin/tar.exe",
+      "C:/Program Files (x86)/Git/usr/bin/tar.exe",
+    ]) {
+      const probe = run(candidate, ["--version"], { capture: true });
+      if (probe.status === 0 && String(probe.stdout).includes("GNU tar")) return candidate;
+    }
+    fail(
+      "GNU tar not found: extracting the runtime tarballs on Windows needs Git for Windows' " +
+        "usr/bin/tar.exe on PATH (System32 bsdtar cannot extract their symlink entries)",
+    );
   }
   return "tar";
 }
 
-function extract(archiveFile, destDir) {
+function extract(archiveFile, destDir, { allowSkippedSymlinks = false } = {}) {
   mkdirSync(destDir, { recursive: true });
   // GNU tar (MSYS) treats "E:\path" as host:path, so tar must never see a
   // drive letter: run it from the archive's directory with relative
@@ -169,7 +190,18 @@ function extract(archiveFile, destDir) {
   const archiveDir = path.dirname(archiveFile);
   const relArchive = path.basename(archiveFile);
   const relDest = path.relative(archiveDir, destDir).replaceAll("\\", "/");
-  runOrDie(tarBinaryFor(archiveFile), ["-xf", relArchive, "-C", relDest], { cwd: archiveDir });
+  const tarBinary = tarBinaryFor(archiveFile);
+  const result = run(tarBinary, ["-xf", relArchive, "-C", relDest], { cwd: archiveDir });
+  if (result.status === 2 && allowSkippedSymlinks && process.platform === "win32") {
+    // GNU tar exit 2 on Windows hosts = symlink alias members it cannot
+    // materialize. All real-file members still land; the runtime checks below
+    // verify the entrypoints (bin/node, bin/python3.12) are present.
+    console.log("[pack]   note: tar skipped symlink alias entries (expected when packing on Windows)");
+    return;
+  }
+  if (result.status !== 0) {
+    fail(`${tarBinary} -xf ${relArchive} exited with ${result.status}`);
+  }
 }
 
 // Interpreter that drives pip. For the host platform the embedded interpreter
@@ -229,6 +261,89 @@ function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
       { capture: true },
     );
     console.log(`[pack]   import check: ${String(check.stdout).trim().replaceAll("\n", " · ")}`);
+  }
+}
+
+// Native binding packages (e.g. @napi-rs/canvas behind pdfjs-dist) resolve to
+// exactly ONE platform variant when pnpm deploy materializes dependencies —
+// the pack host's. Cross-packed posix bundles would then crash at boot
+// (observed: "DOMMatrix is not defined" from pdfjs-dist on linux). Extend
+// supportedArchitectures so install also fetches the target platform's
+// optional bindings; the lockfile already records those variants. NOTE: pnpm
+// expects the MAP form (os/cpu/libc lists) — an array of per-platform objects
+// parses fine as YAML but is silently ignored by install. Host entries stay
+// in the lists because the build step (vite/rollup/esbuild) runs on the host.
+const ARCH_SPECS = {
+  win:
+    "  os:\n    - current\n    - win32\n" +
+    "  cpu:\n    - current\n    - x64\n" +
+    "  libc:\n    - current\n    - msvc",
+  linux:
+    "  os:\n    - current\n    - linux\n" +
+    "  cpu:\n    - current\n    - x64\n" +
+    "  libc:\n    - current\n    - glibc",
+  macos:
+    "  os:\n    - current\n    - darwin\n" +
+    "  cpu:\n    - current\n    - arm64",
+};
+
+function injectSupportedArchitectures(srcDir, key) {
+  const workspaceYaml = path.join(srcDir, "pnpm-workspace.yaml");
+  const text = readFileSync(workspaceYaml, "utf8");
+  if (/^supportedArchitectures:/m.test(text)) {
+    fail("pnpm-workspace.yaml already defines supportedArchitectures; reconcile with scripts/pack-release.mjs");
+  }
+  const patched =
+    `${text.replace(/\s*$/, "")}\n` +
+    "# appended by scripts/pack-release.mjs: install native bindings for the\n" +
+    "# bundle target too (deploy otherwise materializes host-platform variants only)\n" +
+    `supportedArchitectures:\n${ARCH_SPECS[key]}\n`;
+  writeFileSync(workspaceYaml, patched);
+}
+
+// pnpm deploy materializes native binding variants for the PACK HOST only,
+// even though supportedArchitectures made install fetch the target's variants
+// into the workspace store. Copy those target-platform binding packages into
+// the staged bundle's .pnpm/node_modules fallback dir — Node's module
+// resolution walks through it, so e.g. pdfjs-dist finds the real
+// @napi-rs/canvas binding at runtime on the target OS. Native binding
+// packages are self-contained (a single prebuilt binary), so no further
+// dependency wiring is needed. Win bundles skip this: deploy already staged
+// the host's win32 bindings.
+function stageTargetNativeBindings(srcDir, packageDir, key) {
+  if (key === "win") return;
+  const osName = key === "linux" ? "linux" : "darwin";
+  const storeDir = path.join(srcDir, "node_modules", ".pnpm");
+  const fallbackDir = path.join(packageDir, "server", "node_modules", ".pnpm", "node_modules");
+  const variantPattern = new RegExp(`-(?:${osName})-(?:x64|arm64)(?:-(?:gnu|msvc))?@`);
+  let staged = 0;
+  for (const storeEntry of readdirSafe(storeDir)) {
+    if (!storeEntry.isDirectory() || !variantPattern.test(storeEntry.name)) continue;
+    if (existsSync(path.join(packageDir, "server", "node_modules", ".pnpm", storeEntry.name))) {
+      continue; // deploy already materialized this variant
+    }
+    const variantNodeModules = path.join(storeDir, storeEntry.name, "node_modules");
+    for (const scope of readdirSafe(variantNodeModules)) {
+      if (!scope.isDirectory() || scope.name === "node_modules") continue;
+      const scopeChildren = scope.name.startsWith("@")
+        ? readdirSafe(path.join(variantNodeModules, scope.name))
+        : [scope];
+      for (const binding of scopeChildren) {
+        if (!binding.isDirectory() || binding.name.startsWith(".")) continue;
+        const dest = path.join(fallbackDir, scope.name, binding.name);
+        if (existsSync(dest)) continue;
+        mkdirSync(path.dirname(dest), { recursive: true });
+        copyDir(path.join(variantNodeModules, scope.name, binding.name), dest);
+        console.log(`[pack]   staged native binding for ${key}: ${scope.name}/${binding.name}`);
+        staged += 1;
+      }
+    }
+  }
+  if (staged === 0) {
+    fail(
+      `no ${osName} native binding packages found in the workspace store — ` +
+        "supportedArchitectures install fetched no target variants; refusing to ship a bundle that cannot boot",
+    );
   }
 }
 
@@ -306,7 +421,7 @@ function startShScript() {
     "set -euo pipefail",
     'cd "$(dirname "$0")"',
     "[ -f .env ] || cp .env.example .env",
-    'export BIOMED_PYTHON_BIN="$(pwd)/runtime/python/bin/python3"',
+    `export BIOMED_PYTHON_BIN="$(pwd)/runtime/python/bin/python${PYTHON_MAJOR_MINOR}"`,
     'exec "./runtime/node/bin/node" --env-file-if-exists=.env server/dist/index.js --static',
     "",
   ].join("\n");
@@ -325,7 +440,7 @@ function readmeText(version, platform) {
     "",
     "Run:",
     "  Windows : double-click start.bat (first run creates .env from .env.example)",
-    "  Linux   : chmod +x start.sh runtime/node/bin/node runtime/python/bin/python3 && ./start.sh",
+    `  Linux   : chmod +x start.sh runtime/node/bin/node runtime/python/bin/python${PYTHON_MAJOR_MINOR} && ./start.sh`,
     "  macOS   : same as Linux",
     "",
     "Then edit .env (set DASHSCOPE_API_KEY etc.) and restart if you changed it.",
@@ -352,7 +467,14 @@ function defaultPlatform() {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 
+// pnpm run forwards the "--" separator itself (observed on pnpm 11), and
+// parseArgs treats everything after a bare "--" as positionals — silently
+// dropping every flag (platform/out/ref/keep-temp). Strip stray separators so
+// `pnpm run pack -- --platform=all` and `pnpm run pack --platform=all` are
+// equivalent.
+const scriptArgs = process.argv.slice(2).filter((arg) => arg !== "--");
 const { values } = parseArgs({
+  args: scriptArgs,
   options: {
     platform: { type: "string" },
     out: { type: "string" },
@@ -402,6 +524,7 @@ for (const key of selected) {
   rmSync(archiveFile, { force: true });
 
   step(2, "install workspace dependencies");
+  injectSupportedArchitectures(srcDir, key);
   runOrDie("pnpm", ["install", "--frozen-lockfile"], { cwd: srcDir });
 
   step(3, "build contracts / frontend / server");
@@ -431,6 +554,7 @@ for (const key of selected) {
   ]) {
     if (!existsSync(staged)) fail(`expected staged file missing after deploy: ${staged}`);
   }
+  stageTargetNativeBindings(srcDir, packageDir, key);
 
   step(5, "stage frontend / database / skills / env template");
   copyDir(path.join(srcDir, "frontend", "dist"), path.join(packageDir, "frontend", "dist"));
@@ -447,7 +571,7 @@ for (const key of selected) {
     download(`${NODE_DIST}/v${NODE_VERSION}/${platform.nodeAsset}`, nodeArchive);
   }
   const nodeExtract = path.join(tmpDir, "node");
-  extract(nodeArchive, nodeExtract);
+  extract(nodeArchive, nodeExtract, { allowSkippedSymlinks: true });
   const nodeInner = path.join(nodeExtract, platform.nodeAsset.replace(/\.zip$|\.tar\.gz$/, ""));
   if (!existsSync(path.join(nodeInner, platform.nodeBin))) {
     fail(`unexpected Node archive layout: ${nodeInner} lacks ${platform.nodeBin}`);
@@ -461,7 +585,7 @@ for (const key of selected) {
     download(`${PBS_DIST}/${PYTHON_PBS_TAG}/${pyAsset}`, pyArchive);
   }
   const pyExtract = path.join(tmpDir, "python");
-  extract(pyArchive, pyExtract);
+  extract(pyArchive, pyExtract, { allowSkippedSymlinks: true });
   const pyInner = path.join(pyExtract, "python");
   if (!existsSync(path.join(pyInner, platform.pythonBin))) {
     fail(`unexpected Python archive layout: ${pyInner} lacks ${platform.pythonBin}`);

@@ -65,6 +65,17 @@ https_proxy=http://127.0.0.1:7897 pnpm run pack
 - **架构边界不变**：`database/` 与 `pyproject.toml` 仍是纯标准库，numpy/scipy 只存在于分发包的内嵌运行时；bridge 与开发环境均不感知、不受影响。
 - **交叉打包前置**：跨平台打包时 pip 进程本身要能跑，要求构建机 PATH 上有任意带 pip 的 CPython（同平台打包直接用内嵌解释器，无额外要求）。
 
+## 跨平台交叉打包（在 Windows 上出 linux / macos 包）
+
+打包器设计为任一宿主 OS 可出全部三平台包：构建产物与平台无关，wheel 按 `--platform` 目标标签解包（目标代码零执行）。已在 Windows 宿主上实测产出 linux/macos 包，并做过如下针对性处理（每一条都来自实测踩坑）：
+
+- **Windows 宿主前置**：PATH 上需要 GNU tar（Git for Windows 自带，脚本会依次探测 `tar` 与两处 Git 安装路径）。System32 的 bsdtar 解不了 posix 运行时 tar 包里的符号链接条目——遇到即硬报错（exit 1）且输出残缺；GNU tar 会优雅降级：真实文件全部落地、无法物化的别名条目跳过（exit 2，打包器对运行时归档容忍该退出码并校验关键入口存在）。
+- **内嵌 Python 入口用带版本号的真实二进制**：pbs tar 包里 `bin/python3 -> python3.12` 等别名排在真实文件之前，在 Windows 上解不出来。因此 posix 启动器与 `BIOMED_PYTHON_BIN` 直接指向 `bin/python3.12`（真实文件必然存在），不经符号链接；`README.txt` 的 chmod 指引同步使用该路径。
+- **原生绑定（关键）**：`pnpm deploy` 只物化宿主平台的可选原生绑定（如 pdfjs-dist 背后的 `@napi-rs/canvas`、`@mariozechner/clipboard`），交叉打包出的 posix 包启动即崩（实测报 `DOMMatrix is not defined`）。两层修复：① 打包时向快照的 `pnpm-workspace.yaml` 追加 `supportedArchitectures`（**必须是 map 形式** `os:/cpu:/libc:` 列表并包含 `current`；写成数组套对象 YAML 能解析、install 会静默忽略——踩坑实测），使 install 连目标平台变体一起取回（lockfile 本就记录了全部变体）；② deploy 后把 workspace store 里目标平台的绑定包复制进 bundle 的 `server/node_modules/.pnpm/node_modules` 回退目录（Node 解析链会经过该目录；deploy 已物化的条目自动跳过），并通过"零绑定即失败"的 tripwire 防止静默产出起不来的包。
+- **CLI 参数转发**：pnpm 11 会把 `--` 分隔符原样转发给脚本，parseArgs 会把它当 positional 边界吞掉其后所有参数（历史上 `--platform=win` "能用"纯属默认值碰巧是 win）。脚本已改为过滤游离的 `--`，`pnpm run pack -- --platform=all` 与 `pnpm run pack --platform=all` 等价。
+- **验证情况**：win 包在 Windows 实测独立启动（health ok / 静态 200 / bridge 进程确用内嵌 python）；linux 包在 WSL Ubuntu-22.04 全链路实测通过（health 200 / 静态页 200 / databases 接口返回真实数据 / bridge 进程为内嵌 `python3.12`，内嵌 numpy 2.5.2 / scipy 1.18.1 数值计算通过。注：从 Windows 盘符的 9P 挂载冷启动需约 2 分钟加载模块，属 WSL 跨文件系统开销，原生 ext4 上无此问题）；macos 包未经真机验证（wheel 解析与绑定落位已验证），建议首次使用前在真机跑一次 `start.sh`。
+- **分发注意**：从 Windows 分发建议打 tar.gz（zip 会丢执行位）；linux 目标机要求 glibc ≥ 2.28；macOS 目标机要求 Apple Silicon + macOS 12+。
+
 ## 边界与已知事项
 
 - Playwright 浏览器不随包（体积原因）；目标机用到浏览器工具时按 `README.txt` 中的命令安装 chromium。
