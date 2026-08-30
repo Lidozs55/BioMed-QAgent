@@ -276,6 +276,12 @@
   tabsize=2%
 }
 
+% 具名样式 papercode：长代码断行箭头（ch05 实验代码清单使用）。
+% 其余观感沿用上方全局 \lstset 的紧凑配置。
+\lstdefinestyle{papercode}{%
+  postbreak=\mbox{\textcolor{PaperCodeFrame}{$\hookrightarrow$}\space}%
+}
+
 % ======================================================================
 % 提示框
 %

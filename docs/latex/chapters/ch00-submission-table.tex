@@ -5,7 +5,7 @@
 \hline
 \textbf{参赛作品名称} & BioMed QAgent：面向生物医学研究的多源数据智能采集与分析系统 \\ \hline
 \textbf{参赛选题} & 赛道2-方向1A \\ \hline
-\textbf{参赛作品简介}（300字以内） & 系统采用"开放式推理与确定性数据处理分权"的设计：Qwen 驱动的 Pi Agent 负责理解研究目标、发现候选来源、检查可用执行路线并提交声明式数据需求；TypeScript Dataset Core 负责来源资产登记、已注册解析器执行、规范化、多源整合、质量门禁、人在回路和正式发布。系统不将 Agent 工作区中的临时 CSV 视为任务完成，而以包含数据表、Schema、Provenance、Audit、Validation 和内容摘要的不可变 Publication 作为正式结果。支持多种静态数据产品，并提供动态 Family 协议处理静态注册表无法表达的多表拓扑。来源文件通过 SourceAsset、SHA-256、Provider revision evidence 和 SourceLocator 进入证据链；不确定的字段映射、未知单位和低置信度抽取可以触发可持久化的人在回路请求；任务中断后可依据事件、操作摘要和 checkpoint 恢复，而不要求模型重新解释已经确认的数据变换。 \\ \hline
-\textbf{参赛作品使用Qwen大模型及AI技术说明} & 本作品未将Qwen模型调用写死在配置中，而是提供API key配置方法，允许用户自选包含Qwen API key在内的LLM作为主Agent；在进行本文第四部分实验时，我们仅使用了Qwen系列的模型；在使用Dashscope API key时，BioMed QAgent可以调用Qwen-VL理解页面图像，进行数据提取。 \\ \hline
+\textbf{参赛作品简介}（300字以内） & 系统采用“开放式推理与确定性数据处理分权”的设计：Qwen 等 LLM 驱动的 Pi Agent 负责理解研究目标、发现候选来源、检查可用执行路线并提交声明式数据需求；TypeScript Dataset Core 负责来源资产登记、已注册解析器执行、规范化、多源整合、质量门禁、人在回路和正式发布。系统不将 Agent 工作区中的临时 CSV 视为任务完成，而以包含数据表、Schema、Provenance、Audit、Validation 和内容摘要的不可变 Publication 作为正式结果。支持多种静态数据产品，并提供动态 Family 协议处理静态注册表无法表达的多表拓扑。来源文件通过 SourceAsset、SHA-256、Provider revision evidence 和 SourceLocator 进入证据链；不确定的字段映射、未知单位和低置信度抽取可以触发可持久化的人在回路请求；任务中断后可依据事件、操作摘要和 checkpoint 恢复，而不要求模型重新解释已经确认的数据变换。 \\ \hline
+\textbf{参赛作品使用Qwen大模型及AI技术说明} & 本作品未将 Qwen 模型写死在配置中，而是提供 API key 配置方法，允许用户自选包含 Qwen API key 在内的 LLM 作为主 Agent。实验部分（第五章）中，Qwen 系列承担 gold8 正式发布（qwen3.8-27B）、图表理解链路（DashScope Qwen-VL）与全谱系对抗验证（qwen3.7/3.8 各档位）；另以 DeepSeek-V4-Flash 作为评测主力，验证系统的模型无关性。使用 DashScope API key 时，系统可调用 Qwen-VL 理解页面图像进行数据提取。 \\ \hline
 \textbf{宣传视频链接/其他作品相关文件链接} & \url{https://github.com/Lidozs55/BioMed-QAgent} \\ \hline
 \end{tabular}}
