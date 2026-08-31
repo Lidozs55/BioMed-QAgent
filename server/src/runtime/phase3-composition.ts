@@ -82,6 +82,11 @@ import {
 import { createHilGatePreReview } from "./hil-pre-review.js";
 import type { HILApprovalPolicyStore } from "./hil-approval-store.js";
 import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
+import {
+  archiveCommittedDynamicTablesAsUntrustedArtifacts,
+  classifyDynamicPublicationRejection,
+  DynamicPublicationUntrustedFallbackError as UntrustedFallbackError,
+} from "./dynamic-family-untrusted-fallback.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
@@ -741,23 +746,74 @@ export async function createPhase3Runtime(
           if (!dynamicFamilyPreflight.isCurrent(reservation)) {
             throw new Error("dynamic family preflight generation is stale");
           }
-          const product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
-            taskId,
-            taskRoot,
-            workspaceRoot,
-            runId: currentRunId,
-            requirementId: submission.execution_proposal.requirement_id,
-            execution: result,
-            validationProfileRef: submission.family_spec.validation_policy_ref,
-            productRequirements,
-            hilGate: approvalGate,
-            signal,
-            isGenerationCurrent: async () =>
-              reservation !== null
-              && await assertExecutionLockOwned()
-              && dynamicFamilyPreflight.isCurrent(reservation),
-            beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
-          });
+          let product: Awaited<ReturnType<typeof publishDynamicFamily>>;
+          try {
+            product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
+              taskId,
+              taskRoot,
+              workspaceRoot,
+              runId: currentRunId,
+              requirementId: submission.execution_proposal.requirement_id,
+              execution: result,
+              validationProfileRef: submission.family_spec.validation_policy_ref,
+              productRequirements,
+              hilGate: approvalGate,
+              signal,
+              isGenerationCurrent: async () =>
+                reservation !== null
+                && await assertExecutionLockOwned()
+                && dynamicFamilyPreflight.isCurrent(reservation),
+              beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
+            });
+          } catch (publicationError) {
+            // Gold6 R4 automatic untrusted-artifact fallback: after a fully
+            // committed dynamic execution, a semantic/publication rejection
+            // archives the candidate tables once into the non-authoritative
+            // quarantine (never a publication, artifact event, or formal
+            // success), then rethrows the formal rejection with ua_* receipts
+            // attached for the tool response projection.
+            const message = publicationError instanceof Error
+              ? publicationError.message
+              : String(publicationError);
+            const cause = publicationError instanceof Error && publicationError.cause instanceof Error
+              ? publicationError.cause
+              : null;
+            if (classifyDynamicPublicationRejection(message) === "semantic_rejection") {
+              try {
+                const receipts = await archiveCommittedDynamicTablesAsUntrustedArtifacts({
+                  result,
+                  taskId,
+                  taskRoot,
+                  runId: currentRunId,
+                  requirementId: submission.execution_proposal.requirement_id,
+                  rejectionReason: message,
+                  failedChecks: UntrustedFallbackError.extractFailedChecks(publicationError),
+                });
+                throw new UntrustedFallbackError({
+                  message,
+                  untrustedArtifacts: receipts,
+                });
+              } catch (fallbackError) {
+                if (fallbackError instanceof UntrustedFallbackError) throw fallbackError;
+                // A failed archive (including the helper's own integrity
+                // re-verification) stays a hard reject without ua_* output;
+                // the original publication error remains authoritative.
+                const fallbackNote = `untrusted artifact fallback failed: ${fallbackError instanceof Error ? fallbackError.message.slice(0, 300) : String(fallbackError)}`;
+                console.warn("runtime.dynamic_publication_untrusted_fallback", {
+                  classification: "semantic_rejection",
+                  detail: fallbackNote,
+                });
+                throw cause === null
+                  ? new Error(`${message}; ${fallbackNote}`)
+                  : new Error(`${message} (fallback diagnostic: ${cause.message})`);
+              }
+            }
+            // Integrity/control failures (cancellation, stale generation,
+            // lock loss, refusal at the promotion fence, identity mismatch,
+            // path traversal, byte drift) never archive: hard reject with no
+            // ua_* output, preserving the original publication error.
+            throw publicationError;
+          }
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
             throw new Error("dynamic publication is missing its manifest byte receipt");
