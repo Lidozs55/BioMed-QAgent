@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "result_manifest_id": "result_chart_49cfb320d4a918cf8d57edea4cd3840c",
+  "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+  "run_id": "core",
+  "requirement_id": "registered_paper_chart_candidate",
+  "operation_id": "result_chart_49cfb320d4a918cf8d57edea4cd3840c",
+  "operation_kind": "derive",
+  "operation_attempt_id": "attempt_result_chart_49cfb320d4a918cf8d57edea4cd3840c",
+  "attempt": 1,
+  "status": "succeeded",
+  "input_digest": "5638dec646dee3f754e85c728511c743aa584b5c566a363d889622481e02c9df",
+  "parameter_digest": "058f1579f896dc243feb2a354a91df81931ff4f12c2ff2ddcb60e8d4cbb38639",
+  "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744",
+  "output_digest": "3a306150eb776e654849b1a9cbc0c8cb9bc73365afce01629c51d68f714a097d",
+  "output_kind": "derived_evidence",
+  "output_summary": {
+    "stage": "candidate",
+    "asset_id": "asset_3a306150eb776e654849b1a9cbc0c8cb9bc73365afce01629c51d68f714a097d",
+    "sha256": "3a306150eb776e654849b1a9cbc0c8cb9bc73365afce01629c51d68f714a097d"
+  },
+  "output_files": [
+    {
+      "relative_path": "source_assets/paper_chart_evidence/evidence_3a306150eb77.json",
+      "size_bytes": 58120,
+      "sha256": "3a306150eb776e654849b1a9cbc0c8cb9bc73365afce01629c51d68f714a097d"
+    }
+  ],
+  "dependency_closure": {
+    "input_asset_ids": [
+      "asset_b7935b97f7ecaa41a3e9cef72b1f7309466c0bc6c11cc64f84a258bae98450c6",
+      "asset_30dbe82385d7d001b8820de8b69f1af7d63c5b8765fb2d65acdb8c6161e81728",
+      "asset_4fee564e673fd3d209870e7535a68fa357332de918682b10254af63c707efed5"
+    ],
+    "upstream_result_manifest_ids": [],
+    "parameter_digest": "058f1579f896dc243feb2a354a91df81931ff4f12c2ff2ddcb60e8d4cbb38639",
+    "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744"
+  },
+  "commit": {
+    "state": "committed",
+    "commit_id": "commit_result_chart_49cfb320d4a918cf8d57edea4cd3840c",
+    "committed_at": "2026-08-31T13:21:13.422Z"
+  }
+}
