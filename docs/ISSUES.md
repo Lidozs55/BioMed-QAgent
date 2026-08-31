@@ -14,10 +14,10 @@
 
 ### Gold6 live 仍未形成正式 publication
 
-- **状态：** 2026-08-30 修复轮已按用户指令终止；所有监督 run 均为 `failed_or_cancelled` 或 `blocked_no_publication`。
-- **已修复：** 六表 profile/E2E、dynamic source entries、receipt-only submit、运行时 locator admission、SourceLocator wire 指导，以及已知 429/503/流中断恢复。
-- **仍阻塞：** provider 长时间 429/503、prepare receipt 非重启持久、VLM 轴估算假精度、SourceLocator live exact-match 尚未成功、credential HIL 重复、turn 预算与来源重复探索、closure `observed_commit=null`。
-- **证据与下一步：** 见 [`reports/2026-08-30-gold6-live-analysis.md`](reports/2026-08-30-gold6-live-analysis.md)。在真实 `publication_acceptance`、B3、Manifest 和 Artifact API hash 闭环前不得标记 Gold6 通过。
+- **状态：** 2026-08-31 在 `main@38d1fe20` 的 fresh `qwen3.8-flash` run（task `task_ts_38cde3be-59b9-427b-998d-a7726a335624`）再次得到 `blocked_no_publication`：run 自然 completed，但 `artifact_count=0`、`current_publication_id=null`，无 `vlm_extraction` 数据审查或 `publication_acceptance`。冻结 topic SHA-256 为 `f30ab310…c298`，事件流 2,438 条，证据在 ignored 目录 `data/gold-runs/38d1fe20ccb8-gold6-qwen38flash-r1/`。
+- **已修复：** 六表 profile/E2E、dynamic source entries、receipt-only submit、运行时 locator admission、SourceLocator wire 指导、429/503/流中断恢复，以及本轮暴露的真实视觉输入缺陷。受治理抽取现在从已重算摘要的注册 PDF 字节以 PDF.js + `@napi-rs/canvas` 渲染 216 DPI 完整页面（不再只抽嵌入位图），按 caption 有界选页（最多 12 页、单页 25M 像素闸）；论文标题/期刊/日期/作者来自注册 JATS XML，并验证请求 paper identity，VLM 不再负责重复论文元数据。三份 R1 真件离线回归均成功渲染，其中 PMC5355725 从 0 张嵌入位图恢复为 10 个完整候选页；混合 `<sup>/<italic>` 标题顺序也已锁定。
+- **仍阻塞：** 修复后的正式能力尚未通过 fresh Gold6 R2 live run；真实 VLM 的图表结构/数值质量、数据审查与最终 Publication 闭包仍需实证。另有 credential HIL 重复、prepare receipt 非重启持久、closure `observed_commit=null` 和 `assert-current-run.mjs` 事件分页上限错配等独立问题。
+- **证据与下一步：** 历史修复见 [`reports/2026-08-30-gold6-live-analysis.md`](reports/2026-08-30-gold6-live-analysis.md)。在修复提交上先跑 targeted/full gates，再以纯冻结 topic 创建唯一 R2 run；只有真实 `vlm_extraction`、`publication_acceptance`、B3、Manifest 和 Artifact API hash 全闭环后才可标记 Gold6 通过。
 
 ### gold7 trait association 请求没有形成正式 publication
 

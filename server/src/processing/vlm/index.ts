@@ -36,8 +36,10 @@ export {
 } from "./pdf-images.js";
 export {
   MAX_PDF_PAGES_PER_FILE,
+  MAX_PDF_RENDER_PIXELS,
   RENDER_DPI,
   renderPdfPages,
+  renderPdfPagesFromBytes,
   type PdfPageRendering,
   type RenderedPdfPage,
   type RenderPdfPagesOptions,
@@ -59,11 +61,13 @@ export {
 } from "./chart-extraction.js";
 export {
   extractRegisteredPaperChartEvidence,
+  parseRegisteredJatsPaperMeta,
   parseRegisteredPaperChartResponse,
   REGISTERED_PAPER_CHART_CARRIER_KIND,
   REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
   REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
   REGISTERED_PAPER_CHART_PROMPT,
+  REGISTERED_PAPER_RENDER_DPI,
   REGISTERED_PAPER_CHART_PROMPT_VERSION,
   type ParsedActivityCandidate,
   type ParsedExperimentCandidate,
