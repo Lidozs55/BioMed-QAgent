@@ -73,7 +73,13 @@ async function createFixture(): Promise<{
     relativePath: "source_assets/supplement.zip",
     mediaType: "application/zip",
   });
-  const tools = createCoreAssetTools({ sourceAssetRegistry: registry, sourceAssetsRoot: root });
+  await registry.registerCoreAcquisitionProvenance(receipt, {
+    provider_id: "fixture.provider",
+    implementation_digest: "a".repeat(64),
+    request_identity_digest: "b".repeat(64),
+    canonical_accession: "supplement.zip",
+  });
+  const tools = createCoreAssetTools({ taskId: "task_fixture", sourceAssetRegistry: registry, sourceAssetsRoot: root });
   return { root, registry, tools, zipAssetId: receipt.asset_ref.asset_id };
 }
 
@@ -117,7 +123,22 @@ describe("core asset preview/extract tools", () => {
 
     const resolved = await registry.resolveAny(body.asset_id);
     expect(resolved.registration_receipt.media_type).toBe("text/csv");
-  });
+    const closure = await registry.resolveFormalProvenanceClosure(body.asset_id);
+    expect(closure).toHaveLength(2);
+    const derived = closure.find((item) => "operation_kind" in item);
+    expect(derived).toMatchObject({
+      operation_kind: "archive_member_extraction",
+      parent_asset_ids: [zipAssetId],
+    });
+    const operationResult = await registry.resolveDerivedOperationResult(
+      (derived as { operation_result_id: string }).operation_result_id,
+    );
+    expect(operationResult.commit.state).toBe("committed");
+    expect(operationResult.output_files).toEqual([expect.objectContaining({
+      relative_path: resolved.registration_receipt.relative_path,
+      sha256: resolved.registration_receipt.sha256,
+      size_bytes: resolved.registration_receipt.size_bytes,
+    })]);  });
 
   it("registers extracted members with their true media types (case-insensitive, nested paths, extension-only)", async () => {
     const { root, registry, tools } = await createFixture();
@@ -140,6 +161,12 @@ describe("core asset preview/extract tools", () => {
       sourceId: "typed_fixture",
       relativePath: "source_assets/typed.zip",
       mediaType: "application/zip",
+    });
+    await registry.registerCoreAcquisitionProvenance(typedReceipt, {
+      provider_id: "fixture.provider",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "d".repeat(64),
+      canonical_accession: "typed.zip",
     });
     const [, extract] = tools;
     const cases: ReadonlyArray<readonly [member: string, expectedMediaType: string]> = [
@@ -189,6 +216,12 @@ describe("core asset preview/extract tools", () => {
       relativePath: "source_assets/GPL96.annot.csv.gz",
       mediaType: "application/gzip",
     });
+    await registry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "fixture.provider",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "c".repeat(64),
+      canonical_accession: "GPL96.annot.csv.gz",
+    });
     const [preview, extract] = tools;
 
     // Preview decodes the stream instead of surfacing gzip binary (the
@@ -218,7 +251,7 @@ describe("core asset preview/extract tools", () => {
     expect(body.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
     const resolved = await registry.resolveAny(body.asset_id);
     expect(resolved.registration_receipt.media_type).toBe("text/csv");
-    expect(resolved.registration_receipt.relative_path.endsWith("GPL96.annot.csv")).toBe(true);
+    expect(resolved.registration_receipt.relative_path).toMatch(/\/extract\/[^/]+\/[^/]+\.csv$/);
 
     // A non-gzip file simply previews as its plain text (no magic bytes); a
     // file whose extension claims gzip but is neither zip nor gzip fails

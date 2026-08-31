@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
+
+import type { OperationResultManifest } from "@biomed/contracts";
 
 import type { BioMedAgentTool, BioMedToolResult } from "../contracts.js";
 import {
@@ -24,6 +27,7 @@ const PREVIEW_HEAD_CHARS = 8192;
 const SAFE_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export interface CoreAssetToolOptions {
+  readonly taskId: string;
   readonly sourceAssetRegistry: SourceAssetRegistry;
   /** The registry root directory (contains ``source_assets/``). */
   readonly sourceAssetsRoot: string;
@@ -42,12 +46,13 @@ async function loadAssetBytes(options: CoreAssetToolOptions, assetId: string): P
   bytes: Buffer;
   relativePath: string;
   mediaType: string;
+  sha256: string;
 }> {
   const resolved = await options.sourceAssetRegistry.resolveAny(assetId);
   const registration = resolved.registration_receipt;
   const filePath = assetFilePath(options.sourceAssetsRoot, registration.relative_path);
   const bytes = await readFile(filePath);
-  return { bytes, relativePath: registration.relative_path, mediaType: registration.media_type };
+  return { bytes, relativePath: registration.relative_path, mediaType: registration.media_type, sha256: registration.sha256 };
 }
 
 function textHead(bytes: Uint8Array): { head: string; truncated: boolean } {
@@ -101,6 +106,103 @@ function zipMemberBytes(bytes: Buffer, memberName: string): Buffer {
     throw new TypeError(`zip member '${memberName}' exceeds the 268435456-byte extraction cap`);
   }
   return extractZipMember(bytes, member);
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function registerExtractedAsset(options: CoreAssetToolOptions, input: {
+  parentAssetId: string;
+  parentSha256: string;
+  member: string | null;
+  baseName: string;
+  bytes: Buffer;
+  mediaType: string;
+}): Promise<{
+  receipt: Awaited<ReturnType<SourceAssetRegistry["registerDerived"]>>["receipt"];
+  operationResultId: string;
+}> {
+  await options.sourceAssetRegistry.resolveFormalProvenanceClosure(input.parentAssetId);
+  const memberSha256 = sha256(input.bytes);
+  const parameters = {
+    parent_asset_id: input.parentAssetId,
+    member: input.member,
+    media_type: input.mediaType,
+  };
+  const parametersDigest = sha256(JSON.stringify(parameters));
+  const operationResultId = `result_archive_${sha256(`${input.parentAssetId}\u0000${parametersDigest}`).slice(0, 32)}`;
+  const implementationDigest = sha256("dataset_core.core_asset_extractor@1.0.0");
+  const relativePath = `source_assets/extract/${input.parentAssetId.slice("asset_".length, "asset_".length + 12)}/${memberSha256}${path.posix.extname(input.baseName).toLowerCase()}`;
+  const absolutePath = path.resolve(options.sourceAssetsRoot, relativePath);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, input.bytes, { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error;
+  });
+  const registered = await options.sourceAssetRegistry.registerDerived({
+    sourceId: `extract_${memberSha256.slice(0, 24)}`,
+    relativePath,
+    role: "source",
+    mediaType: input.mediaType,
+    parentAssetIds: [input.parentAssetId],
+    operationKind: "archive_member_extraction",
+    operationResultId,
+    implementationId: "dataset_core.core_asset_extractor",
+    implementationVersion: "1.0.0",
+    parametersDigest,
+    evidence: {
+      parent_archive_asset_id: input.parentAssetId,
+      parent_archive_sha256: input.parentSha256,
+      member_path: input.member,
+      member_sha256: memberSha256,
+      registered_relative_path: relativePath,
+      media_type: input.mediaType,
+      size_bytes: input.bytes.byteLength,
+    },
+  });
+  if (registered.receipt.sha256 !== memberSha256) {
+    throw new Error("archive extraction registration did not preserve decoded bytes");
+  }
+  const operationResult: OperationResultManifest = {
+    schema_version: "1.0",
+    result_manifest_id: operationResultId,
+    task_id: options.taskId,
+    run_id: "core",
+    requirement_id: "archive_extraction",
+    operation_id: operationResultId,
+    operation_kind: "parse",
+    operation_attempt_id: `attempt_${operationResultId}`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: input.parentSha256,
+    parameter_digest: parametersDigest,
+    implementation_digest: implementationDigest,
+    output_digest: memberSha256,
+    output_kind: "source_asset",
+    output_summary: {
+      parent_archive_asset_id: input.parentAssetId,
+      member_path: input.member,
+      member_asset_id: registered.receipt.asset_ref.asset_id,
+    },
+    output_files: [{
+      relative_path: registered.receipt.relative_path,
+      size_bytes: registered.receipt.size_bytes,
+      sha256: memberSha256,
+    }],
+    dependency_closure: {
+      input_asset_ids: [input.parentAssetId],
+      upstream_result_manifest_ids: [],
+      parameter_digest: parametersDigest,
+      implementation_digest: implementationDigest,
+    },
+    commit: {
+      state: "committed",
+      commit_id: `commit_${operationResultId}`,
+      committed_at: registered.provenance.created_at,
+    },
+  };
+  await options.sourceAssetRegistry.recordDerivedOperationResult(operationResult);
+  return { receipt: registered.receipt, operationResultId };
 }
 
 export function createPreviewCoreAssetTool(
@@ -228,7 +330,7 @@ export function createExtractCoreArchiveTool(
         if (typeof request.asset_id !== "string" || !ASSET_ID_PATTERN.test(request.asset_id)) {
           throw new TypeError("asset_id must be an asset_<sha256> id");
         }
-        const { bytes, relativePath } = await loadAssetBytes(options, request.asset_id);
+        const { bytes, relativePath, sha256: parentSha256 } = await loadAssetBytes(options, request.asset_id);
         if (isZipArchive(bytes)) {
           if (typeof request.member !== "string" || request.member.length === 0) {
             throw new TypeError("member is required for zip archives");
@@ -240,26 +342,24 @@ export function createExtractCoreArchiveTool(
               `member file name '${baseName}' is not a safe file name; extract a member with a simple name (letters, digits, dot, dash, underscore)`,
             );
           }
-          const derivedDir = `source_assets/extract/${request.asset_id.slice("asset_".length, "asset_".length + 12)}`;
-          await mkdir(path.resolve(options.sourceAssetsRoot, derivedDir), { recursive: true });
-          const memberRelative = `${derivedDir}/${baseName}`;
-          await writeFile(path.resolve(options.sourceAssetsRoot, memberRelative), memberBytes);
-          const receipt = await options.sourceAssetRegistry.register({
-            sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
-            relativePath: memberRelative,
-            // Register the member's true media type (registry fallback is
-            // octet-stream for .xml/.pdf/... which blocks media-gated parsers).
+          const extracted = await registerExtractedAsset(options, {
+            parentAssetId: request.asset_id,
+            parentSha256,
+            member: request.member,
+            baseName,
+            bytes: memberBytes,
             mediaType: mediaTypeFor(baseName),
           });
           return {
             content: JSON.stringify({
               ok: true,
-              asset_id: receipt.asset_ref.asset_id,
+              asset_id: extracted.receipt.asset_ref.asset_id,
               derived_from: request.asset_id,
               member: request.member,
-              relative_path: receipt.relative_path,
-              size_bytes: receipt.size_bytes,
-              media_type: receipt.media_type,
+              relative_path: extracted.receipt.relative_path,
+              size_bytes: extracted.receipt.size_bytes,
+              media_type: extracted.receipt.media_type,
+              operation_result_id: extracted.operationResultId,
             }),
             details: { ok: true },
           };
@@ -274,24 +374,24 @@ export function createExtractCoreArchiveTool(
               `gzip member file name '${baseName}' is not a safe file name; extract an asset with a simple name`,
             );
           }
-          const derivedDir = `source_assets/extract/${request.asset_id.slice("asset_".length, "asset_".length + 12)}`;
-          await mkdir(path.resolve(options.sourceAssetsRoot, derivedDir), { recursive: true });
-          const memberRelative = `${derivedDir}/${baseName}`;
-          await writeFile(path.resolve(options.sourceAssetsRoot, memberRelative), decoded);
-          const receipt = await options.sourceAssetRegistry.register({
-            sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
-            relativePath: memberRelative,
+          const extracted = await registerExtractedAsset(options, {
+            parentAssetId: request.asset_id,
+            parentSha256,
+            member: null,
+            baseName,
+            bytes: decoded,
             mediaType: mediaTypeFor(baseName),
           });
           return {
             content: JSON.stringify({
               ok: true,
-              asset_id: receipt.asset_ref.asset_id,
+              asset_id: extracted.receipt.asset_ref.asset_id,
               derived_from: request.asset_id,
               member: null,
-              relative_path: receipt.relative_path,
-              size_bytes: receipt.size_bytes,
-              media_type: receipt.media_type,
+              relative_path: extracted.receipt.relative_path,
+              size_bytes: extracted.receipt.size_bytes,
+              media_type: extracted.receipt.media_type,
+              operation_result_id: extracted.operationResultId,
             }),
             details: { ok: true },
           };
