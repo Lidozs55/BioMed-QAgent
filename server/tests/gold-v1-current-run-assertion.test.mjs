@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   EVENT_PAGE_SIZE,
   MAX_EVENT_COUNT,
   loadTaskEvents,
-} from "./assert-current-run.mjs";
+} from "../../docs/evaluation/gold-v1/assert-current-run.mjs";
 
 const BASE_URL = "http://fixture";
 const TASK_ID = "task_gold6";
