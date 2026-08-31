@@ -200,9 +200,19 @@ export function createDynamicFamilyPublicationTool(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const errorBody = { code: "dynamic_publication_rejected", message, ...structuredError(error) };
+        // Gold6 R4: the automatic untrusted-artifact fallback attaches
+        // non-authoritative ua_* receipts to the typed rejection error
+        // without changing its formal status — the tool response stays an
+        // explicit error with the receipts exposed for user retrieval.
+        const fallback = error as { formal_status?: unknown; untrusted_artifacts?: unknown };
+        const fallbackProjection: Record<string, unknown> = {};
+        if (fallback.formal_status === "rejected" && Array.isArray(fallback.untrusted_artifacts)) {
+          fallbackProjection.formal_status = fallback.formal_status;
+          fallbackProjection.untrusted_artifacts = fallback.untrusted_artifacts;
+        }
         return {
-          content: JSON.stringify({ ok: false, error: errorBody }),
-          details: { ok: false, error: errorBody },
+          content: JSON.stringify({ ok: false, error: { ...errorBody, ...fallbackProjection } }),
+          details: { ok: false, error: { ...errorBody, ...fallbackProjection } },
           isError: true,
         };
       }

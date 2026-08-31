@@ -83,8 +83,12 @@ import { createHilGatePreReview } from "./hil-pre-review.js";
 import type { HILApprovalPolicyStore } from "./hil-approval-store.js";
 import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 import {
+  LiteratureProfileRejectionError,
+  DynamicProductNotPublishableError,
+  PublicationAcceptanceRejectedError,
+} from "../dataset/dynamic-family/formal-rejections.js";
+import {
   archiveCommittedDynamicTablesAsUntrustedArtifacts,
-  classifyDynamicPublicationRejection,
   DynamicPublicationUntrustedFallbackError as UntrustedFallbackError,
 } from "./dynamic-family-untrusted-fallback.js";
 
@@ -767,18 +771,24 @@ export async function createPhase3Runtime(
             });
           } catch (publicationError) {
             // Gold6 R4 automatic untrusted-artifact fallback: after a fully
-            // committed dynamic execution, a semantic/publication rejection
-            // archives the candidate tables once into the non-authoritative
-            // quarantine (never a publication, artifact event, or formal
-            // success), then rethrows the formal rejection with ua_* receipts
-            // attached for the tool response projection.
-            const message = publicationError instanceof Error
-              ? publicationError.message
-              : String(publicationError);
-            const cause = publicationError instanceof Error && publicationError.cause instanceof Error
-              ? publicationError.cause
-              : null;
-            if (classifyDynamicPublicationRejection(message) === "semantic_rejection") {
+            // committed dynamic execution, only explicitly typed formal
+            // rejections (literature semantic profile, final B3/Product
+            // Assessment non-publishable, publication_acceptance human
+            // reject/skip) archive the candidate tables into the
+            // non-authoritative quarantine, then rethrow the formal rejection
+            // with ua_* receipts attached for the tool response projection.
+            // Selection is instanceof-based on dataset-layer typed classes —
+            // never string classification — so cancellation/abort, timeout,
+            // resource, filesystem/copy/hash/path, stale generation/fence,
+            // HIL request, identity-mismatch, and unknown errors propagate
+            // unchanged with zero fallback.
+            const allowlisted = publicationError instanceof LiteratureProfileRejectionError
+              || publicationError instanceof DynamicProductNotPublishableError
+              || publicationError instanceof PublicationAcceptanceRejectedError;
+            if (allowlisted) {
+              const message = publicationError instanceof Error
+                ? publicationError.message
+                : String(publicationError);
               try {
                 const receipts = await archiveCommittedDynamicTablesAsUntrustedArtifacts({
                   result,
@@ -787,7 +797,9 @@ export async function createPhase3Runtime(
                   runId: currentRunId,
                   requirementId: submission.execution_proposal.requirement_id,
                   rejectionReason: message,
-                  failedChecks: UntrustedFallbackError.extractFailedChecks(publicationError),
+                  failedChecks: publicationError instanceof DynamicProductNotPublishableError
+                    ? publicationError.failedChecks
+                    : undefined,
                 });
                 throw new UntrustedFallbackError({
                   message,
@@ -795,23 +807,17 @@ export async function createPhase3Runtime(
                 });
               } catch (fallbackError) {
                 if (fallbackError instanceof UntrustedFallbackError) throw fallbackError;
-                // A failed archive (including the helper's own integrity
-                // re-verification) stays a hard reject without ua_* output;
-                // the original publication error remains authoritative.
+                // A failed archive (including the helper's own no-TOCTOU
+                // integrity re-verification) stays a hard reject without
+                // ua_* output; the original publication error remains
+                // authoritative.
                 const fallbackNote = `untrusted artifact fallback failed: ${fallbackError instanceof Error ? fallbackError.message.slice(0, 300) : String(fallbackError)}`;
                 console.warn("runtime.dynamic_publication_untrusted_fallback", {
-                  classification: "semantic_rejection",
                   detail: fallbackNote,
                 });
-                throw cause === null
-                  ? new Error(`${message}; ${fallbackNote}`)
-                  : new Error(`${message} (fallback diagnostic: ${cause.message})`);
+                throw new Error(`${message}; ${fallbackNote}`, { cause: fallbackError });
               }
             }
-            // Integrity/control failures (cancellation, stale generation,
-            // lock loss, refusal at the promotion fence, identity mismatch,
-            // path traversal, byte drift) never archive: hard reject with no
-            // ua_* output, preserving the original publication error.
             throw publicationError;
           }
           const publicationManifestSha = product.publication.publication.manifest_sha256;

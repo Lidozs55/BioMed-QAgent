@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
@@ -12,18 +11,41 @@ import {
   type OperationResultManifest,
   type Projection,
   type PublicationCandidate,
+  type UntrustedArtifactMetadata,
 } from "@biomed/contracts";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   archiveCommittedDynamicTablesAsUntrustedArtifacts,
-  classifyDynamicPublicationRejection,
   DynamicPublicationUntrustedFallbackError,
   untrustedFallbackIdentityLine,
   untrustedFallbackMediaType,
 } from "../src/runtime/dynamic-family-untrusted-fallback.js";
-import { listUntrustedArtifacts } from "../src/runtime/untrusted-artifact-store.js";
+import {
+  LiteratureProfileRejectionError,
+  DynamicProductNotPublishableError,
+  PublicationAcceptanceRejectedError,
+} from "../src/dataset/dynamic-family/formal-rejections.js";
+import { listUntrustedArtifacts, storeUntrustedArtifact } from "../src/runtime/untrusted-artifact-store.js";
 import type { DynamicFamilyExecutionResult } from "../src/dataset/dynamic-family/submission.js";
+
+/**
+ * Deterministic storage-failure hook: when set, ``storeUntrustedArtifact``
+ * (as imported by the helper) delegates to this function. Defaults to the
+ * real store, so every other test exercises the genuine path.
+ */
+let storeUntrustedHook: typeof storeUntrustedArtifact | null = null;
+
+vi.mock("../src/runtime/untrusted-artifact-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/runtime/untrusted-artifact-store.js")>();
+  return {
+    ...actual,
+    storeUntrustedArtifact: (taskRoot: string, taskId: string, metadata: UntrustedArtifactMetadata, bytes: Buffer) =>
+      storeUntrustedHook !== null
+        ? storeUntrustedHook(taskRoot, taskId, metadata, bytes)
+        : actual.storeUntrustedArtifact(taskRoot, taskId, metadata, bytes),
+  };
+});
 
 const roots: string[] = [];
 const TASK_ID = "task_untrusted_fb";
@@ -199,26 +221,7 @@ afterEach(async () => {
 });
 
 describe("dynamic publication untrusted-artifact fallback", () => {
-  test("classifies semantic rejections versus control/integrity failures", () => {
-    expect(classifyDynamicPublicationRejection(
-      "dynamic multi-table product is not publishable: literature_chart semantic gate failed",
-    )).toBe("semantic_rejection");
-    expect(classifyDynamicPublicationRejection("dynamic publication review was not accepted: reject")).toBe("semantic_rejection");
-    for (const message of [
-      "dynamic family preflight generation is stale",
-      "operation aborted by timeout or cancel",
-      "dynamic family execution lock fence was lost",
-      "dynamic product copy drifted for 'records'",
-      "publication refused: main input pending",
-      "untrusted fallback task/requirement identity mismatch: candidate task=other",
-      "tables/records.csv escapes the committed trusted root",
-      "references a missing admitted output at index 3",
-    ]) {
-      expect(classifyDynamicPublicationRejection(message), message).toBe("control_failure");
-    }
-  });
-
-  test("deterministic media type and bounded identity line", () => {
+  test("media type is deterministic by delimiter", () => {
     expect(untrustedFallbackMediaType(",")).toBe("text/csv");
     expect(untrustedFallbackMediaType("\t")).toBe("text/tab-separated-values");
     expect(untrustedFallbackMediaType("°")).toBe("application/octet-stream");
@@ -289,7 +292,7 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       runId: RUN_ID,
       requirementId: REQUIREMENT_ID,
       rejectionReason: "dynamic publication review was not accepted: reject",
-    })).rejects.toThrow(/drifted/);
+    })).rejects.toThrow(/size .* does not match the admitted receipt/);
     await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
     await expect(stat(path.join(fx.taskRoot, "quarantine"))).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -356,7 +359,7 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       runId: RUN_ID,
       requirementId: REQUIREMENT_ID,
       rejectionReason: "dynamic publication review was not accepted: reject",
-    })).rejects.toThrow(/escapes the committed trusted root/);
+    })).rejects.toThrow(/is not a canonical relative path|escapes the committed trusted root/);
     await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
   });
 
@@ -381,10 +384,6 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       size_bytes: 18,
       sha256: DIGEST_A,
     }]);
-    expect(DynamicPublicationUntrustedFallbackError.extractFailedChecks(error)).toBeUndefined();
-    expect(DynamicPublicationUntrustedFallbackError.extractFailedChecks({
-      failed_checks: [{ check_id: "semantic_gate", scope: "table", passed: false, detail: "missing evidence" }],
-    })).toEqual([{ check_id: "semantic_gate", scope: "table", passed: false, detail: "missing evidence" }]);
   });
 
   test("pure Core materialization accepts the fixture family/projection shape (fixture honesty)", async () => {
@@ -396,5 +395,212 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       .toEqual([sha256(TABLE_A), sha256(TABLE_B)]);
     expect(candidate.task_id).toBe(TASK_ID);
     expect(candidate.requirement_id).toBe(REQUIREMENT_ID);
+  });
+
+  test("allows exactly the three typed formal rejections through the archive gate", async () => {
+    const fx = await fixture();
+    const call = () => archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic profile closure failed",
+      failedChecks: [{ check_id: "semantic_gate", scope: "profile", passed: false, detail: "missing evidence" }],
+    });
+    // Sanity: the helper itself archives when the caller selects an
+    // allowlisted rejection.
+    await expect(call()).resolves.toHaveLength(2);
+
+    // The typed classes are Error subclasses carrying stable shape.
+    const literature = new LiteratureProfileRejectionError("semantic profile failed");
+    const notPublishable = new DynamicProductNotPublishableError(
+      "dynamic multi-table product is not publishable: profile:semantic_gate (missing evidence)",
+      [{ check_id: "semantic_gate", scope: "profile", passed: false, detail: "missing evidence" }],
+    );
+    const acceptance = new PublicationAcceptanceRejectedError("reject", "axis units unverifiable");
+    expect(literature.reason).toBe("semantic profile failed");
+    expect(notPublishable.failedChecks).toHaveLength(1);
+    expect(acceptance.action).toBe("reject");
+    expect(acceptance.reason).toBe("axis units unverifiable");
+    expect(new PublicationAcceptanceRejectedError("skip", null).message).toContain("skip");
+  });
+
+  test("filesystem I/O error during verification propagates unchanged and leaves zero quarantine output", async () => {
+    const fx = await fixture();
+    // Remove one admitted table file: the verification read must surface the
+    // raw filesystem error (or the integrity equivalent), never archive.
+    await rm(path.join(fx.result.trustedRoot, "tables", "points.csv"));
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "dynamic publication review was not accepted: reject",
+    })).rejects.toThrow();
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("hardlinked admitted table is rejected before any quarantine write", async () => {
+    const fx = await fixture();
+    const admittedPath = path.join(fx.result.trustedRoot, "tables", "records.csv");
+    const hardlinkPath = path.join(fx.root, "records-hardlink.csv");
+    await link(admittedPath, hardlinkPath);
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "dynamic publication review was not accepted: reject",
+    })).rejects.toThrow(/independent regular file|hardlink/i);
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("symlinked committed-root child is rejected before any quarantine write", async () => {
+    const fx = await fixture();
+    // Replace the records.csv file with a symlink to the real bytes stored
+    // outside the committed root.
+    await rm(path.join(fx.result.trustedRoot, "tables", "records.csv"));
+    const outside = path.join(fx.root, "outside-records.csv");
+    await writeFile(outside, TABLE_A, "utf8");
+    await symlink(outside, path.join(fx.result.trustedRoot, "tables", "records.csv"));
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "dynamic publication review was not accepted: reject",
+    })).rejects.toThrow(/independent regular file|symlink/i);
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("storage failure on table k removes only this invocation's receipts, never pre-existing submissions", async () => {
+    const fx = await fixture();
+    // A pre-existing manual submission that must survive any cleanup.
+    const manual = await storeUntrustedArtifact(
+      fx.taskRoot,
+      TASK_ID,
+      {
+        schema_version: "1.0",
+        name: "manual_note.csv",
+        media_type: "text/csv",
+        source_note: null,
+        coverage_status: "unknown",
+        covered_scope: [],
+        missing_scope: [],
+      },
+      Buffer.from("manual,upload\n1,2\n", "utf8"),
+    );
+    let storageCalls = 0;
+    storeUntrustedHook = async (taskRoot, taskId, metadata, bytes) => {
+      storageCalls += 1;
+      if (storageCalls === 2) throw new Error("simulated storage failure (ENOSPC)");
+      return storeUntrustedArtifact(taskRoot, taskId, metadata, bytes);
+    };
+    try {
+      await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+        result: fx.result,
+        taskId: TASK_ID,
+        taskRoot: fx.taskRoot,
+        runId: RUN_ID,
+        requirementId: REQUIREMENT_ID,
+        rejectionReason: "dynamic publication review was not accepted: reject",
+      })).rejects.toThrow(/simulated storage failure/);
+    } finally {
+      storeUntrustedHook = null;
+    }
+    expect(storageCalls).toBe(2);
+    // Only the manual submission survives: both invocation-created receipts
+    // (table 1 stored, table 2 failed) are gone after bounded cleanup.
+    const finalListing = await listUntrustedArtifacts(fx.taskRoot);
+    expect(finalListing.map((receipt) => receipt.submission_id)).toEqual([manual.submission_id]);
+  });
+});
+
+describe("submit_dynamic_family_publication fallback receipt projection", () => {
+  test("projects formal_status and untrusted_artifacts while remaining an error", async () => {
+    const { createDynamicFamilyPublicationTool } = await import("../src/agent/tools/dynamic-family-publication.js");
+    const contracts = await import("@biomed/contracts");
+    const { DynamicPublicationUntrustedFallbackError: FallbackError } = await import("../src/runtime/dynamic-family-untrusted-fallback.js");
+    const typedRejection = new FallbackError({
+      message: "dynamic publication review was not accepted: reject",
+      untrustedArtifacts: [{
+        submission_id: `ua_${"1".repeat(24)}`,
+        table_id: "records",
+        name: "records.csv",
+        size_bytes: 18,
+        sha256: DIGEST_A,
+      }],
+    });
+    const unsignedReceipt = {
+      schema_version: "1.0",
+      task_id: "task_projection",
+      requirement_id: "build_projection",
+      generation: 0,
+      family_spec_digest: DIGEST_A,
+      projection_digest: DIGEST_B,
+      product_requirement_digest: DIGEST_A,
+      host_descriptor_digest: DIGEST_B,
+      submission_digest: DIGEST_A,
+      required_input_roles: ["source"],
+      output_closure: ["records"],
+      topology_diagnostics: [],
+      acquisition_plan: [],
+      receipt_digest: "0".repeat(64),
+    } as unknown as Parameters<typeof contracts.computeDynamicFamilyPreflightReceiptDigest>[0];
+    const preflightReceipt = {
+      ...unsignedReceipt,
+      receipt_digest: await contracts.computeDynamicFamilyPreflightReceiptDigest(unsignedReceipt),
+    };
+    const tool = createDynamicFamilyPublicationTool({
+      // Receipt-only submit requires resolveSubmission; provide it so the
+      // request parses and reaches the (throwing) submit seam.
+      resolveSubmission: async () => {
+        throw typedRejection;
+      },
+      submit: async () => {
+        throw typedRejection;
+      },
+    });
+    const result = await tool.execute({ schema_version: "1.0", preflight_receipt: preflightReceipt });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content) as {
+      ok: boolean;
+      error: {
+        code: string;
+        message: string;
+        formal_status: string;
+        untrusted_artifacts: Array<{ submission_id: string; sha256: string }>;
+      };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("dynamic_publication_rejected");
+    expect(body.error.message).toBe("dynamic publication review was not accepted: reject");
+    expect(body.error.formal_status).toBe("rejected");
+    expect(body.error.untrusted_artifacts).toEqual([{
+      submission_id: `ua_${"1".repeat(24)}`,
+      table_id: "records",
+      name: "records.csv",
+      size_bytes: 18,
+      sha256: DIGEST_A,
+    }]);
+  });
+
+  test("plain publication rejections project without fallback properties", async () => {
+    const { createDynamicFamilyPublicationTool } = await import("../src/agent/tools/dynamic-family-publication.js");
+    const tool = createDynamicFamilyPublicationTool({
+      submit: async () => {
+        throw new Error("dynamic family preflight generation is stale");
+      },
+    });
+    const result = await tool.execute({ schema_version: "1.0", preflight_receipt: { receipt_digest: DIGEST_A } as unknown });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content) as { error: Record<string, unknown> };
+    expect(body.error.code).toBe("dynamic_publication_rejected");
+    expect(body.error).not.toHaveProperty("formal_status");
+    expect(body.error).not.toHaveProperty("untrusted_artifacts");
   });
 });

@@ -17,6 +17,11 @@ import {
 } from "@biomed/contracts";
 
 import type { ValidationResult } from "../contracts/validation.js";
+import {
+  LiteratureProfileRejectionError,
+  DynamicProductNotPublishableError,
+  PublicationAcceptanceRejectedError,
+} from "./formal-rejections.js";
 import { parsePublicationCandidate } from "../contracts/index.js";
 
 import type { DynamicFamilyExecutionResult } from "./submission.js";
@@ -237,12 +242,23 @@ export async function publishDynamicFamily(
       confidence_refs: [key(confidenceRef)],
     });
   }
-  await validateLiteratureExperimentChartProfile({
-    profileRef: input.productRequirements.profile_ref,
-    stagedTablePaths,
-    sourceInputProvenance: transformExecution?.sourceInputProvenance ?? [],
-    signal: input.signal,
-  });
+  // The only intentional semantic-profile throw on this path: a typed
+  // rejection (fallback-allowlisted), never a wrapper around unknown I/O or
+  // abort failures surfaced by the validator.
+  try {
+    await validateLiteratureExperimentChartProfile({
+      profileRef: input.productRequirements.profile_ref,
+      stagedTablePaths,
+      sourceInputProvenance: transformExecution?.sourceInputProvenance ?? [],
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (error instanceof LiteratureProfileRejectionError) throw error;
+    if (input.signal?.aborted === true) throw error;
+    throw new LiteratureProfileRejectionError(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   await assertGenerationCurrent();
   await mkdir(input.workspaceRoot, { recursive: true });
   const b3Policy = input.b3Validation?.policy ?? PRODUCTION_B3_RESOURCE_POLICY;
@@ -541,7 +557,12 @@ export async function publishDynamicFamily(
       throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
     }
     if (review.decision.action !== "accept") {
-      throw new Error(rejectReasonMessage("dynamic publication review", review));
+      throw new PublicationAcceptanceRejectedError(
+        review.decision.action === "skip" ? "skip" : "reject",
+        typeof review.reason === "string" && review.reason.trim() !== ""
+          ? review.reason.slice(0, 2000)
+          : null,
+      );
     }
     const currentAssessment = await fileReceipt(assessmentPath);
     if (currentAssessment.sha256 !== provisionalAssessment.sha256 || currentAssessment.size_bytes !== provisionalAssessment.size_bytes) {
@@ -594,6 +615,7 @@ export async function publishDynamicFamily(
   artifacts.push(await artifact(outputDir, "product_assessment.json", "audit_report", "application/json"));
   await assertGenerationCurrent();
   const packageSha = packageDigest(artifacts);
+  const failedChecksSnapshot = failed.map((check) => ({ ...check }));
   const validation: ValidationResult = {
     schema_version: "1.0",
     manifest_digest: packageSha,
@@ -614,7 +636,10 @@ export async function publishDynamicFamily(
       ...failed.map((check) => `${check.scope}:${check.check_id}${check.detail ? ` (${check.detail})` : ""}`),
       ...assessment.blockers.map((blocker) => `${blocker.requirement_id}:${blocker.code}`),
     ];
-    throw new Error(`dynamic multi-table product is not publishable: ${reasons.join(", ")}`);
+    throw new DynamicProductNotPublishableError(
+      `dynamic multi-table product is not publishable: ${reasons.join(", ")}`,
+      failedChecksSnapshot,
+    );
   }
   const primary = candidate.tables.find((table) => table.definition.role === "primary");
   if (primary === undefined) throw new Error("dynamic product has no primary table");
