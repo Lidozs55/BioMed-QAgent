@@ -6,6 +6,15 @@
 
 > **2026-08-30 注**：B3（无墙钟时限）、B4/C5/D5（同路止损）、K3 的同签名止损/最小化定位、L1（计划句绑定调用）已作为通用行为面先行沉淀进主提示词开头的 `[System briefing]` 段（`phase1-prompt.ts` 新增 `SYSTEM_BRIEFING`，`PiAgentAdapter.createSession` 置首拼接）；本表各条其余建议修法仍待批量分流复核，不因已沉淀而关闭条目。
 >
+> **2026-08-31 批量修复（merge 71606fcd）**：以下已落地（代码修复 + 提示词条款，定向测试通过）：
+> - **A 类·提示词**：`[System constraints]` 新增"穷尽界"（E3/J4/I1 模型半）与"收敛界"（C2/G4 发布后核验预算）两条——**未跑 live 验证，效果待下一轮复跑证明**。
+> - **P1**：HIL 拒绝理由透传给模型（`rejectReasonMessage`，含单测）。
+> - **P2**：source_files 三向死锁解除（`resolveByRelativePath` 反查 + 双形态解析 + 可操作报错，含单测）。
+> - **B7**：PUT `model_name` 与激活模型冲突时拒绝（含单测）；GET 已回显真值。
+> - **supervisor**：GET 5xx 指数退避重试（不重试 POST）+ 默认超时 1h→3h（含单测）。
+> - **O2**：`scaffold_dataset_profile` 描述补 profile_ref 必填说明。
+> 未修（架构级/时间救不了）：P3 动态拓扑、K1/K2/L5、J1/J2/O1、E1/E2/N1/I2/H1。
+>
 > **2026-08-31 框架修复落点**（谨慎选择性落地，未提交）：
 > - **wire 缺陷 → 已修**：根因=1336428a 起存储对象为无 `.projection` 的 wire 形状，提交端 `resolveSubmission` 直返存储对象从不重建 `.projection`（与 a98a151a 无关，已排除）。修法=`phase3-composition.ts` 的 resolveSubmission 改为对存储 wire 重跑 `parseDynamicFamilyPublicationSubmission`；`dynamic-family-preflight.test.ts` 相应从"存 parsed"改为"存 wire"并断言重建，`dynamic-family-phase3-composition.test.ts` 改为纯 receipt-only e2e（未经 echo）。
 > - **链 1 低风险子集 → 已修**：`core-asset-tools.ts` gzip preview/extract（1F 8B 魔数 + `zlib.gunzipSync`，extract 无 member 解整流并按脱壳名标 media type）；`pubmed/geo/browser` 下载工具成功后登记到 task-owned `SourceAssetRegistry`（D3/H4/I3 直击）；workspace deny 响应附 `read_path_hint`（保守指引，不承诺可读性）。
