@@ -522,6 +522,42 @@ describe("dynamic family build tool boundary", () => {
     });
   });
 
+  test("rejects a raw archive carrier when a text input is declared", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-media-"));
+    try {
+      await mkdir(path.join(root, "source_assets"), { recursive: true });
+      const archiveBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
+      await writeFile(path.join(root, "source_assets", "carrier.bin"), archiveBytes);
+      const registry = new SourceAssetRegistry("task_dynamic", root);
+      const receipt = await registry.register({
+        sourceId: "archive_carrier",
+        relativePath: "source_assets/carrier.bin",
+        mediaType: "application/octet-stream",
+      });
+      await registry.registerCoreAcquisitionProvenance(receipt, {
+        provider_id: "fixture.files.v1",
+        implementation_digest: A,
+        request_identity_digest: B,
+      });
+      const raw = await submission();
+      raw.registered_sources = { source_binding: receipt.asset_ref.asset_id };
+      const prepared = await prepareForSubmit(raw);
+      await expect(submitDynamicFamilyPublication({
+        taskId: "task_dynamic",
+        runId: "run_dynamic",
+        submission: prepared.submission,
+        sourceAssetRegistry: registry,
+        taskRoot: root,
+        runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+        generation: 0,
+        preflightReceipt: prepared.receipt,
+        preflightSubmission: prepared.submission,
+      })).rejects.toThrow(/binary\/archive carrier|extract and bind/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("executes registered bytes through the total unisolated Core composition", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-submit-"));
     try {

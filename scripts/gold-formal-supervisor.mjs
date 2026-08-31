@@ -190,7 +190,12 @@ export function classifyPermission(request, options = {}) {
         reason: "known shell or network subprocess bypass",
       };
     }
-    return { action: "stop", reason: "process.exec is not a fixed parser command" };
+    return {
+      action: "deny",
+      decision: "deny",
+      grant_scope: null,
+      reason: "process.exec is not a fixed parser command",
+    };
   }
   return { action: "stop", reason: "capability is not automatically allowed" };
 }
@@ -692,12 +697,17 @@ function journalCursor(records) {
   return cursor;
 }
 
-function permissionAlreadyHandled(records, requestId) {
+function permissionAlreadyHandled(records, permissionRecords, requestId) {
   return records.some((event) => {
     const payload = eventPayload(event);
     return (eventType(event) === "permission_resolved" && payload?.request_id === requestId) ||
       (eventType(event) === "permission_requested" && payload?.request_id === requestId && payload?.decision === "allow");
-  });
+  }) || permissionRecords.some((record) =>
+    isRecord(record)
+    && record.request_id === requestId
+    && isRecord(record.decision)
+    && (record.decision.action === "allow" || record.decision.action === "deny"),
+  );
 }
 
 function pendingHilFromEvents(records, runId) {
@@ -837,6 +847,7 @@ export async function supervise(input, dependencies = {}) {
   const workspaceRoot = options.workspaceRoot ?? dependencies.workspaceRoot ?? path.resolve("data", "workspaces", options.taskId);
   const deadline = Date.now() + options.timeoutMs;
   let records = await journalRecords(options.evidenceDir);
+  let permissionRecords = await readJsonl(path.join(options.evidenceDir, "permissions.jsonl"));
   const journalAfterSequence = journalCursor(records);
   if (journalAfterSequence > state.after_sequence) state.after_sequence = journalAfterSequence;
   if (journalAfterSequence < state.after_sequence) throw new SupervisorError("protocol", "event journal is behind the persisted cursor");
@@ -854,16 +865,33 @@ export async function supervise(input, dependencies = {}) {
       }
       const isRunEvent = event.run_id === runId;
       const permission = permissionRequest(event);
-      if (isRunEvent && permission !== null && typeof permission.request_id === "string" && !permissionAlreadyHandled(records, permission.request_id)) {
-        const decision = classifyPermission(permission, { workspaceRoot });
-        if (decision.action === "stop") {
-          await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), { request_id: permission.request_id, decision });
+      if (isRunEvent && permission !== null) {
+        if (typeof permission.request_id !== "string" || permission.request_id.trim() === "") {
+          const decision = { action: "stop", reason: "permission request id is missing" };
+          await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), {
+            event_id: event.event_id,
+            sequence: event.sequence,
+            decision,
+          });
           state.stopped = true;
+          state.after_sequence = event.sequence;
           await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
-          throw new SupervisorError("permission", `unsafe permission request: ${decision.reason}`);
+          throw new SupervisorError("protocol", decision.reason);
         }
-        await resolvePermission(api, options.taskId, runId, permission, decision);
-        await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), { request_id: permission.request_id, decision });
+        if (!permissionAlreadyHandled(records, permissionRecords, permission.request_id)) {
+          const decision = classifyPermission(permission, { workspaceRoot });
+          if (decision.action === "stop") {
+            await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), { request_id: permission.request_id, decision });
+            permissionRecords.push({ request_id: permission.request_id, decision });
+            state.stopped = true;
+            state.after_sequence = event.sequence;
+            await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
+            throw new SupervisorError("permission", `unsafe permission request: ${decision.reason}`);
+          }
+          await resolvePermission(api, options.taskId, runId, permission, decision);
+          await appendJsonl(path.join(options.evidenceDir, "permissions.jsonl"), { request_id: permission.request_id, decision });
+          permissionRecords.push({ request_id: permission.request_id, decision });
+        }
       }
       if (isRunEvent) {
         const classifiedHil = classifyHIL(event);

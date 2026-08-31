@@ -310,7 +310,7 @@ describe("Gold formal rerun supervisor", () => {
       command: "C:\\Program Files\\Git\\mingw64\\bin\\curl.exe -sSL --max-time 60 -o staging/dilirank.md https://raw.githubusercontent.com/example/repo/main/README.md",
       cwd: WORKSPACE_ROOT,
     }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
-    expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "python analysis.py", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("stop");
+    expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "python analysis.py", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
     expect(classifyPermission({ capability: "process.exec", scope: "workspace", command: "node -e fetch('https://evil')", cwd: WORKSPACE_ROOT }, { workspaceRoot: WORKSPACE_ROOT }).action).toBe("deny");
   });
 
@@ -343,6 +343,95 @@ describe("Gold formal rerun supervisor", () => {
         request_id: "permission_network",
         decision: { action: "deny" },
       });
+    } finally { await close(host.server); }
+  });
+
+  test("posts deny for an unknown workspace exec and continues the same run", async () => {
+    const fixture = await setup();
+    const permissionBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [
+        event(1, {
+          type: "permission_requested",
+          request_id: "permission_unknown_exec",
+          capability: "process.exec",
+          scope: "workspace",
+          command: "python analysis.py",
+          cwd: WORKSPACE_ROOT,
+        }, "permission_requested"),
+        event(2, { type: "run_completed" }, "run_completed"),
+      ],
+      snapshot: taskSnapshot("queued", null),
+      completeOnRun: true,
+      onPermission: (body) => permissionBodies.push(body),
+    });
+    try {
+      const result = await supervise(options({ ...fixture, baseUrl: host.baseUrl }));
+      expect(result.terminal.classification).toBe("succeeded_publication");
+      expect(permissionBodies).toEqual([{ decision: "deny", grant_scope: null }]);
+      const records = (await readFile(path.join(fixture.evidenceDir, "permissions.jsonl"), "utf8")).trim().split("\\n");
+      expect(records).toHaveLength(1);
+      expect(JSON.parse(records[0] ?? "{}")).toMatchObject({
+        request_id: "permission_unknown_exec",
+        decision: { action: "deny" },
+      });
+    } finally { await close(host.server); }
+  });
+
+  test("deduplicates repeated permission requests from local evidence", async () => {
+    const fixture = await setup();
+    const permissionBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [
+        event(1, {
+          type: "permission_requested",
+          request_id: "permission_duplicate",
+          capability: "process.exec",
+          scope: "workspace",
+          command: "python analysis.py",
+          cwd: WORKSPACE_ROOT,
+        }, "permission_requested"),
+        event(2, {
+          type: "permission_requested",
+          request_id: "permission_duplicate",
+          capability: "process.exec",
+          scope: "workspace",
+          command: "python analysis.py",
+          cwd: WORKSPACE_ROOT,
+        }, "permission_requested"),
+        event(3, { type: "run_completed" }, "run_completed"),
+      ],
+      snapshot: taskSnapshot("queued", null),
+      completeOnRun: true,
+      onPermission: (body) => permissionBodies.push(body),
+    });
+    try {
+      const result = await supervise(options({ ...fixture, baseUrl: host.baseUrl }));
+      expect(result.terminal.classification).toBe("succeeded_publication");
+      expect(permissionBodies).toEqual([{ decision: "deny", grant_scope: null }]);
+    } finally { await close(host.server); }
+  });
+
+  test("stops with a protocol error for a permission request without an identity", async () => {
+    const fixture = await setup();
+    const permissionBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [
+        event(1, {
+          type: "permission_requested",
+          capability: "process.exec",
+          scope: "workspace",
+          command: "python analysis.py",
+          cwd: WORKSPACE_ROOT,
+        }, "permission_requested"),
+      ],
+      snapshot: taskSnapshot("queued", null),
+      completeOnRun: true,
+      onPermission: (body) => permissionBodies.push(body),
+    });
+    try {
+      await expect(supervise(options({ ...fixture, baseUrl: host.baseUrl }))).rejects.toMatchObject({ code: "protocol" });
+      expect(permissionBodies).toHaveLength(0);
     } finally { await close(host.server); }
   });
 
