@@ -363,6 +363,13 @@ describe("literature experiment chart formal closure", () => {
     const sourceBindings = [
       { binding_id: "fulltext", source: "pubmed", input_requirement_ref: "fulltext_xml", parameters: {} },
       { binding_id: "vlm_evidence", source: "core_vlm", input_requirement_ref: "vlm_evidence", parameters: {} },
+      {
+        binding_id: "supplementary_figure",
+        source: "core_archive",
+        input_requirement_ref: "supplementary_figure",
+        binding_kind: "provenance_only" as const,
+        parameters: {},
+      },
       { binding_id: "supplementary_table", source: "core_archive", input_requirement_ref: "supplementary_table", parameters: {} },
     ];
     const rawPrepare = buildCoreProfilePrepareSubmission({
@@ -372,6 +379,7 @@ describe("literature experiment chart formal closure", () => {
       registeredSources: {
         fulltext: fulltext.asset_ref.asset_id,
         vlm_evidence: vlmAsset.asset_id,
+        supplementary_figure: image.receipt.asset_ref.asset_id,
         supplementary_table: parsedCsv.receipt.asset_ref.asset_id,
       },
       acquisitionRequests: {},
@@ -420,6 +428,17 @@ describe("literature experiment chart formal closure", () => {
       productRequirements,
       isGenerationCurrent: () => true,
     });
+    const transformInputAssetIds = execution.receipt.input_asset_receipts.map(
+      (receipt) => receipt.asset_id,
+    );
+    expect(transformInputAssetIds).toHaveLength(3);
+    expect(transformInputAssetIds).not.toContain(image.receipt.asset_ref.asset_id);
+    expect(execution.operationResult.dependency_closure.input_asset_ids).toContain(
+      image.receipt.asset_ref.asset_id,
+    );
+    expect(execution.materialization.candidate.registered_asset_ids).toContain(
+      image.receipt.asset_ref.asset_id,
+    );
     let publicationReviewCount = 0;
     const outputRoot = path.join(taskRoot, "dataset_runs", "run_literature_chart", "literature_chart_fixture");
     let published: Awaited<ReturnType<typeof publishDynamicFamily>>;

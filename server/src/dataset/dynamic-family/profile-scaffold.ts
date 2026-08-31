@@ -20,9 +20,8 @@ export interface CoreProfileSubmissionBinding {
   readonly input_requirement_ref: string;
   /**
    * Optional explicit binding role; legacy/absent normalizes to
-   * ``transform_input``. provenance_only bindings still carry one declared
-   * input role (for their provenance media type) but are never decoded into
-   * transform runtime inputs.
+   * ``transform_input``. provenance_only bindings carry no declared transform
+   * role and are never decoded into runtime inputs.
    */
   readonly binding_kind?: SourceBindingKind;
   readonly parameters: Readonly<Record<string, JsonValue>>;
