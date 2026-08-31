@@ -42,6 +42,7 @@ import {
   ComboboxList,
   ComboboxTrigger,
 } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { formatSize } from "@/lib/fileUtils";
@@ -378,7 +379,7 @@ export function AgentComposer({
             onCompact={onCompact}
           />
         )}
-        <input
+        <Input
           ref={fileInputRef}
           type="file"
           multiple
@@ -388,7 +389,7 @@ export function AgentComposer({
           aria-hidden="true"
           tabIndex={-1}
         />
-        <input
+        <Input
           ref={imageInputRef}
           type="file"
           multiple
@@ -490,16 +491,18 @@ export function AgentComposer({
                   </ComboboxList>
                   <div className="border-t px-3 py-2 text-center text-[11px] text-muted-foreground">
                     管理模型请前往
-                    <button
+                    <Button
                       type="button"
-                      className="ml-1 text-primary underline-offset-2 hover:underline"
+                      variant="link"
+                      size="xs"
+                      className="ml-1 h-auto p-0 text-[11px] font-normal"
                       onClick={() => {
                         setModelDropdownOpen(false);
                         handleOpenSettings();
                       }}
                     >
                       设置
-                    </button>
+                    </Button>
                   </div>
                 </ComboboxContent>
               </Combobox>

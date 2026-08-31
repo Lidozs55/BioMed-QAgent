@@ -199,13 +199,12 @@ publication gate 属 TODO P2）。
 动态工具支持 task-scope FamilySpec，所以“不注册新的 production family”本身不是
 拓扑阻塞；但 Agent 仍需准备完整 FamilySpec、Projection、TypeScript transform、
 proposal 和 registered source/acquisition bindings，并严格执行 prepare/submit 两阶段协议。
-2026-08-27 已完成 scaffold 的第一个小步：prepare schema 不再要求 Agent 手写 Family、
-Projection、transform binding 和 Host descriptor digest；服务端派生这些值并返回可原样交给
-submit 的 `prepared_submission`，同时兼容旧的严格 prepare 请求。它仍缺少 planning/scaffold
-接口来返回：匹配的
-semantic family/projection、行粒度、可用 providers、缺失 blockers 和服务端生成的
-合法 skeleton。这增加了模型跳过正式路径的概率，但本次日志只能证明“未选择”，
-不能把动机单因果归结为 schema 大小。
+2026-08-30 已形成完整的 profile scaffold → prepare → submit 协议：
+`scaffold_dataset_profile` 返回 Core 固定的 semantic family/projection、行粒度、表关系和
+合法 prepare skeleton；prepare 派生 Family、Projection、transform binding 和 Host
+descriptor digest。Host 按 receipt digest 保留该大体积 prepared submission，Agent 在 submit
+时只回传不可变 `preflight_receipt`，Core 再取回并完整复验，不再要求模型复制约 20 KB 的
+服务端对象。旧的严格 submit parser 仅为内部兼容，不是 Agent-facing 主路径。
 
 ### 7.3 Core acquisition closure 缺失
 

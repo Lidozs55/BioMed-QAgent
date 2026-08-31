@@ -17,7 +17,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 
@@ -92,6 +92,10 @@ export interface VlmResultOk {
   source_file: string;
   source_path: string;
   outputs: string[];
+  evidence_manifest: string;
+  model_name: string;
+  model_version: string;
+  prompt_digest: string;
   charts: VlmChartSummary[];
   total_charts: number;
   total_data_points: number;
@@ -109,7 +113,12 @@ export type VlmResult = VlmResultOk | VlmResultError;
 
 export interface VlmTools {
   config: VlmConfig;
-  extractChartDataVlm(sourcePath: string, hint?: string, signal?: AbortSignal): Promise<VlmResult>;
+  extractChartDataVlm(
+    sourcePath: string,
+    hint?: string,
+    signal?: AbortSignal,
+    reviewAllModelPoints?: boolean,
+  ): Promise<VlmResult>;
 }
 
 function correctionObject(value: JsonValue, path: string): Record<string, JsonValue> {
@@ -132,13 +141,21 @@ export async function reviewLowConfidencePoints(options: {
   pointRows: ChartPointRow[];
   sourceLabel: string;
   hilGate?: DatasetHILGate | null;
+  reviewAllModelPoints?: boolean;
   signal?: AbortSignal;
 }): Promise<void> {
+  const chartById = new Map(options.chartRows.map((chart) => [chart.chart_id, chart]));
+  // Every pending model estimate is review-bound. ``reviewAllModelPoints`` is
+  // retained for callers from the earlier low-confidence-only API; pending
+  // rows are already restricted to L1 model output by normalization.
   const pending = options.pointRows.filter((point) => point.human_review_state === "pending");
-  if (pending.length === 0) return;
+  const required = options.reviewAllModelPoints
+    ? pending.filter((point) => chartById.get(point.chart_id)?.extraction_tier.startsWith("L1") === true)
+    : pending;
+  if (required.length === 0) return;
   if (options.hilGate === undefined || options.hilGate === null) {
     throw new ChartExtractionError(
-      `${pending.length} pending VLM estimate(s) require durable human review`,
+      `${required.length} VLM point(s) require durable human review`,
     );
   }
   const review = await options.hilGate.requestHIL({
@@ -146,8 +163,8 @@ export async function reviewLowConfidencePoints(options: {
     kind: "data_review",
     review_type: "vlm_extraction",
     blocking: true,
-    subject: { record_ids: pending.map((point) => point.point_id) },
-    review_items: pending.map((point) => ({
+    subject: { record_ids: required.map((point) => point.point_id) },
+    review_items: required.map((point) => ({
       item_id: point.point_id,
       summary: `${point.series_label || "point"}: (${point.x_value}, ${point.y_value})`,
       subject: { record_ids: [point.point_id] },
@@ -162,10 +179,10 @@ export async function reviewLowConfidencePoints(options: {
       proposed_value: { x: point.x_value, y: point.y_value },
       confidence_level: point.confidence_level === "not_applicable" ? null : point.confidence_level,
     })),
-    summary: `${pending.length} pending VLM estimate(s) require review`,
+    summary: `${required.length} VLM point(s) require review`,
     evidence: {
       source_label: options.sourceLabel,
-      points: pending.map((point) => ({
+      points: required.map((point) => ({
         point_id: point.point_id,
         chart_id: point.chart_id,
         x_value: point.x_value,
@@ -175,25 +192,29 @@ export async function reviewLowConfidencePoints(options: {
       })),
     },
     policy_ref: "dataset.vlm_extraction.v1",
-    idempotency_key: `vlm:${options.sourceLabel}:${pending.map((point) => point.point_id).join(",")}`,
+    idempotency_key: `vlm:${options.sourceLabel}:${required.map((point) => point.point_id).join(",")}`,
   }, options.signal);
 
   if (review.decision.action === "approve") {
     throw new ChartExtractionError("approve is not valid for VLM data review");
   }
   if (review.decision.action === "reject" || review.decision.action === "skip") {
-    const removed = new Set(pending.map((point) => point.point_id));
+    const removed = new Set(required.map((point) => point.point_id));
     const retained = options.pointRows.filter((point) => !removed.has(point.point_id));
     options.pointRows.splice(0, options.pointRows.length, ...retained);
   } else if (review.decision.action === "accept") {
-    for (const point of pending) {
+    for (const point of required) {
       point.human_review_state = "accepted";
       point.review_id = review.review_id;
+      point.review_evidence_digest = review.evidence_digest;
+      point.review_reviewer = review.reviewer;
+      point.reviewed_at = review.reviewed_at;
+      point.review_reason = review.reason ?? "";
     }
   } else {
     const root = correctionObject(review.decision.correction, "VLM correction");
     const corrections = correctionObject(root["points"] ?? null, "VLM correction.points");
-    for (const point of pending) {
+    for (const point of required) {
       const item = correctionObject(
         corrections[point.point_id] ?? null,
         `VLM correction.points.${point.point_id}`,
@@ -212,6 +233,10 @@ export async function reviewLowConfidencePoints(options: {
       if (y !== undefined) point.y_value = String(y);
       point.human_review_state = "corrected";
       point.review_id = review.review_id;
+      point.review_evidence_digest = review.evidence_digest;
+      point.review_reviewer = review.reviewer;
+      point.reviewed_at = review.reviewed_at;
+      point.review_reason = review.reason ?? "";
     }
   }
   for (const chart of options.chartRows) {
@@ -305,7 +330,7 @@ export async function writeChartConfidenceArtifact(
     });
   const recordOverrides = pointRows.flatMap((point) => {
     const chart = charts.get(point.chart_id);
-    if (chart?.extraction_tier !== "L1_vlm" || point.confidence_level === "not_applicable") {
+    if (chart === undefined || !chart.extraction_tier.startsWith("L1") || point.confidence_level === "not_applicable") {
       return [];
     }
     return [evaluateConfidence({
@@ -588,6 +613,10 @@ async function tryPdfTables(
           confidence_reason: "deterministic PDF table extraction",
           human_review_state: "not_required",
           review_id: "",
+          review_evidence_digest: "",
+          review_reviewer: "",
+          reviewed_at: "",
+          review_reason: "",
           original_x_value: "",
           original_y_value: "",
         });
@@ -636,6 +665,10 @@ function captionRows(
     confidence_reason: "caption text only; no numeric chart value extracted",
     human_review_state: "not_required",
     review_id: "",
+    review_evidence_digest: "",
+    review_reviewer: "",
+    reviewed_at: "",
+    review_reason: "",
     original_x_value: "",
     original_y_value: "",
   }));
@@ -667,6 +700,7 @@ async function extractFromImage(
     chartIdxOffset,
     sourceLabel,
     modelName,
+    { bbox: "0,0,1,1", extractionTier: "L1_vlm" },
   );
   return {
     chartRows: [chartRow],
@@ -701,7 +735,7 @@ export function createVlmTools(options: {
 
   return {
     config,
-    extractChartDataVlm: async (sourcePath, hint = "", signal) => {
+    extractChartDataVlm: async (sourcePath, hint = "", signal, reviewAllModelPoints = false) => {
       let resolved: string;
       try {
         resolved = await resolveTaskLocalFile(sourcePath, taskRoot);
@@ -836,6 +870,7 @@ export function createVlmTools(options: {
           sourceLabel,
           hilGate: options.hilGate,
           signal,
+          reviewAllModelPoints,
         });
         await writeChartCsvs(
           chartData,
@@ -871,6 +906,30 @@ export function createVlmTools(options: {
         source_asset_id: row.source_asset_id,
       }));
 
+      const promptDigest = createHash("sha256").update(prompt, "utf8").digest("hex");
+      const evidenceIdentity = createHash("sha256").update(JSON.stringify({
+        source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
+        source_label: sourceLabel,
+        prompt_digest: promptDigest,
+      })).digest("hex").slice(0, 24);
+      const evidenceManifestPath = path.join(
+        chartData,
+        `chart_evidence_manifest_${evidenceIdentity}.json`,
+      );
+      await writeFile(evidenceManifestPath, `${JSON.stringify({
+        schema_version: "1.0",
+        source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
+        model_name: config.model,
+        model_version: config.model,
+        prompt_digest: promptDigest,
+        extraction_tiers: tiersUsed,
+        charts: chartRows,
+        points: pointRows.map((point) => ({
+          ...point,
+          estimated_or_exact: point.confidence_level === "not_applicable" ? "exact" : "estimated",
+        })),
+      })}\n`, "utf8");
+
       const result: VlmResultOk = {
         status: "ok",
         source_file: sourceLabel,
@@ -879,7 +938,12 @@ export function createVlmTools(options: {
           toTaskRelative(path.join(chartData, "chart_data.csv"), taskRoot),
           toTaskRelative(path.join(chartData, "chart_data_points.csv"), taskRoot),
           toTaskRelative(path.join(chartData, CONFIDENCE_ARTIFACT_FILE), taskRoot),
+          toTaskRelative(evidenceManifestPath, taskRoot),
         ],
+        evidence_manifest: toTaskRelative(evidenceManifestPath, taskRoot),
+        model_name: config.model,
+        model_version: config.model,
+        prompt_digest: promptDigest,
         charts,
         total_charts: chartRows.length,
         total_data_points: pointRows.length,

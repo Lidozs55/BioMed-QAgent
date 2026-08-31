@@ -46,6 +46,12 @@ files with `download_supplementary`.
 - For open-access full text used by a dynamic build, request one exact PMCID per
   source binding with the fixed Core provider `pubmed.files.v1`. Core retrieves
   and provenance-binds Europe PMC XML; never invent another literature provider.
+- For supplementary ZIP data used by a formal build, call
+  `extract_supplementary_archive` with the verified PMCID. Dataset Core acquires
+  the official archive, extracts bounded members without shell/Python/tar, and
+  returns derived member asset IDs with parent ZIP hash and member path/hash.
+  Use those exact asset IDs as registered inputs; never unpack the workspace
+  download yourself.
 - Literature-derived quantitative evidence uses the generic six-table topology:
   paper_records, experiment_records, primary activity_value_records,
   chart_series, chart_points, and supplementary_asset_records.

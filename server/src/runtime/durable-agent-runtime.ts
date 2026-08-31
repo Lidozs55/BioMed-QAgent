@@ -927,7 +927,13 @@ export async function createDurableAgentRuntime(
     );
     if (tool === undefined) {
       if (existing === undefined) await workspace.dispose();
-      throw new ReferenceError(`Tool not found: ${toolName}`);
+      throw new ReferenceError(
+        `Tool not found: ${toolName} ` +
+          // pi-adapter's TOOL_ACTIVATION_NAME; kept literal to avoid pulling
+          // the adapter module (and its graph) into the runtime.
+          `(activate it first via activate_agent_tools, then retry; ` +
+          `do not retry the raw call)`,
+      );
     }
     // Reuse the original tool call: a tool_started carrying the original
     // tool_call_id on the host run makes the frontend reducer upsert the

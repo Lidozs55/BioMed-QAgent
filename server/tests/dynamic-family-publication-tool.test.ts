@@ -12,11 +12,18 @@ import {
   parseDynamicFamilyPublicationSubmitRequest,
   parseDynamicFamilyPublicationSubmission,
 } from "../src/agent/tools/dynamic-family-publication.js";
-import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
+import {
+  submitDynamicFamilyPublication as submitDynamicFamilyPublicationCore,
+} from "../src/dataset/dynamic-family/submission.js";
 import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
-import { prepareDynamicFamilyPublication } from "../src/dataset/dynamic-family/preflight.js";
+import {
+  prepareDynamicFamilyPublication as prepareDynamicFamilyPublicationCore,
+} from "../src/dataset/dynamic-family/preflight.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
-import { expectedOutputLocatorClosure } from "../src/dataset/dynamic-family/execution.js";
+import {
+  expectedOutputLocatorClosure,
+  runtimeOutputLocatorClosure,
+} from "../src/dataset/dynamic-family/execution.js";
 import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
 import {
   PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
@@ -33,6 +40,33 @@ import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../src/dataset/acquisi
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
+const PRODUCT_REQUIREMENTS = {
+  schema_version: "1.0" as const,
+  profile_ref: "policy_assessment",
+  dataset_family: "family_dynamic",
+  tables: [
+    { table_id: "records", role: "primary" as const, schema_ref: "schema_records", min_rows: 1 },
+  ],
+  relations: [],
+};
+
+function prepareDynamicFamilyPublication(
+  input: Omit<Parameters<typeof prepareDynamicFamilyPublicationCore>[0], "productRequirements">,
+) {
+  return prepareDynamicFamilyPublicationCore({
+    ...input,
+    productRequirements: PRODUCT_REQUIREMENTS,
+  });
+}
+
+function submitDynamicFamilyPublication(
+  input: Omit<Parameters<typeof submitDynamicFamilyPublicationCore>[0], "productRequirements">,
+) {
+  return submitDynamicFamilyPublicationCore({
+    ...input,
+    productRequirements: PRODUCT_REQUIREMENTS,
+  });
+}
 
 async function submission(): Promise<Record<string, unknown>> {
   const projection: Projection = {
@@ -146,6 +180,11 @@ describe("dynamic family build tool boundary", () => {
       output("supporting", "asset_source_a"),
       output("derived", "asset_source_b"),
     ])).toEqual(["asset_source_a", "asset_source_b"]);
+    expect(runtimeOutputLocatorClosure([
+      { locator_ref: "asset_source_a" },
+      { locator_ref: "asset_source_b" },
+      { locator_ref: "asset_source_a" },
+    ])).toEqual(["asset_source_a", "asset_source_b"]);
   });
 
   test("parses only an explicitly unisolated, digest-bound submission", async () => {
@@ -153,6 +192,15 @@ describe("dynamic family build tool boundary", () => {
     expect(parsed.execution_backend).toBe("in_process_unisolated");
     expect(parsed.family_spec.scope).toBe("task");
     expect(parsed.projection.projection_id).toBe("projection_dynamic");
+  });
+
+  test("accepts strict-tool-safe source entry arrays and normalizes them to Core maps", async () => {
+    const raw = await submission();
+    raw.registered_sources = [{ binding_id: "source_binding", asset_id: `asset_${A}` }];
+    raw.acquisition_requests = [];
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    expect(parsed.registered_sources).toEqual({ source_binding: `asset_${A}` });
+    expect(parsed.acquisition_requests).toEqual({});
   });
 
   test("accepts a fixed Core provider request instead of a pre-registered carrier", async () => {
@@ -182,13 +230,53 @@ describe("dynamic family build tool boundary", () => {
         parameters: {
           source: "pubmed",
           accession: "PMC10408569",
-          entities: {},
+          entities: {
+            paper: ["PMC10408569"],
+            target: ["EGFR"],
+            mutations: ["L858R", "T790M"],
+            inhibitors: ["gefitinib"],
+          },
         },
       },
     };
     const parsed = await parseDynamicFamilyPublicationSubmission(raw);
     expect(parsed.acquisition_requests.source_binding?.provider_id).toBe("pubmed.files.v1");
+    expect(parsed.acquisition_requests.source_binding?.parameters.entities).toEqual({
+      paper: ["PMC10408569"],
+      target: ["EGFR"],
+      mutations: ["L858R", "T790M"],
+      inhibitors: ["gefitinib"],
+    });
     expect(parsed.registered_sources).toEqual({});
+
+    const prepare = createPrepareDynamicFamilyPublicationTool({
+      prepare: async () => { throw new Error("not called"); },
+    });
+    const sourceSchemas = (prepare.parameters as {
+      properties: {
+        registered_sources: { type: string; items: { required: string[] } };
+        acquisition_requests: {
+          type: string;
+          items: {
+            oneOf: Array<{
+              properties: {
+                provider_id: { enum: string[] };
+                parameters: { properties: { entities: { additionalProperties: unknown } } };
+              };
+            }>;
+          };
+        };
+      };
+    }).properties;
+    expect(sourceSchemas.registered_sources.type).toBe("array");
+    expect(sourceSchemas.registered_sources.items.required).toEqual(["binding_id", "asset_id"]);
+    const alternatives = sourceSchemas.acquisition_requests.items.oneOf;
+    const pubmed = alternatives.find((candidate) =>
+      candidate.properties.provider_id.enum.includes("pubmed.files.v1"));
+    expect(pubmed?.properties.parameters.properties.entities.additionalProperties).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
   });
 
   test("exposes the complete nested contract and fixed-provider parameter guidance", () => {
@@ -202,9 +290,13 @@ describe("dynamic family build tool boundary", () => {
     expect(prepare.description).toMatch(/every input is dynamic-bindable/i);
     expect(tool.description).toMatch(/dynamic\.direct_bindings/i);
     expect(tool.description).toMatch(/execution contract, not proof of semantic or publication closure/i);
+    expect(tool.description).toMatch(/Core-owned product requirement profile/i);
     expect(schema).toContain('"table_definitions"');
     expect(schema).toContain('"field_names"');
+    expect(schema).toContain('"product_requirement_digest"');
     expect(schema).toContain("Synchronous TypeScript only");
+    expect(schema).toMatch(/EVERY CSV field.*quoted.*double/i);
+    expect(schema).toMatch(/chart_series\.source_locator.*locator_version.*locator_type.*image_bbox.*never.*\{locator/i);
     expect(schema).toContain("target_records");
     expect(schema).toContain("maxItems");
     expect(schema).toContain("chembl.files.v1");
@@ -242,6 +334,7 @@ describe("dynamic family build tool boundary", () => {
     delete proposal.transform_refs[0]!.digest;
 
     let preparedSubmission: unknown;
+    let storedPreparedWire: unknown;
     const tool = createPrepareDynamicFamilyPublicationTool({
       prepare: async (value) => {
         preparedSubmission = value;
@@ -252,10 +345,18 @@ describe("dynamic family build tool boundary", () => {
           submission: value,
         });
       },
+      onPrepared: (value) => {
+        storedPreparedWire = value;
+      },
     });
     const result = await tool.execute(raw);
 
     expect(result.isError).not.toBe(true);
+    const receiptOffset = result.content.indexOf('"preflight_receipt"');
+    const submissionOffset = result.content.indexOf('"prepared_submission"');
+    expect(receiptOffset).toBeGreaterThanOrEqual(0);
+    expect(receiptOffset).toBeLessThan(256);
+    expect(receiptOffset).toBeLessThan(submissionOffset);
     expect(preparedSubmission).toMatchObject({
       family_spec: { canonical_digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
       transform_metadata: {
@@ -279,6 +380,18 @@ describe("dynamic family build tool boundary", () => {
     if (echoSubmission === null) throw new Error("echo submit must carry the full prepared submission");
     expect(echoSubmission.execution_proposal.transform_refs[0]?.digest)
       .toBe(submit.preflightReceipt.host_descriptor_digest);
+
+    const submitTool = createDynamicFamilyPublicationTool({
+      submit: async () => ({ ok: true }),
+      resolvePreparedSubmission: () => storedPreparedWire,
+    });
+    const roundTrip = await submitTool.execute({
+      preflight_receipt: details.preflight_receipt,
+    });
+    if (roundTrip.isError === true) throw new Error(roundTrip.content);
+    expect((submitTool.parameters as { required: string[] }).required).toEqual([
+      "preflight_receipt",
+    ]);
   });
 
   test("prepare schema omits derived digests while retaining strict-request compatibility", async () => {
@@ -468,6 +581,7 @@ describe("dynamic family build tool boundary", () => {
         requirementId: parsed.execution_proposal.requirement_id,
         execution: result,
         validationProfileRef: parsed.family_spec.validation_policy_ref,
+        productRequirements: PRODUCT_REQUIREMENTS,
         signal: new AbortController().signal,
         isGenerationCurrent: () => true,
       };
@@ -569,7 +683,21 @@ describe("dynamic family build tool boundary", () => {
       });
       expect(published.validation.status).toBe("passed");
       expect(published.assessment.product_status).toBe("publishable");
-      expect(reviewRequest).toMatchObject({ review_type: "publication_acceptance" });
+      expect(reviewRequest).toMatchObject({
+        review_type: "publication_acceptance",
+        evidence: {
+          product_requirements: {
+            profile_ref: "policy_assessment",
+            digest: canonicalDigest(PRODUCT_REQUIREMENTS),
+            table_ids: ["records"],
+            relation_ids: [],
+          },
+        },
+      });
+      expect(published.assessment).toMatchObject({
+        requirement_id: "policy_assessment",
+        package_id: "family_dynamic",
+      });
       expect(published.assessment.human_review_evidence).toMatchObject([{ decision: "accept" }]);
       expect(published.publication.publication.manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(published.manifest.artifacts.map((artifact) => artifact.role)).toContain("provenance");
@@ -623,7 +751,7 @@ describe("dynamic family build tool boundary", () => {
 async function executedSubmission(
   root: string,
   content = "record_id,value\nr1,1\n",
-  reviewStatus = false,
+  reviewField: string | null = null,
 ): Promise<{ publishInput: PublishDynamicFamilyInput; requirementId: string }> {
   await mkdir(path.join(root, "source_assets"), { recursive: true });
   await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
@@ -633,9 +761,9 @@ async function executedSubmission(
     relativePath: "source_assets/source.csv",
   });
   const raw = await submission();
-  if (reviewStatus) {
+  if (reviewField !== null) {
     const reviewFamily = raw.family_spec as FamilySpec;
-    reviewFamily.table_definitions[0]!.field_names.push("review_status");
+    reviewFamily.table_definitions[0]!.field_names.push(reviewField);
     reviewFamily.canonical_digest = await computeFamilySpecDigest(reviewFamily);
     (raw.transform_metadata as { bound_family_spec_digest: string }).bound_family_spec_digest =
       reviewFamily.canonical_digest;
@@ -667,11 +795,73 @@ async function executedSubmission(
       requirementId,
       execution: result,
       validationProfileRef: parsed.family_spec.validation_policy_ref,
+      productRequirements: PRODUCT_REQUIREMENTS,
       signal: new AbortController().signal,
       isGenerationCurrent: () => true,
     },
   };
 }
+
+test.each(["confidence", "confidence_level", "extraction_confidence", "extraction-confidence"])(
+  "requires publication acceptance HIL for dynamic extraction field '%s'",
+  async (reviewField) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-confidence-hil-"));
+    try {
+      const { publishInput, requirementId } = await executedSubmission(
+        root,
+        `record_id,value,${reviewField}\nr1,1,high\n`,
+        reviewField,
+      );
+      await expect(publishDynamicFamily(publishInput)).rejects.toThrow(/durable HIL gate/);
+      await expect(access(path.join(root, "dataset_runs", "run_dynamic", requirementId, "publish")))
+        .rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("fails closed before publication when a Core-owned product manifest requires a missing table", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-product-topology-"));
+  try {
+    const { publishInput, requirementId } = await executedSubmission(
+      root,
+      "record_id,value,review_status\nr1,1,human_review_pending\n",
+      "review_status",
+    );
+    const requestHIL = vi.fn(async (input) => ({
+      schema_version: "1.0" as const,
+      review_id: "review_must_not_run",
+      request_id: "hil_must_not_run",
+      decision: { action: "accept" as const },
+      reviewer: "user" as const,
+      reviewed_at: "2026-08-28T00:00:00.000Z",
+      evidence_digest: computeHILEvidenceDigest(input),
+      reason: null,
+    }));
+    const productRequirements = {
+      schema_version: "1.0",
+      profile_ref: "fixture.records_with_context.release.v1",
+      dataset_family: "family_dynamic",
+      tables: [
+        { table_id: "records", role: "primary", schema_ref: "schema_records", min_rows: 1 },
+        { table_id: "context", role: "supporting", schema_ref: "schema_context", min_rows: 1 },
+      ],
+      relations: [],
+    };
+
+    await expect(publishDynamicFamily({
+      ...publishInput,
+      productRequirements,
+      hilGate: { requestHIL },
+    } as PublishDynamicFamilyInput)).rejects.toThrow(/missing required table.*context/i);
+    expect(requestHIL).not.toHaveBeenCalled();
+    await expect(access(path.join(root, "dataset_runs", "run_dynamic", requirementId, "publish")))
+      .rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("publication fence rejects a generation superseded while HIL is pending", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-publication-fence-"));
@@ -679,7 +869,7 @@ test("publication fence rejects a generation superseded while HIL is pending", a
     const { publishInput, requirementId } = await executedSubmission(
       root,
       "record_id,value,review_status\nr1,1,human_review_pending\n",
-      true,
+      "review_status",
     );
     let current = true;
     let enteredReview!: () => void;

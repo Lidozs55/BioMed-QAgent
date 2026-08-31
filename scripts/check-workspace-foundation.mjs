@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,19 @@ function requireAbsent(path) {
 function readJson(path) {
   requireFile(path);
   return JSON.parse(readFileSync(pathFromRoot(path), "utf8"));
+}
+
+function gitAttributes(path, ...attributes) {
+  const output = execFileSync(
+    "git",
+    ["check-attr", ...attributes, "--", path],
+    { cwd: root, encoding: "utf8" },
+  );
+  return new Map(output.trim().split(/\r?\n/).map((line) => {
+    const match = /^[^:]+: ([^:]+): (.+)$/.exec(line);
+    assert.ok(match, `Unexpected git check-attr output: ${line}`);
+    return [match[1], match[2]];
+  }));
 }
 
 const rootPackage = readJson("package.json");
@@ -55,6 +69,21 @@ requireFile("pnpm-lock.yaml");
 requireAbsent("frontend/pnpm-lock.yaml");
 requireAbsent("frontend/pnpm-workspace.yaml");
 requireFile("tsconfig.base.json");
+
+for (const path of [
+  "docs/evaluation/gold-v1/.gitattributes",
+  "docs/evaluation/gold-v1/cases/gold6.json",
+  "docs/evaluation/gold-v1/verify.mjs",
+]) {
+  const attributes = gitAttributes(path, "text", "eol");
+  assert.equal(attributes.get("text"), "set", `${path} must be treated as text`);
+  assert.equal(attributes.get("eol"), "lf", `${path} must be checked out with LF bytes`);
+}
+assert.equal(
+  gitAttributes("docs/evaluation/gold-v1/prompts/gold6.txt", "text").get("text"),
+  "unset",
+  "Frozen Gold prompts must retain their exact binary bytes",
+);
 
 const frontendPackage = readJson("frontend/package.json");
 assert.equal(frontendPackage.name, "@biomed/frontend");

@@ -60,6 +60,8 @@ import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.j
 export interface BusinessToolBundleContext {
   /** Absolute task root (TaskWorkDir root). */
   taskRoot: string;
+  /** Agent-owned preparation root for readable processing outputs. */
+  workspaceRoot?: string;
   hooks?: ToolHooks;
   /** Per-run analysis staging key; may be a live getter for later runs. */
   runId?: string | (() => string);
@@ -80,6 +82,8 @@ export interface BusinessToolBundleContext {
     client: PublicHttpClient;
     fallback: BrowserFallback;
   } | null;
+  /** Fixed VLM configuration for fixture/test bundles. Production prefers resolveVlmConfig. */
+  vlmConfig?: VlmConfig;
   /** VLM config resolver, consulted per extraction call so settings changes
    * apply without restart; resolved keys stay in memory only. */
   resolveVlmConfig?: () => Promise<VlmConfig>;
@@ -149,6 +153,8 @@ export async function createBusinessToolBundle(
   // This task/run-scoped tool is injected by phase3-composition once the
   // authoritative SourceAssetRegistry and Dataset Core context exist.
   unavailable.add("inspect_dataset_execution_routes");
+  unavailable.add("scaffold_dataset_profile");
+  unavailable.add("extract_supplementary_archive");
   unavailable.add("prepare_dynamic_family_publication");
   unavailable.add("submit_dynamic_family_publication");
   unavailable.add("scaffold_dataset_execution_spec");
@@ -301,11 +307,14 @@ export async function createBusinessToolBundle(
   register(createPdfTools(shared), "pdf_extraction");
   register(createChartDataVlmTool({
     ...shared,
+    workspaceRoot: context.workspaceRoot,
+    vlmConfig: context.vlmConfig,
     resolveVlmConfig: context.resolveVlmConfig,
     httpClient: client,
     onWarning: context.onWarning,
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,
+    sourceAssetRegistry: context.sourceAssetRegistry,
   }), "extract_chart_data_vlm");
   // Governed paper chart evidence (Gold6 T5): requires the task-owned
   // SourceAssetRegistry; without it the promotion path stays explicitly

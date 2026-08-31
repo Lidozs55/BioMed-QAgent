@@ -6,7 +6,10 @@ import {
   activationToolDefinition,
   PiAgentAdapter,
   applyModelProfileToPayload,
+  isRecoverablePiProviderError,
+  isRecoverablePiStreamError,
   resolvePiCompactionOverrides,
+  resolvePiRetryOverrides,
   resolvePiCompactionTargetTokens,
   resolveManualPiCompactionOverrides,
   resolveRequestMaxTokens,
@@ -422,6 +425,47 @@ describe("Pi model profile mapping", () => {
   });
 });
 describe("PiAgentAdapter", () => {
+  test("recovers only interrupted provider streams outside Pi's normal retry classifier", () => {
+    expect(isRecoverablePiStreamError("stream_read_error")).toBe(true);
+    expect(isRecoverablePiStreamError("upstream stream_read_error after partial response")).toBe(true);
+    expect(isRecoverablePiStreamError(
+      "stream error: stream disconnected before completion: stream closed before response.completed",
+    )).toBe(true);
+    expect(isRecoverablePiStreamError("429 rate limit")).toBe(false);
+    expect(isRecoverablePiStreamError("invalid API key")).toBe(false);
+    expect(isRecoverablePiStreamError(undefined)).toBe(false);
+  });
+
+  test("recovers only exhausted transient provider throttling and availability errors", () => {
+    expect(isRecoverablePiProviderError(
+      '429: {"message":"Upstream rate limit exceeded, please retry later","type":"rate_limit_error"}',
+    )).toBe(true);
+    expect(isRecoverablePiProviderError(
+      '503: {"message":"Service temporarily unavailable","type":"api_error"}',
+    )).toBe(true);
+    expect(isRecoverablePiProviderError("429: insufficient_quota")).toBe(false);
+    expect(isRecoverablePiProviderError("401: invalid API key")).toBe(false);
+    expect(isRecoverablePiProviderError("stream_read_error")).toBe(false);
+    expect(isRecoverablePiProviderError(undefined)).toBe(false);
+  });
+
+  test("does not switch a selected dynamic requirement back to static execution", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /Once the dynamic route is selected[\s\S]*never authorizes validate_dataset_execution or execute_dataset_execution/i,
+    );
+  });
+
+  test("keeps retryable provider failures within a bounded long-running retry window", () => {
+    expect(resolvePiRetryOverrides()).toEqual({
+      retry: {
+        enabled: true,
+        maxRetries: 6,
+        baseDelayMs: 3_000,
+        provider: { maxRetryDelayMs: 60_000 },
+      },
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

@@ -696,6 +696,18 @@ function startRuntime(options: {
       }),
       vlmHttpClient: options.vlmHttpClient,
       dynamicFamilySeams: {
+        resolveProductRequirements: () => ({
+          schema_version: "1.0",
+          profile_ref: "policy_assessment",
+          dataset_family: "family_gold6_current_head",
+          tables: TABLE_IDS.map((tableId) => ({
+            table_id: tableId,
+            role: tableId === "paper_records" ? "primary" as const : "supporting" as const,
+            schema_ref: `gold6_dynamic.${tableId}.v1`,
+            min_rows: 1,
+          })),
+          relations: [],
+        }),
         createAcquisitionRuntime: ({ taskId, taskRoot, sourceAssetRegistry }) =>
           createFixtureAcquisitionRuntime({ taskId, taskRoot, sourceAssetRegistry }),
         // The evaluation harness runs beside a loaded vitest worker; give the

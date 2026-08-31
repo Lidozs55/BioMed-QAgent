@@ -21,12 +21,23 @@
 
 ## P1 — Runtime and evidence hardening
 
+- [ ] **权威 dataset/revision identity 接入生产路径。** 从 `DatasetCore` 传递 task-owned registration receipts，基于冻结 provider revision 与 asset closure 生成 identity；通过显式 V2 schema/PK 迁移 expression adapters。
+  - 验收：`dataset_id`/`dataset_revision_id` 不来自 requirement ID、注册时间或调用方自报；V1 schema 不静默扩列；缺少权威事实时 fail closed。
+- [ ] **checkpoint/reuse/restart 闭环。** 持久化 implementation/release identity，在真实 reuse 前调用 verifier，并补齐 owner fencing、orphan cleanup、restart 与 TOCTOU 回归测试。
+  - 验收：input/params/FamilySpec/implementation/runtime/policy 任一 digest 改变都会使 checkpoint 失效；cancel/timeout/restart/stale generation 不能提交或复用旧 Publication。
+- [ ] **统一 HIL Questionnaire。** 将 `UserInputDialog` 迁移到现有 Questionnaire 基础设施。
+  - 验收：现有权限和 publication acceptance 流程行为不回退；历史事件仍可重放。
+- [ ] **数据集请求 formal-route scaffold。** 只读 capability preflight 已接入；继续由服务端生成 digest-bound dynamic execution skeleton，并为候选 semantic family/projection、单一行粒度、可用 Core providers 和缺失 blockers 提供确定性输入。
+  - 验收：gold7 类复合请求可拆为多个 projection/requirement；无 provider 时形成结构化 blocker，且不把 workspace 文件提升为正式产物；事件重放结果一致。
+- [ ] **Gold6 live 图表 evidence 到正式 Publication 证据归档。** Core profile scaffold、正式 VLM evidence asset、supplementary ZIP member/parser、JATS/BioC carrier parser、`literature_experiment_chart` 六表投影与 publication 前 manifest/HIL 校验已落地；非 Gold fixture 已由 `literature-experiment-chart-e2e.test.ts` 跑通完整六表 Publication 与 Artifact SHA-256 校验。2026-08-30 live 修复轮已按用户指令终止，仍无 Publication；未闭环问题与复现证据见 [`reports/2026-08-30-gold6-live-analysis.md`](reports/2026-08-30-gold6-live-analysis.md)。仍需在同一 Host/commit 上重跑 Gold6，记录真实 `vlm_extraction` 与 `publication_acceptance` HIL、B3、OperationResult、Manifest 和 Artifact API SHA-256 证据。
+- [ ] **QueryPlan / SourceCoverage 完整检索语义与生产 ledger 接线。** 在 `@biomed/contracts` 先定义稳定 wire DTO，由 Core 拥有并生成检索计划与覆盖结果；覆盖证据作为 Manifest 的 `audit_report` artifact 发布，不冒充逐行 provenance 或主数据。
+  - 验收：记录 source universe、source、query、filters、time window、requested/succeeded pages、raw/deduplicated/selected counts、失败与排除原因及 `retrieved_at`；只在预先定义的 source universe 内计算 coverage/recall，不允许 Agent 文本自行宣称“全网查全”。
 - [x] **Agent 消费 SourceCoverage 并按覆盖缺口补源。** 静态/registered publication 的 `source_coverage_report.json` 现在有受信只读 Agent 工具 `inspect_source_coverage`；工具只从最新 immutable manifest 定位并重算 artifact SHA-256，再返回 scope note、汇总和 failed/not_attempted 绑定摘要。Dataset execute 成功摘要也携带有界 coverage view；Agent skill 已要求仅按声明绑定范围决定独立补源，Dynamic Family 无报告时显式 coverage unavailable。候选排序/清洗预检另见 P2 记录；本项不宣称全网查全。
 - [x] **清洗规则提议与候选排序基础。** 新增 `preflight_cleaning_rules` Agent 工具、严格 `CleaningRuleProposal` contracts、Core 侧 schema/unit whitelist 预检和 `string_similarity.v1` 稳定排序/歧义判定；唯一相似候选没有注册语义规则仍进入 HIL。NormalizationProfile 在注册时拒绝重复路由、越界目标单位和非线性公式。Core execute 现在要求 task/run/requirement/binding 绑定的 digest receipt，重算预检事实并以 task-owned 原子消费标记拒绝跨重启重放；注册单位规则沿用 canonicalizer 的 `value * factor + offset` 路径。任意字段 transform 仍不执行，未注册/歧义映射继续 HIL。
 
-- [x] **图表 evidence 到正式 Publication 闭环。** 将现有 `bioactivity-measurement/chart-evidence` 模块接入受控的 Family Registry、Adapter/Assembler、Validation、ProductAssessment 与 Publisher 路线；VLM/PDF/caption 输出必须先成为 task-owned、摘要绑定的 evidence asset，不能让任意 workspace CSV 直接获得正式发布权。
+- [x] **Canonical 图表 evidence 到正式 Publication 闭环（代码能力）。** 将现有 `bioactivity-measurement/chart-evidence` 模块接入受控的 Family Registry、Adapter/Assembler、Validation、ProductAssessment 与 Publisher 路线；VLM/PDF/caption 输出必须先成为 task-owned、摘要绑定的 evidence asset，不能让任意 workspace CSV 直接获得正式发布权。
   - 验收（2026-08-29 达成）：chart 四表进入生产 `bioactivity_measurement` family（schema + registered JSON parsers + 组装分派），点级 provenance/review 门在组装前 fail-closed（结构化 `chart_evidence:chart_evidence_gate` 检查写入 validation_report，不产生 Publication），经 B3 + Publisher 走既有原子发布。点级 Gold（`server/tests/chart-evidence-publication-closure.test.ts`）覆盖 accepted/corrected（HIL correction 保留 original 值与 human_correction 步骤）、artifact bytes 与 SHA-256 重算、pending review 与缺表拒绝；`publication_created`/`artifact_produced` 事件重放由既有 durable-runtime 测试锁定。evidence ownership、review 状态机与 schema 兼容策略见 `architecture/canonical-evidence.md` § figure/chart evidence publication route；未改变 Core publication trust boundary，无需新 ADR。
-- [x] **可验证的 QueryPlan / SourceCoverage 证据。** 在 `@biomed/contracts` 先定义稳定 wire DTO，由 Core 拥有并生成检索计划与覆盖结果；覆盖证据作为 Manifest 的 `audit_report` artifact 发布，不冒充逐行 provenance 或主数据。
+- [x] **QueryPlan / SourceCoverage 基础闭环（已完成范围）。** 在 `@biomed/contracts` 先定义稳定 wire DTO，由 Core 拥有并生成检索计划与覆盖结果；覆盖证据作为 Manifest 的 `audit_report` artifact 发布，不冒充逐行 provenance 或主数据。
   - 验收（交付范围见下方完成记录与遗留项）：记录 source universe、source、query、失败与
     排除原因及 `retrieved_at`；覆盖 hostile wire、分页中断、重复来源、部分来源失败、事件
     重放和 artifact hash，任何部分失败都在正式结果中显式可见；只在预先定义的 source

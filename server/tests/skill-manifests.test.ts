@@ -188,8 +188,9 @@ describe(".pi/skills manifest integrity", () => {
   test("dataset-construction documents the dynamic prepare/submit receipt protocol", async () => {
     const skill = await readSkill("dataset-construction");
     expect(skill.body).toMatch(/prepare_dynamic_family_publication/);
-    expect(skill.body).toMatch(/descriptor digest[\s\S]*server-bound/i);
-    expect(skill.body).toMatch(/prepared submission/i);
+    expect(skill.body).toMatch(/Host descriptor digest[\s\S]*server-bound/i);
+    expect(skill.body).toMatch(/Host[\s\S]*(?:retains|retrieves)[\s\S]*prepared submission/i);
+    expect(skill.body).toMatch(/pass only[\s\S]*preflight receipt/i);
     expect(skill.body).toMatch(/unchanged receipt/i);
     expect(skill.body).toMatch(/fresh prepare[\s\S]*(?:source|projection|transform)[\s\S]*change/i);
   });
@@ -204,7 +205,7 @@ describe(".pi/skills manifest integrity", () => {
     expect(prepare).toBeGreaterThanOrEqual(0);
     expect(submit).toBeGreaterThan(prepare);
     expect(recoveryStep).toMatch(
-      /prepare_dynamic_family_publication[\s\S]*submit_dynamic_family_publication[\s\S]*prepared submission[\s\S]*descriptor digest/i,
+      /prepare_dynamic_family_publication[\s\S]*submit_dynamic_family_publication[\s\S]*only its unchanged receipt[\s\S]*Host[\s\S]*prepared submission/i,
     );
     expect(recoveryStep).not.toMatch(/switch immediately to\s+\n?\s*`submit_dynamic_family_publication`/i);
   });

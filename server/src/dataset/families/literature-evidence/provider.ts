@@ -243,7 +243,9 @@ function parseDocument(options: {
           throw new TypeError("exact activity_value must be numeric; qualified or inferred values must be estimated");
         }
 
-        const sourceId = stableId("source", [paper.id, tableId]);
+        const sourceId = stableId("source", [
+          paper.id, tableId, String(passageIndex), String(tableIndex), String(rowIndex),
+        ]);
         const locator: SourceLocatorV2 = {
           locator_version: "2.0",
           locator_type: "xml_cell",
@@ -306,7 +308,128 @@ function parseDocument(options: {
   return output;
 }
 
-/** Fixed server-owned BioC XML transform. It never executes document-provided code. */
+function jatsPaperIdentity(article: unknown): { id: string; namespace: string } {
+  for (const item of descendants(article, "article-id")) {
+    const element = record(item, "article-id");
+    const namespace = element["@_pub-id-type"];
+    const value = text(item);
+    if (typeof namespace !== "string" || value === "") continue;
+    if (namespace === "pmid") return { id: value, namespace: "pubmed" };
+    if (namespace === "pmc" || namespace === "pmcid") return { id: value.startsWith("PMC") ? value : `PMC${value}`, namespace: "pmc" };
+    if (namespace === "doi") return { id: value, namespace: "doi" };
+  }
+  throw new TypeError("Europe PMC fullTextXML article has no PMID, PMCID, or DOI");
+}
+
+function parseJatsArticle(
+  input: BioCLiteratureTransformInput,
+  article: unknown,
+  sourceDatabase: string,
+): BioCLiteratureCanonicalTables {
+  const paper = jatsPaperIdentity(article);
+  const title = required(text(descendants(article, "article-title")[0]), "JATS article title");
+  const output: BioCLiteratureCanonicalTables = { literature_evidence: [], papers: [], sources: [] };
+  const tableWraps = descendants(article, "table-wrap");
+  tableWraps.forEach((tableWrap, tableIndex) => {
+    const wrap = record(tableWrap, "table-wrap");
+    const tableId = typeof wrap["@_id"] === "string" && wrap["@_id"].trim() !== ""
+      ? wrap["@_id"].trim()
+      : `table_${tableIndex + 1}`;
+    const table = descendants(tableWrap, "table")[0];
+    if (table === undefined) return;
+    const rows = descendants(table, "tr");
+    if (rows.length < 2) return;
+    const headerCells = [
+      ...children(rows[0], "th"),
+      ...children(rows[0], "td"),
+    ];
+    const headers = headerCells.map((cell) => normalizedHeader(text(cell)));
+    const requiredHeaders = [
+      "experiment_id", "evidence_type", "claim_text", "result_summary",
+      "value_precision", "confidence", "review_status",
+    ];
+    if (headers.length === 0 || new Set(headers).size !== headers.length ||
+        requiredHeaders.some((header) => !headers.includes(header))) return;
+    rows.slice(1).forEach((row, rowIndex) => {
+      const cells = [...children(row, "td"), ...children(row, "th")].map(text);
+      if (cells.length !== headers.length) {
+        throw new TypeError(`JATS table '${tableId}' row ${rowIndex + 1} width mismatch`);
+      }
+      const values = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+      const precision = required(values.value_precision, "value_precision").toLowerCase();
+      const confidence = required(values.confidence, "confidence").toLowerCase();
+      const reviewStatus = required(values.review_status, "review_status").toLowerCase();
+      if (precision !== "exact" && precision !== "estimated") throw new TypeError("value_precision must be exact or estimated");
+      if (!new Set(["high", "medium", "low"]).has(confidence)) throw new TypeError("confidence must be high, medium, or low");
+      if (!new Set(["not_required", "pending", "accepted", "corrected", "rejected"]).has(reviewStatus)) {
+        throw new TypeError("review_status is invalid");
+      }
+      if (confidence === "low" && reviewStatus !== "accepted" && reviewStatus !== "corrected") {
+        throw new TypeError(`JATS table '${tableId}' row ${rowIndex + 1} is low-confidence and unreviewed`);
+      }
+      if (reviewStatus === "rejected") throw new TypeError(`JATS table '${tableId}' row ${rowIndex + 1} was rejected by review`);
+      const sourceId = stableId("source", [paper.id, tableId, String(tableIndex), String(rowIndex)]);
+      const locator: SourceLocatorV2 = {
+        locator_version: "2.0",
+        locator_type: "xml_cell",
+        asset_id: input.assetId,
+        logical_file: input.logicalFile,
+        raw_value: cells.join(" | "),
+        xml_path: `/article/body/table-wrap[${tableIndex + 1}]/table/tr[${rowIndex + 2}]`,
+        table_id: tableId,
+        row_index: rowIndex + 1,
+        column_index: 1,
+      };
+      if (!output.sources.some((source) => source.source_id === sourceId)) {
+        output.sources.push({
+          source_id: sourceId,
+          source_database: sourceDatabase,
+          source_asset_id: input.assetId,
+          source_locator: locator,
+          retrieved_at: input.retrievedAt,
+          carrier_type: "paper_table",
+        });
+      }
+      const experimentId = required(values.experiment_id, "experiment_id");
+      output.literature_evidence.push({
+        evidence_id: stableId("evidence", [paper.namespace, paper.id, tableId, experimentId, String(rowIndex)]),
+        paper_id: paper.id,
+        paper_id_namespace: paper.namespace,
+        experiment_id: experimentId,
+        evidence_type: required(values.evidence_type, "evidence_type"),
+        claim_text: required(values.claim_text, "claim_text"),
+        result_summary: required(values.result_summary, "result_summary"),
+        study_context: {
+          table_id: tableId,
+          activity_value: values.activity_value?.trim() || null,
+          activity_unit: values.activity_unit?.trim() || null,
+          value_precision: precision,
+          confidence,
+          review_status: reviewStatus,
+        },
+        source_id: sourceId,
+      });
+    });
+  });
+  if (output.literature_evidence.length === 0) {
+    throw new TypeError("Europe PMC fullTextXML article contains no canonical evidence table rows");
+  }
+  output.papers.push({
+    paper_id: paper.id,
+    paper_id_namespace: paper.namespace,
+    title,
+    journal: text(descendants(article, "journal-title")[0]) || null,
+    publication_date: null,
+    authors: descendants(article, "contrib")
+      .map((contributor) => text(contributor))
+      .filter(Boolean),
+    source_url: null,
+    source_id: output.sources[0]!.source_id,
+  });
+  return output;
+}
+
+/** Fixed server-owned BioC/JATS XML transform. It never executes document-provided code. */
 export function transformBioCLiteratureEvidence(input: BioCLiteratureTransformInput): BioCLiteratureCanonicalTables {
   if (!/^asset_[0-9a-f]{64}$/.test(input.assetId)) throw new TypeError("assetId must be content addressed");
   // 对象树闸门：整个 BioC 文档会被建成 JS 对象树（膨胀可达源文件 10 倍以上），
@@ -325,6 +448,10 @@ export function transformBioCLiteratureEvidence(input: BioCLiteratureTransformIn
     trimValues: true,
     processEntities: true,
   }).parse(input.bytes.toString("utf8")) as unknown;
+  const article = children(root, "article")[0];
+  if (article !== undefined) {
+    return parseJatsArticle(input, article, input.sourceDatabase?.trim() || "europe_pmc");
+  }
   const collection = children(root, "collection")[0] ?? root;
   const sourceDatabase = input.sourceDatabase?.trim() || firstText(collection, "source") || "bioc";
   const documents = children(collection, "document");

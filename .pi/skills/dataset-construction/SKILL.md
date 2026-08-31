@@ -63,13 +63,24 @@ Treat only the resulting Publication as formal output.
      embed these fields themselves; live acquisitions cannot. Each entity value
      is exactly one non-empty string.
 5. When a frozen multi-table topology cannot be expressed by a registered static
-   family, use the fixed two-phase dynamic protocol: call
+   family, call `scaffold_dataset_profile` with the exact Core profile returned
+   by route inspection. Use its FamilySpec, Projection, table definitions,
+   relations, and output closure unchanged; supply only source bindings,
+   registered/Core acquisition bindings, transform input roles, and extraction
+   source. Then use the fixed two-phase dynamic protocol: call
    `prepare_dynamic_family_publication` first, then call
-   `submit_dynamic_family_publication` with the returned server-bound submission
-   and unchanged receipt. A fresh prepare
+   `submit_dynamic_family_publication` with only the unchanged receipt. The Host
+   retrieves the server-bound prepared submission by receipt digest; never copy
+   or reconstruct that large object. A fresh prepare
    after source/projection/transform changes is mandatory; also prepare after
    any committed role, binding, or acquisition-request change, FamilySpec,
    Projection, or transform fact changes. Use this protocol with:
+   - one `dynamic.product_requirement_profiles` entry returned by
+     `inspect_dataset_execution_routes`. Never hand-write, rename, remove, or
+     re-role its tables and relations after `scaffold_dataset_profile`. Set
+     assessment_policy_ref to that exact Core profile. An Agent-authored
+     assessment profile, a reduced projection, or provider availability alone
+     cannot reach HIL/publication; preflight rejects it before acquisition;
    - `execution_backend="in_process_unisolated"` exactly. This backend is **not a
      sandbox, isolation mechanism, or security boundary**; never describe it as one.
    - a task/user/curated/system `FamilySpec`, selected Projection, strict
@@ -78,8 +89,11 @@ Treat only the resulting Publication as formal output.
    - Close every source binding exactly once with either:
      - an acquisition-requests object mapping each binding ID to a provider
        enumerated in the dynamic tool schema plus its parameters (preferred), or
-     - a registered-sources object mapping each binding ID to an asset SHA-256 ID only when that asset ID was returned by a previous fixed Core acquisition.
-     Browser/download/discovery registrations are rejected as formal carriers. Registered assets live in Core task storage, not the Agent Workspace: never use workspace search or process execution to locate or parse them. Never pass paths or response bytes.
+     - a registered-sources object mapping each binding ID to an asset SHA-256 ID returned by fixed Core acquisition, `extract_supplementary_archive`, or formal VLM evidence registration. Derived assets must carry a persisted OperationResult and complete parent closure.
+   Archive/VLM/parser assets live in Core task storage, not the Agent Workspace:
+   never use workspace search or process execution to locate or parse them.
+   Browser/download/discovery registrations are rejected as formal carriers.
+   Never pass paths or response bytes.
    - Runtime inputs are ordered by source bindings and use handles in-0, in-1,
      …, not binding IDs. Every bracket element-access syntax is rejected,
      including array indexes and regex match indexes; use destructuring,
@@ -87,26 +101,25 @@ Treat only the resulting Publication as formal output.
    - deterministic output handles out-0, out-1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
-   - Preflight closure rules (each rejection tells you exactly what failed):
-     - a projection declares exactly ONE primary table; all other tables are
-       supporting;
-     - per binding, `transform_metadata.declared_input_roles[].role` must be
-       the IDENTICAL string as that binding's `input_requirement_ref` in the
-       same submission (e.g. declare `mgnify_study_data` for a binding whose
-       requirement ref is `mgnify_study_data`, never a generic role such as
-       `csv_data`);
-     - the transform's declared output tables must equal the selected
-       projection's tables, in projection order — no extra and no missing.
-   - Worked single-source shape (one MGnify study → one primary table):
-     acquisition-request binds `mgnify.files.v1` with `{source: "mgnify",
-     accession: "MGYS00000322"}`; one transform compiles the study JSON into
-     one primary table with a registered-input locator; prepare returns the
-     server-bound descriptor digests; submit passes them unchanged.
-   The Host owns compilation. Pass the prepared submission and unchanged
-   preflight receipt directly to submit. Its Host descriptor digest is
-   server-bound; do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass
-   the receipt, or invent a digest. Treat only the returned immutable
-   Publication as formal output. A schema containing
+  - Preflight closure rules (each rejection tells you exactly what failed):
+    - a projection declares exactly ONE primary table; all other tables are
+      supporting;
+    - per binding, `transform_metadata.declared_input_roles[].role` must be
+      the IDENTICAL string as that binding's `input_requirement_ref` in the
+      same submission (e.g. declare `mgnify_study_data` for a binding whose
+      requirement ref is `mgnify_study_data`, never a generic role such as
+      `csv_data`);
+    - the transform's declared output tables must equal the selected
+      projection's tables, in projection order — no extra and no missing.
+  - Worked single-source shape (one MGnify study → one primary table):
+    acquisition-request binds `mgnify.files.v1` with `{source: "mgnify",
+    accession: "MGYS00000322"}`; one transform compiles the study JSON into
+    one primary table with a registered-input locator; prepare returns the
+    server-bound descriptor digests; submit passes them unchanged.
+  The Host owns compilation and retains the prepared submission. Pass only the
+  unchanged preflight receipt to submit; the Host descriptor digest is
+  server-bound. Do not recompute or edit digest bindings. Do not repeat a failure-driven descriptor handshake, bypass the receipt, or invent a digest. Treat only the returned immutable
+  Publication as formal output. A schema containing
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
 6. Treat a failed result as actionable state. Retry unchanged inputs only when
@@ -114,9 +127,10 @@ Treat only the resulting Publication as formal output.
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
    field vocabulary probing, then switch immediately to the fixed dynamic
-   protocol: call `prepare_dynamic_family_publication`, then call
-   `submit_dynamic_family_publication` with its unchanged prepared submission,
-   whose descriptor digest is server-bound, and receipt. For a permission
+   protocol: call `scaffold_dataset_profile`, then
+   `prepare_dynamic_family_publication`, then call
+   `submit_dynamic_family_publication` with only its unchanged receipt; the Host
+   retains and revalidates the server-bound prepared submission. For a permission
    or human-review request, wait for the decision instead of replacing the
    trusted operation with workspace output.
 7. Only a successful Publication is formal output. After publishing, verify content fidelity via the artifacts REST API (`GET /api/v1/tasks/{task_id}/artifacts` + artifact download): every published row must trace to an acquisition receipt — if a transform could not decode a carrier field, leave it empty and say so in the final report; never fill published rows with model-supplied placeholders. Carrier payload shapes for faithful decoding live in `.pi/skills/mgnify/docs/carrier-shapes.md`. Never describe rejection,

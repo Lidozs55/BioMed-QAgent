@@ -1,3 +1,5 @@
+export * from "./profile-scaffold.js";
+
 import {
   parseFamilySpec,
   parseProjection,

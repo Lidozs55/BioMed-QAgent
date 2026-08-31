@@ -481,6 +481,7 @@ function assertInvocationBinding(
 function assertOutputReceiptClosure(
   outputs: readonly OutputReceipt[],
   expected: readonly ExpectedTransformOutputDescriptor[],
+  admittedInputLocators: ReadonlySet<string>,
 ): void {
   if (outputs.length !== expected.length) {
     rejection("OUTPUT_CLOSURE_MISMATCH", "receipt output count does not match the Core closure");
@@ -497,7 +498,10 @@ function assertOutputReceiptClosure(
       output.table_id !== descriptor.table_id
       || output.schema_ref !== descriptor.schema_ref
       || output.artifact_ref !== descriptor.artifact_ref
-      || output.locator_ref !== descriptor.locator_ref
+      || (
+        output.locator_ref !== descriptor.locator_ref
+        && !admittedInputLocators.has(output.locator_ref)
+      )
     ) {
       rejection("OUTPUT_CLOSURE_MISMATCH", `receipt output ${index} does not match its Core descriptor`);
     }
@@ -1163,7 +1167,14 @@ export async function admitTransformExecution(
       rejection("DEADLINE_FENCE_VIOLATION", "Core admission started after the invocation deadline");
     }
     assertInvocationBinding(receipt, request.expected_invocation);
-    assertOutputReceiptClosure(receipt.quarantined_output_receipts, outputs);
+    assertOutputReceiptClosure(
+      receipt.quarantined_output_receipts,
+      outputs,
+      new Set([
+        ...request.expected_invocation.input_asset_receipts.map((input) => input.locator_ref),
+        ...request.expected_invocation.input_result_receipts.map((input) => input.locator_ref),
+      ]),
+    );
     await assertCurrentCancelFence(request, "before quarantine verification");
 
     const quarantine = await captureRealDirectory(request.quarantine_root, "quarantine root");

@@ -38,54 +38,75 @@ function encodeCsv(columns: readonly string[], rows: readonly CsvRecord[]): stri
   return "\ufeff" + [headerLine, ...dataLines].join("\r\n") + "\r\n";
 }
 
+function parseCsvRecords(content: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let closedQuote = false;
+  let touched = false;
+  const finishField = (): void => {
+    row.push(field);
+    field = "";
+    closedQuote = false;
+    touched = true;
+  };
+  const finishRow = (): void => {
+    finishField();
+    rows.push(row);
+    row = [];
+    touched = false;
+  };
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]!;
+    if (quoted) {
+      if (character === '"') {
+        if (content[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          quoted = false;
+          closedQuote = true;
+        }
+      } else {
+        field += character;
+      }
+      continue;
+    }
+    if (character === '"') {
+      if (field !== "" || closedQuote) throw new ValueError("quote must begin an empty CSV field");
+      quoted = true;
+      touched = true;
+    } else if (character === ",") {
+      finishField();
+    } else if (character === "\r" || character === "\n") {
+      finishRow();
+      if (character === "\r" && content[index + 1] === "\n") index += 1;
+    } else {
+      if (closedQuote) throw new ValueError("characters after a closing CSV quote are forbidden");
+      field += character;
+      touched = true;
+    }
+  }
+  if (quoted) throw new ValueError("quoted CSV field is not closed");
+  if (touched || field !== "" || row.length > 0) finishRow();
+  return rows;
+}
+
 function decodeCsv(content: string, columns: readonly string[], fileName: string): CsvRecord[] {
-  const text = content.replace(/^\ufeff/, "");
-  const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
-  if (lines.length === 0) return [];
-  const header = lines[0].split(",");
+  const rows = parseCsvRecords(content.replace(/^\ufeff/, ""));
+  if (rows.length === 0) return [];
+  const header = rows[0]!;
   const expected = [...columns];
   if (header.length !== expected.length || header.some((name, index) => name !== expected[index])) {
     throw new ValueError(`existing chart CSV schema mismatch: ${fileName}`);
   }
-  return lines.slice(1).map((line) => {
-    const record: CsvRecord = {};
-    const cells = splitCsvLine(line);
-    expected.forEach((column, index) => {
-      record[column] = cells[index] ?? "";
-    });
-    return record;
-  });
-}
-
-/** Minimal CSV line splitter handling quoted cells (\" escapes). */
-function splitCsvLine(line: string): string[] {
-  const cells: string[] = [];
-  let current = "";
-  let quoted = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (quoted) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') {
-          current += '"';
-          i += 1;
-        } else {
-          quoted = false;
-        }
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"') {
-      quoted = true;
-    } else if (ch === ",") {
-      cells.push(current);
-      current = "";
-    } else {
-      current += ch;
+  return rows.slice(1).map((cells, rowIndex) => {
+    if (cells.length !== expected.length) {
+      throw new ValueError(`existing chart CSV row ${rowIndex + 2} width mismatch: ${fileName}`);
     }
-  }
-  cells.push(current);
-  return cells;
+    return Object.fromEntries(expected.map((column, index) => [column, cells[index] ?? ""]));
+  });
 }
 
 class ValueError extends Error {
@@ -191,6 +212,18 @@ export function validateChartExtraction(
         `chart_data_points.csv row ${index + 1}: reviewed model-extracted point '${row.point_id}' is missing review_id`,
       );
     }
+    if (
+      (row.human_review_state === "accepted" || row.human_review_state === "corrected")
+      && (
+        !/^[0-9a-f]{64}$/u.test(row.review_evidence_digest)
+        || row.review_reviewer !== "user"
+        || Number.isNaN(Date.parse(row.reviewed_at))
+      )
+    ) {
+      violations.push(
+        `chart_data_points.csv row ${index + 1}: reviewed model-extracted point '${row.point_id}' is missing evidence-bound review facts`,
+      );
+    }
   });
   return violations;
 }
@@ -270,6 +303,10 @@ function recordToPointRow(record: CsvRecord): ChartPointRow {
         ? record.human_review_state
         : "not_required",
     review_id: record.review_id ?? "",
+    review_evidence_digest: record.review_evidence_digest ?? "",
+    review_reviewer: record.review_reviewer ?? "",
+    reviewed_at: record.reviewed_at ?? "",
+    review_reason: record.review_reason ?? "",
     original_x_value: record.original_x_value ?? "",
     original_y_value: record.original_y_value ?? "",
   };

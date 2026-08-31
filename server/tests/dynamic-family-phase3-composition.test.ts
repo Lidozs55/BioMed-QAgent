@@ -28,6 +28,15 @@ const servers: Server[] = [];
 const DIGEST = "b".repeat(64);
 const IMPLEMENTATION_DIGEST = "c".repeat(64);
 const REQUEST_DIGEST = "d".repeat(64);
+const PRODUCT_REQUIREMENTS = {
+  schema_version: "1.0" as const,
+  profile_ref: "policy_assessment",
+  dataset_family: "family_phase3",
+  tables: [
+    { table_id: "records", role: "primary" as const, schema_ref: "schema_records", min_rows: 1 },
+  ],
+  relations: [],
+};
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -178,10 +187,7 @@ describe("dynamic family phase3 composition fencing", () => {
             const prepared = await prepareTool.execute(raw);
             if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
             const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
-            const submitPayload = structuredClone(raw);
-            (submitPayload.execution_proposal as { transform_refs: Array<{ digest: string }> }).transform_refs[0]!.digest =
-              receipt.host_descriptor_digest;
-            submitPayload.preflight_receipt = receipt;
+            const submitPayload = { preflight_receipt: receipt };
             const duplicateSubmits = [
               submitTool.execute(submitPayload),
               submitTool.execute(structuredClone(submitPayload)),
@@ -213,6 +219,7 @@ describe("dynamic family phase3 composition fencing", () => {
       browserPool: null,
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
+        resolveProductRequirements: () => PRODUCT_REQUIREMENTS,
         createAcquisitionRuntime: acquisitionRuntimeFactory,
         assertExecutionLockOwned: async (assertOwned) => {
           if (inPromotionFence) {
@@ -259,8 +266,12 @@ describe("dynamic family phase3 composition fencing", () => {
     const accepted = await created.json() as { task_id: string; run_id: string };
     await expect.poll(async () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
-    }, { timeout: 30_000 }).toBe("completed");
+      const status = snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }, { timeout: 30_000 }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const finalRun = finalSnapshot?.runs.find((run) => run.run_id === accepted.run_id);
+    expect(finalRun?.status, JSON.stringify(finalRun)).toBe("completed");
     const publishRoot = path.join(tasksRoot, accepted.task_id, "dataset_runs", accepted.run_id, "build_phase3", "publish");
     await expect(readdir(publishRoot)).resolves.toEqual([]);
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
@@ -276,6 +287,7 @@ describe("dynamic family phase3 composition fencing", () => {
     let acquisitionCalls = 0;
     let transformCalls = 0;
     let publicationCalls = 0;
+    let submitFailure: string | null = null;
     const actualSubmit = submitDynamicFamilyPublication;
     const actualPublish = publishDynamicFamily;
     const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
@@ -328,10 +340,9 @@ describe("dynamic family phase3 composition fencing", () => {
             // Pure receipt-only submit: no payload re-echo. The stored wire
             // must be re-parsed server-side to rebuild `.projection` (the
             // model-blockers $projection regression, 5/5 dynamic runs).
-            const submitted = await submitTool.execute({
-              schema_version: "1.0",
-              preflight_receipt: receipt,
-            });
+            const submitPayload = { preflight_receipt: receipt };
+            const submitted = await submitTool.execute(submitPayload);
+            if (submitted.isError === true) submitFailure = submitted.content;
             expect(submitted.isError).not.toBe(true);
             yield { type: "turn_completed" };
           },
@@ -350,6 +361,7 @@ describe("dynamic family phase3 composition fencing", () => {
       browserPool: null,
       resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
       dynamicFamilySeams: {
+        resolveProductRequirements: () => PRODUCT_REQUIREMENTS,
         createAcquisitionRuntime: acquisitionRuntimeFactory,
         submitDynamicFamilyPublication: async (input) => {
           transformCalls += 1;
@@ -380,8 +392,12 @@ describe("dynamic family phase3 composition fencing", () => {
     const accepted = await created.json() as { task_id: string; run_id: string };
     await expect.poll(async () => {
       const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
-      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
-    }, { timeout: 30_000 }).toBe("completed");
+      const status = snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+      return status === "completed" || status === "failed" || status === "cancelled";
+    }, { timeout: 30_000 }).toBe(true);
+    const finalSnapshot = await runtime.repository.getSnapshot(accepted.task_id);
+    const finalRun = finalSnapshot?.runs.find((run) => run.run_id === accepted.run_id);
+    expect(finalRun?.status, submitFailure ?? JSON.stringify(finalRun)).toBe("completed");
     expect(acquisitionCalls).toBe(1);
     expect(transformCalls).toBe(1);
     expect(publicationCalls).toBe(1);

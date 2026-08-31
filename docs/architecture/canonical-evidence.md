@@ -139,6 +139,58 @@ or publication policy. `example`, `task`, `user`, and `curated` scope, execution
 status, verification, and activation are separate dimensions; a sandbox
 execution or Host receipt is not publication trust.
 
+## Literature Experiment Chart Profile
+
+`literature_experiment_chart.release.v1` is the reusable formal projection for
+paper-level quantitative evidence. It is a Core-owned six-table topology:
+
+- `activity_value_records` (primary);
+- `paper_records`;
+- `experiment_records`;
+- `chart_series`;
+- `chart_points` (derived, may be empty only under the declared projection);
+- `supplementary_asset_records`.
+
+The profile registry owns the complete `FamilySpec`, Projection, table roles,
+field closure and relations. `scaffold_dataset_profile` may return either the
+profile alone or a complete prepare submission after the caller supplies source
+bindings, Core asset/provider bindings, transform input roles and extraction
+source. The caller cannot rename, remove or re-role profile objects. Prepare and
+submit still recompute the existing digests and fail closed on any drift.
+
+This profile is not an evaluator-side 8-to-6 rename. The existing eight-table
+bioactivity chart profile remains a separate compatibility product. Both use
+Core profile registration and immutable publication; neither can be synthesized
+from workspace files.
+
+## Evidence Asset Ownership
+
+A formal VLM input begins with a task-owned Core-acquired or Core-derived image
+or PDF asset. After point-level `vlm_extraction` HIL, the processing layer writes
+a content-addressed evidence manifest containing source asset IDs, page/bbox,
+model and version, prompt digest, axis/legend facts, point values, confidence,
+review IDs, evidence digests, reviewer, review time and corrections. Dataset
+Core registers that manifest as a derived SourceAsset and persists the matching
+OperationResult. Publication rechecks every chart/point row against the manifest
+bytes and provenance before B3; model output copied into a workspace CSV is not
+accepted.
+
+Review states are `pending -> accepted | corrected | rejected`. Low-confidence
+or estimated points cannot publish while pending. A correction retains original
+values and HIL evidence. Point-level `vlm_extraction` review and final
+`publication_acceptance` are distinct blocking decisions; credential approval
+satisfies neither.
+
+Official supplementary ZIPs are Core-acquired carriers. The bounded ZIP parser
+rejects traversal, duplicate members, encryption, unsupported compression,
+ZIP64 and resource-limit violations. Every member is rehashed and registered as
+a derived SourceAsset with parent ZIP asset/hash, member path/hash and a durable
+OperationResult. Fixed parser registrations normalize CSV/TSV, XLSX sheets and
+PDF tables into new UTF-8 derived assets. Their provenance recursively closes to
+the member and parent ZIP; parser failures remain failed OperationResults and do
+not become formal inputs. Agent shell, Python and `tar` extraction are outside
+this path.
+
 ## Compatibility
 
 Existing family schemas and four-table projections remain valid compatibility

@@ -3,6 +3,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { SettingsPanel } from "@/components/SettingsPanel";
 import type { SettingsAPIClient } from "@/hooks/useAPI";
+import {
+  DEFAULT_UI_FONT_SIZE,
+  usePreferencesStore,
+} from "@/stores/preferencesStore";
 import { customFontId, useThemeStore } from "@/stores/themeStore";
 
 const SAVED_SETTINGS = {
@@ -127,7 +131,38 @@ describe("settings appearance font import", () => {
       customAccent: "",
       importedFonts: [],
     });
+    usePreferencesStore.setState({
+      showContextUsage: true,
+      sendShortcut: "enter",
+      followUpMode: "queue",
+      translucentSidebar: false,
+      contrast: 50,
+      pointerCursor: true,
+      reducedMotion: "system",
+      uiFontSize: DEFAULT_UI_FONT_SIZE,
+      lightColors: { background: "", foreground: "" },
+      darkColors: { background: "", foreground: "" },
+    });
     document.getElementById("imported-font-faces")?.remove();
+    window.localStorage.removeItem("biomed.preferences");
+  });
+
+  it("preserves the original casing of a preset color when selected", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByText("供应商管理");
+    fireEvent.click(
+      within(screen.getByRole("navigation", { name: "设置分类" })).getByRole("button", {
+        name: "外观",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "背景 #FFFFFF" }));
+
+    expect(usePreferencesStore.getState().lightColors.background).toBe("#FFFFFF");
+    expect(JSON.parse(window.localStorage.getItem("biomed.preferences") ?? "{}").lightColors.background).toBe(
+      "#FFFFFF",
+    );
   });
 
   it("imports a local font, registers a font face, and makes it selectable", async () => {
