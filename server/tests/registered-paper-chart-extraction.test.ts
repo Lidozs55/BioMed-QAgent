@@ -186,12 +186,20 @@ async function writeFileAndRegister(
   const filePath = path.join(taskRoot, "source_assets", fileName);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, bytes);
-  return registry.register({
+  const receipt = await registry.register({
     sourceId: `fixture_${fileName.replaceAll(/[^A-Za-z0-9_-]/g, "_")}`,
     relativePath: `source_assets/${fileName}`,
     mediaType,
     role,
   });
+  await registry.registerCoreAcquisitionProvenance(receipt, {
+    provider_id: "fixture.files.v1",
+    implementation_digest: "f".repeat(64),
+    request_identity_digest: createHash("sha256")
+      .update(`fixture:${receipt.asset_ref.asset_id}:${role}`)
+      .digest("hex"),
+  });
+  return receipt;
 }
 
 async function makeFixture(responseContent: string): Promise<Fixture> {
@@ -491,6 +499,13 @@ describe("registered paper chart evidence extraction", () => {
         mediaType: "application/pdf",
         role: "carrier",
       });
+      await fixture.registry.registerCoreAcquisitionProvenance(fixture.assets.pdfReceipt, {
+        provider_id: "fixture.files.v1",
+        implementation_digest: "f".repeat(64),
+        request_identity_digest: createHash("sha256")
+          .update(`fixture:${fixture.assets.pdfReceipt.asset_ref.asset_id}:carrier`)
+          .digest("hex"),
+      });
 
       const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
         taskRoot: fixture.taskRoot,
@@ -586,6 +601,103 @@ describe("registered paper chart evidence extraction", () => {
         expect(point.review_status).toBe("pending");
         expect(point.review_id).toBeNull();
       }
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("binds candidate and reviewed carriers through derived provenance for formal dynamic resolution", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async () => ({
+            schema_version: "1.0",
+            review_id: "review_carrier_provenance",
+            request_id: "request_carrier_provenance",
+            decision: { action: "accept" as const },
+            reviewer: "user" as const,
+            reviewed_at: "2026-08-30T11:00:00.000Z",
+            evidence_digest: "c".repeat(64),
+            reason: "accepted after checking the chart evidence",
+          }),
+        },
+      });
+
+      if (result.reviewed_carrier === undefined) {
+        throw new Error("accepted chart evidence did not produce a reviewed carrier");
+      }
+      const candidateProvenance = await fixture.registry.resolveDerivedProvenance(result.carrier.asset_id);
+      expect(candidateProvenance.operation_kind).toBe("vlm_extraction");
+      expect(candidateProvenance.parent_asset_ids).toEqual([
+        fixture.assets.xmlReceipt.asset_ref.asset_id,
+        fixture.assets.pdfReceipt.asset_ref.asset_id,
+        fixture.assets.supplementReceipt.asset_ref.asset_id,
+      ]);
+      const candidateResult = await fixture.registry.resolveDerivedOperationResult(
+        candidateProvenance.operation_result_id,
+      );
+      expect(candidateResult).toMatchObject({
+        task_id: "task_gold6_t5",
+        run_id: "core",
+        operation_kind: "derive",
+        output_kind: "derived_evidence",
+        status: "succeeded",
+        commit: { state: "committed" },
+      });
+      expect(candidateResult.output_files).toEqual([{
+        relative_path: result.carrier.relative_path,
+        size_bytes: result.carrier.size_bytes,
+        sha256: result.carrier.sha256,
+      }]);
+      await expect(fixture.registry.resolveFormalInput(result.carrier.asset_id))
+        .resolves.toMatchObject({
+          acquisition_provenance: null,
+          derived_provenance: { asset_id: result.carrier.asset_id },
+        });
+
+      const reviewedProvenance = await fixture.registry.resolveDerivedProvenance(
+        result.reviewed_carrier.asset_id,
+      );
+      expect(reviewedProvenance.operation_kind).toBe("vlm_extraction");
+      expect(reviewedProvenance.parent_asset_ids).toContain(result.carrier.asset_id);
+      expect(reviewedProvenance.parent_asset_ids).toHaveLength(2);
+      const reviewedResult = await fixture.registry.resolveDerivedOperationResult(
+        reviewedProvenance.operation_result_id,
+      );
+      expect(reviewedResult).toMatchObject({
+        task_id: "task_gold6_t5",
+        run_id: "core",
+        operation_kind: "derive",
+        output_kind: "derived_evidence",
+        status: "succeeded",
+        commit: { state: "committed" },
+      });
+      expect(reviewedResult.output_files).toEqual([{
+        relative_path: result.reviewed_carrier.relative_path,
+        size_bytes: result.reviewed_carrier.size_bytes,
+        sha256: result.reviewed_carrier.sha256,
+      }]);
+      await expect(fixture.registry.resolveFormalInput(result.reviewed_carrier.asset_id))
+        .resolves.toMatchObject({
+          acquisition_provenance: null,
+          derived_provenance: { asset_id: result.reviewed_carrier.asset_id },
+        });
+      const closure = await fixture.registry.resolveFormalProvenanceClosure(
+        result.reviewed_carrier.asset_id,
+      );
+      expect(closure.filter((item) => "asset_id" in item).map((item) => item.asset_id)).toEqual(
+        expect.arrayContaining([
+          fixture.assets.xmlReceipt.asset_ref.asset_id,
+          fixture.assets.pdfReceipt.asset_ref.asset_id,
+          fixture.assets.supplementReceipt.asset_ref.asset_id,
+          result.carrier.asset_id,
+          result.reviewed_carrier.asset_id,
+        ]),
+      );
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }

@@ -3,8 +3,8 @@
  * task 5). Consumes ONLY task-owned SourceAsset registrations (paper full-text
  * XML, paper PDF, supplementary carriers), extracts candidate paper /
  * experiment / activity / series / point evidence with the configured visual
- * model, and registers ONE content-addressed JSON carrier under the task
- * ``source_assets`` root through the task ``SourceAssetRegistry``.
+ * model, and registers content-addressed JSON carriers under the task
+ * ``source_assets`` root as committed Core-derived assets.
  *
  * Trust boundary: the Dataset Core remains the only component that parses,
  * validates, assembles, assesses, and publishes. VLM output here is candidate
@@ -18,7 +18,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { HILSubject, JsonValue, SourceLocatorV2 } from "@biomed/contracts";
+import type {
+  HILSubject,
+  JsonValue,
+  OperationResultManifest,
+  SourceAssetRegistrationReceipt,
+  SourceLocatorV2,
+} from "@biomed/contracts";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 import type { CoreResolvedRegisteredAsset } from "../../dataset/adapters/registered/types.js";
@@ -51,7 +57,6 @@ import {
 import { parseMeasurementRelation } from "../../dataset/schema/common/index.js";
 import { MAX_XML_CARRIER_BYTES } from "../../dataset/runtime/provider-limits.js";
 import { PublicHttpClient } from "../../external/network/http-client.js";
-import type { SourceAssetRegistrationReceipt } from "@biomed/contracts";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { parseVlmJsonObject, ChartExtractionError } from "./chart-json.js";
 import type { PdfPageRaster } from "./pdf-images.js";
@@ -177,7 +182,7 @@ export interface RegisteredPaperChartEvidenceResult {
    * Present only after the evidence-bound review resolved with accept or
    * correct: the review-closed publication carrier (second content-addressed
    * registration) whose rows pass the publication-stage review gate and which
-   * carries Core acquisition provenance for dynamic-route binding. The
+   * carries committed Core-derived provenance for dynamic-route binding. The
    * candidate carrier keeps its pending rows and is never bound for publication.
    */
   reviewed_carrier?: RegisteredPaperChartCarrierSummary;
@@ -473,6 +478,102 @@ interface PageExtraction {
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function registerDerivedJsonAsset(options: {
+  taskRoot: string;
+  sourceAssetRegistry: SourceAssetRegistry;
+  sourceId: string;
+  relativePath: string;
+  role: "source" | "carrier";
+  bytes: Buffer;
+  parentAssetIds: readonly string[];
+  requirementId: string;
+  stage: "candidate" | "review_evidence" | "reviewed";
+  parametersDigest: string;
+  evidence: JsonValue;
+}): Promise<SourceAssetRegistrationReceipt> {
+  const parentClosures = await Promise.all(options.parentAssetIds.map((assetId) =>
+    options.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId)));
+  const upstreamResultIds = [...new Set(parentClosures.flatMap((closure) =>
+    closure.flatMap((item) => "operation_result_id" in item ? [item.operation_result_id] : [])))];
+  const outputDigest = sha256(options.bytes);
+  const implementationDigest = sha256(Buffer.from(
+    `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+    "utf8",
+  ));
+  const operationResultId = `result_chart_${sha256(Buffer.from(JSON.stringify({
+    requirement_id: options.requirementId,
+    parent_asset_ids: options.parentAssetIds,
+    parameter_digest: options.parametersDigest,
+    output_digest: outputDigest,
+  }), "utf8")).slice(0, 32)}`;
+  const finalPath = path.join(options.taskRoot, ...options.relativePath.split("/"));
+  await mkdir(path.dirname(finalPath), { recursive: true });
+  const tempPath = `${finalPath}.${process.pid}.tmp`;
+  await writeFile(tempPath, options.bytes);
+  await rename(tempPath, finalPath);
+  const registered = await options.sourceAssetRegistry.registerDerived({
+    sourceId: options.sourceId,
+    relativePath: options.relativePath,
+    role: options.role,
+    mediaType: "application/json",
+    parentAssetIds: options.parentAssetIds,
+    operationKind: "vlm_extraction",
+    operationResultId,
+    implementationId: REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
+    implementationVersion: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
+    parametersDigest: options.parametersDigest,
+    evidence: options.evidence,
+  });
+  if (
+    registered.receipt.sha256 !== outputDigest
+    || registered.receipt.size_bytes !== options.bytes.length
+  ) {
+    throw new ChartExtractionError(
+      `derived ${options.stage} carrier registration did not bind the written bytes`,
+    );
+  }
+  const operationResult: OperationResultManifest = {
+    schema_version: "1.0",
+    result_manifest_id: operationResultId,
+    task_id: registered.receipt.task_id,
+    run_id: "core",
+    requirement_id: options.requirementId,
+    operation_id: operationResultId,
+    operation_kind: "derive",
+    operation_attempt_id: `attempt_${operationResultId}`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: sha256(Buffer.from(options.parentAssetIds.join("\u0000"), "utf8")),
+    parameter_digest: options.parametersDigest,
+    implementation_digest: implementationDigest,
+    output_digest: outputDigest,
+    output_kind: "derived_evidence",
+    output_summary: {
+      stage: options.stage,
+      asset_id: registered.receipt.asset_ref.asset_id,
+      sha256: outputDigest,
+    },
+    output_files: [{
+      relative_path: registered.receipt.relative_path,
+      size_bytes: registered.receipt.size_bytes,
+      sha256: registered.receipt.sha256,
+    }],
+    dependency_closure: {
+      input_asset_ids: [...options.parentAssetIds],
+      upstream_result_manifest_ids: upstreamResultIds,
+      parameter_digest: options.parametersDigest,
+      implementation_digest: implementationDigest,
+    },
+    commit: {
+      state: "committed",
+      commit_id: `commit_${operationResultId}`,
+      committed_at: registered.provenance.created_at,
+    },
+  };
+  await options.sourceAssetRegistry.recordDerivedOperationResult(operationResult);
+  return registered.receipt;
 }
 
 function requireAssetId(value: unknown, field: string): string {
@@ -856,11 +957,18 @@ export async function extractRegisteredPaperChartEvidence(
     assertSupplementaryMediaType(asset.receipt);
     supplements.push(asset);
   }
-  const registeredIds = new Set([
-    xmlAssetId,
-    pdfAssetId,
-    ...supplementIds,
-  ]);
+  const formalParentAssetIds = [xmlAssetId, pdfAssetId, ...supplementIds];
+  for (const assetId of formalParentAssetIds) {
+    try {
+      await deps.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId);
+    } catch (error) {
+      throw new ChartExtractionError(
+        `source asset ${assetId} lacks formal Core provenance: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  const registeredIds = new Set(formalParentAssetIds);
 
   // -- 3. Authoritative metadata + complete page raster extraction. The
   // registered JATS XML, not a visual-model repetition, owns paper metadata.
@@ -1344,16 +1452,34 @@ export async function extractRegisteredPaperChartEvidence(
   const bytes = Buffer.from(JSON.stringify(carrier), "utf8");
   const digest = sha256(bytes);
   const relativePath = `source_assets/paper_chart_evidence/evidence_${digest.slice(0, 12)}.json`;
-  const finalPath = path.join(deps.taskRoot, ...relativePath.split("/"));
-  await mkdir(path.dirname(finalPath), { recursive: true });
-  const tempPath = `${finalPath}.${process.pid}.tmp`;
-  await writeFile(tempPath, bytes);
-  await rename(tempPath, finalPath);
-  const receipt = await deps.sourceAssetRegistry.register({
+  const candidateParametersDigest = canonicalDigest({
+    stage: "candidate",
+    parent_asset_ids: formalParentAssetIds,
+    prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+    model_name: config.model,
+    model_version: modelVersion,
+  });
+  const receipt = await registerDerivedJsonAsset({
+    taskRoot: deps.taskRoot,
+    sourceAssetRegistry: deps.sourceAssetRegistry,
     sourceId: `paper_chart_evidence_${digest.slice(0, 12)}`,
     relativePath,
     role: "carrier",
-    mediaType: "application/json",
+    bytes,
+    parentAssetIds: formalParentAssetIds,
+    requirementId: "registered_paper_chart_candidate",
+    stage: "candidate",
+    parametersDigest: candidateParametersDigest,
+    evidence: {
+      carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
+      paper_id: paperId,
+      paper_id_namespace: paperNamespace,
+      source_asset_ids: formalParentAssetIds,
+      prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+      model_name: config.model,
+      model_version: modelVersion,
+      output_sha256: digest,
+    },
   });
 
   // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
@@ -1437,8 +1563,8 @@ export async function extractRegisteredPaperChartEvidence(
   // -- 10. Review-closed publication carrier (Gold6 T8). The candidate
   // carrier keeps its pending rows and is never bound for publication; the
   // deterministic review application derives a SECOND content-addressed
-  // carrier whose rows pass the publication-stage review gate, registered
-  // with Core acquisition provenance so the dynamic route can bind it as a
+  // carrier whose rows pass the publication-stage review gate and whose
+  // committed Core-derived provenance lets the dynamic route bind it as a
   // task-owned formal source.
   let reviewedCarrier: RegisteredPaperChartCarrierSummary | null = null;
   if (carrierReview !== null && pointRows.length > 0) {
@@ -1470,6 +1596,7 @@ export async function extractRegisteredPaperChartEvidence(
         papers: chartRows.papers,
         sources: chartRows.sources,
       },
+      candidateCarrierReceipt: receipt,
       seriesRows,
       pointRows,
       derivedActivityIds,
@@ -1526,14 +1653,15 @@ export async function extractRegisteredPaperChartEvidence(
  * every estimate with review provenance, correct preserves the original
  * values and appends a ``human_correction`` transform step, and the resulting
  * rows must pass the strict publication-stage chart gate before the reviewed
- * carrier is registered. The reviewed carrier carries Core acquisition
- * provenance (provider ``registered_paper_chart_extraction.v1``) so a dynamic
- * submission can bind it exactly like any other Core-acquired carrier.
+ * carrier is registered. The reviewed carrier is Core-derived from the
+ * candidate and byte-bound review evidence so dynamic submission can resolve
+ * it without disguising model output as provider acquisition.
  */
 async function registerReviewedPublicationCarrier(options: {
   taskRoot: string;
   retrievedAt: string;
   candidateCarrier: Record<string, unknown>;
+  candidateCarrierReceipt: SourceAssetRegistrationReceipt;
   seriesRows: ChartSeriesInput[];
   pointRows: ChartPointInput[];
   derivedActivityIds: ReadonlySet<string>;
@@ -1653,6 +1781,46 @@ async function registerReviewedPublicationCarrier(options: {
     );
   }
 
+  const reviewEvidence = {
+    schema_version: "1.0",
+    evidence_kind: "registered_paper_chart_review",
+    candidate_carrier: {
+      asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      sha256: options.candidateCarrierReceipt.sha256,
+      relative_path: options.candidateCarrierReceipt.relative_path,
+    },
+    review,
+  };
+  const reviewEvidenceBytes = Buffer.from(JSON.stringify(reviewEvidence), "utf8");
+  const reviewEvidenceDigest = sha256(reviewEvidenceBytes);
+  const reviewEvidenceParametersDigest = canonicalDigest({
+    stage: "review_evidence",
+    candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+    request_id: review.request_id,
+    review_id: review.review_id,
+    evidence_digest: review.evidence_digest,
+    action: review.action,
+  });
+  const reviewEvidenceReceipt = await registerDerivedJsonAsset({
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
+    sourceId: `paper_chart_review_${reviewEvidenceDigest.slice(0, 12)}`,
+    relativePath: `source_assets/paper_chart_evidence/review_${reviewEvidenceDigest.slice(0, 12)}.json`,
+    role: "source",
+    bytes: reviewEvidenceBytes,
+    parentAssetIds: [options.candidateCarrierReceipt.asset_ref.asset_id],
+    requirementId: "registered_paper_chart_review_evidence",
+    stage: "review_evidence",
+    parametersDigest: reviewEvidenceParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      review_id: review.review_id,
+      request_id: review.request_id,
+      review_evidence_digest: review.evidence_digest,
+      output_sha256: reviewEvidenceDigest,
+    },
+  });
+
   const reviewedCarrier = {
     ...options.candidateCarrier,
     chart_points: reviewedPoints,
@@ -1660,37 +1828,34 @@ async function registerReviewedPublicationCarrier(options: {
   const reviewedBytes = Buffer.from(JSON.stringify(reviewedCarrier), "utf8");
   const reviewedDigest = sha256(reviewedBytes);
   const reviewedRelativePath = `source_assets/paper_chart_evidence/reviewed_${reviewedDigest.slice(0, 12)}.json`;
-  const reviewedFinalPath = path.join(options.taskRoot, ...reviewedRelativePath.split("/"));
-  await mkdir(path.dirname(reviewedFinalPath), { recursive: true });
-  const reviewedTempPath = `${reviewedFinalPath}.${process.pid}.tmp`;
-  await writeFile(reviewedTempPath, reviewedBytes);
-  await rename(reviewedTempPath, reviewedFinalPath);
-  const reviewedReceipt = await options.sourceAssetRegistry.register({
+  const reviewedParametersDigest = canonicalDigest({
+    stage: "reviewed",
+    candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+    review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
+    review_id: review.review_id,
+    review_action: review.action,
+  });
+  const reviewedReceipt = await registerDerivedJsonAsset({
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
     sourceId: `paper_chart_evidence_reviewed_${reviewedDigest.slice(0, 12)}`,
     relativePath: reviewedRelativePath,
     role: "carrier",
-    mediaType: "application/json",
-  });
-  // Dynamic-route binding resolves carriers through the Core acquisition
-  // provenance ledger; the governed extraction records its own deterministic
-  // identity so the review-closed carrier is a first-class formal source.
-  const implementationDigest = sha256(Buffer.from(
-    `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
-    "utf8",
-  ));
-  const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
-    carrier_asset_id: reviewedReceipt.asset_ref.asset_id,
-    review_id: review.review_id,
-    review_action: review.action,
-  }), "utf8"));
-  await options.sourceAssetRegistry.registerCoreAcquisitionProvenance(reviewedReceipt, {
-    provider_id: "registered_paper_chart_extraction.v1",
-    implementation_digest: implementationDigest,
-    request_identity_digest: requestIdentityDigest,
-    canonical_accession: typeof options.candidateCarrier.paper_id === "string"
-      ? options.candidateCarrier.paper_id
-      : null,
-    provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+    bytes: reviewedBytes,
+    parentAssetIds: [
+      options.candidateCarrierReceipt.asset_ref.asset_id,
+      reviewEvidenceReceipt.asset_ref.asset_id,
+    ],
+    requirementId: "registered_paper_chart_reviewed",
+    stage: "reviewed",
+    parametersDigest: reviewedParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
+      review_id: review.review_id,
+      review_action: review.action,
+      output_sha256: reviewedDigest,
+    },
   });
   return {
     asset_id: reviewedReceipt.asset_ref.asset_id,
