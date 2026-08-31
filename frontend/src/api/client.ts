@@ -8,6 +8,7 @@ import { createHttp, type HttpOptions } from "@/api/http";
 import { createModelRegistryApi } from "@/api/modelRegistry";
 import { createQuarantineApi, type QuarantineApi } from "@/api/quarantine";
 import { createSettingsApi } from "@/api/settings";
+import { createSourceAssetsApi, type SourceAssetsApi } from "@/api/sourceAssets";
 import { createTasksApi, type TasksApi } from "@/api/tasks";
 import type { SettingsAPIClient } from "@/api/types";
 import type { DatabaseRecord } from "@biomed/contracts";
@@ -16,7 +17,7 @@ import type { DatabaseRecord } from "@biomed/contracts";
  * Task/build/artifact surface — kept as a stable union type so partial
  * mocks in tests that target ``APIClient`` keep type-checking.
  */
-export interface APIClient extends TasksApi, PublicationsApi, Partial<QuarantineApi> {
+export interface APIClient extends TasksApi, PublicationsApi, Partial<QuarantineApi>, Partial<SourceAssetsApi> {
   fetchDatabases: () => Promise<DatabaseRecord[]>;
 }
 
@@ -29,5 +30,6 @@ export function createAPIClient(options: HttpOptions = {}): APIClient & Settings
     ...createModelRegistryApi(http),
     ...createDatabasesApi(http),
     ...createQuarantineApi(http),
+    ...createSourceAssetsApi(http),
   };
 }

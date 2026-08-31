@@ -27,6 +27,14 @@ const REGISTRY_FILE = "state/source-asset-registrations.json";
 const CORE_ACQUISITION_FILE = "state/core-acquisition-provenance.json";
 const DERIVED_ASSET_FILE = "state/core-derived-asset-provenance.json";
 const DERIVED_OPERATION_RESULT_DIR = "state/derived-operation-results";
+/**
+ * Safe upper bound for read-only listing (GET /tasks/:id/source-assets).
+ * Registrations are content-addressed per (asset, role) and bounded by what
+ * the agent actually registered for the task; a larger file means corruption
+ * or runaway registration, so listing rejects deterministically instead of
+ * streaming an unbounded response.
+ */
+const MAX_LIST_REGISTRATIONS = 500;
 const DIGEST = /^[0-9a-f]{64}$/;
 const PROVIDER_ID = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const ROLES = new Set<RegisteredSourceAssetRole>(["source", "mapping", "metadata", "carrier"]);
@@ -620,6 +628,34 @@ export class SourceAssetRegistry {
       if (receipt.relative_path === normalized) return receipt.asset_ref.asset_id;
     }
     return null;
+  }
+
+  /**
+   * Read-only projection for the Assets panel: cloned, strictly parsed
+   * registration receipts for the current task, sorted deterministically by
+   * ``registered_at`` then ``receipt_id``. Receipts already carry only wire
+   * fields (no file bytes, absolute paths, credentials, acquisition headers,
+   * or mutable registry internals); the registry never mutates task state
+   * during a load, so listing appends no events and creates no artifacts.
+   * Rejects deterministically (RangeError) above ``MAX_LIST_REGISTRATIONS``.
+   */
+  async listRegistrations(): Promise<readonly SourceAssetRegistrationReceipt[]> {
+    await this.load();
+    if (this.registrations.size > MAX_LIST_REGISTRATIONS) {
+      throw new RangeError(
+        `source asset registration listing exceeds the safe bound of ${MAX_LIST_REGISTRATIONS} receipts`,
+      );
+    }
+    const ordered = [...this.registrations.values()].sort((a, b) => {
+      if (a.registered_at !== b.registered_at) {
+        return a.registered_at < b.registered_at ? -1 : 1;
+      }
+      if (a.receipt_id !== b.receipt_id) {
+        return a.receipt_id < b.receipt_id ? -1 : 1;
+      }
+      return 0;
+    });
+    return ordered.map((receipt) => cloneReceipt(receipt));
   }
 
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
