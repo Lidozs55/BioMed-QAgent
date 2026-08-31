@@ -53,6 +53,21 @@ import {
   type CoreProductTopologyRequirements,
 } from "./product-requirements.js";
 
+/**
+ * Build the rejection message surfaced to the model when a publication review
+ * is declined. The reviewer's reason is always included (when present) so the
+ * model can act on the specific finding instead of asking for "the reviewer
+ * statement" (P1 blocker). The reason is reviewer-authored free text, kept
+ * verbatim and bounded.
+ */
+export function rejectReasonMessage(context: string, review: HumanReviewRecord): string {
+  const action = review.decision.action;
+  const base = `${context} was not accepted: ${action}`;
+  const reason = typeof review.reason === "string" ? review.reason.trim() : "";
+  if (reason === "") return base;
+  return `${base}; reviewer reason: ${reason.slice(0, 2000)}`;
+}
+
 interface DynamicPublicationHILInput {
   readonly requirement_id: string | null;
   readonly kind: "data_review";
@@ -526,7 +541,7 @@ export async function publishDynamicFamily(
       throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
     }
     if (review.decision.action !== "accept") {
-      throw new Error(`dynamic publication review was not accepted: ${review.decision.action}`);
+      throw new Error(rejectReasonMessage("dynamic publication review", review));
     }
     const currentAssessment = await fileReceipt(assessmentPath);
     if (currentAssessment.sha256 !== provisionalAssessment.sha256 || currentAssessment.size_bytes !== provisionalAssessment.size_bytes) {
@@ -842,7 +857,7 @@ export async function completePublicationAcceptanceContinuation(
   }
   if (input.review.decision.action !== "accept") {
     throw new Error(
-      `publication continuation review was not accepted: ${input.review.decision.action}`,
+      rejectReasonMessage("publication continuation review", input.review),
     );
   }
 
