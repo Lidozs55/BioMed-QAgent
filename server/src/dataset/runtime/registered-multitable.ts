@@ -615,6 +615,10 @@ export async function executeRegisteredMultiTableBuild(
       }
     }
     if (familyProviderTransform !== null) {
+      // A family-level transform (e.g. literature BioC) may conclude "this
+      // article has no open-access full text" (NoFullTextError). That is a
+      // terminal per-source fact, not a parse defect; the bridge layer maps it
+      // to structured NO_DATA (model-blockers G3), so it propagates as-is.
       const expanded = familyProviderTransform(familyTransformInputs);
       for (const [tableId, rows] of Object.entries(expanded)) {
         (aggregateRows[tableId] ??= []).push(...rows);

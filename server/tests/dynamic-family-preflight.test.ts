@@ -18,7 +18,10 @@ import {
 } from "../src/dataset/dynamic-family/preflight.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
 import type { SourceAssetRegistry } from "../src/runtime/source-assets/registry.js";
-import { parseDynamicFamilyPublicationSubmission } from "../src/agent/tools/dynamic-family-publication.js";
+import {
+  dynamicFamilyPublicationWire,
+  parseDynamicFamilyPublicationSubmission,
+} from "../src/agent/tools/dynamic-family-publication.js";
 import {
   createDynamicFamilyPublicationTool,
   createPrepareDynamicFamilyPublicationTool,
@@ -145,13 +148,18 @@ describe("dynamic family prepare/submit preflight", () => {
       generation: preparation.generation,
       submission: parsed,
     });
+    // Production stores the JSON wire form returned by prepare, which has no
+    // derived `.projection`; the submit side must re-parse the stored wire to
+    // rebuild it (model-blockers wire row: the old parsed-shaped store never
+    // exercised this, masking the $projection regression in 5/5 dynamic runs).
+    const storedWire = dynamicFamilyPublicationWire(parsed, receipt.host_descriptor_digest);
     coordinator.commitPrepare(
       preparation,
       receipt,
       dynamicFamilyPreflightSubmissionDigest(parsed),
-      parsed,
+      storedWire,
     );
-    expect(coordinator.resolveSubmission(receipt)).toBe(parsed);
+    expect(Object.hasOwn(coordinator.resolveSubmission(receipt), "projection")).toBe(false);
     expect(() =>
       coordinator.resolveSubmission({ ...receipt, receipt_digest: "f".repeat(64) }),
     ).toThrow(/unknown or superseded/);
@@ -159,7 +167,9 @@ describe("dynamic family prepare/submit preflight", () => {
     let received: unknown = null;
     const submit = createDynamicFamilyPublicationTool({
       resolveSubmission: (preflightReceipt) =>
-        Promise.resolve(coordinator.resolveSubmission<typeof parsed>(preflightReceipt)),
+        parseDynamicFamilyPublicationSubmission(
+          coordinator.resolveSubmission<Record<string, unknown>>(preflightReceipt),
+        ),
       submit: async (submission, _signal, _context, submittedReceipt) => {
         received = { submission, receiptDigest: submittedReceipt?.receipt_digest };
         return { ok: true };
@@ -171,8 +181,13 @@ describe("dynamic family prepare/submit preflight", () => {
     });
     expect(receiptOnly.isError).not.toBe(true);
     expect(JSON.parse(receiptOnly.content)).toMatchObject({ ok: true });
+    const resolved = received as { submission: { projection: { projection_id: string } } };
+    expect(resolved.submission.projection.projection_id).toBe(parsed.projection.projection_id);
+    expect(resolved.submission).toMatchObject({
+      schema_version: "1.0",
+      family_spec: { canonical_digest: parsed.family_spec.canonical_digest },
+    });
     expect(received).toMatchObject({
-      submission: parsed,
       receiptDigest: receipt.receipt_digest,
     });
 

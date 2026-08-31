@@ -53,7 +53,7 @@
 
 ## P2 — Product and developer experience
 
-- [ ] **主 Prompt 可复现迭代。** 建立固定样例、指标和成本记录后再优化 `PHASE1_SYSTEM_PROMPT`。
+- [ ] **主 Prompt 可复现迭代。** 建立固定样例、指标和成本记录后再优化 `PHASE1_SYSTEM_PROMPT`。基线注记（2026-08-30）：已在 PHASE1 前新增 `[System briefing]` 系统简介段——系统设定、无墙钟时限、防空转止损、工作流；独立导出 `SYSTEM_BRIEFING` 并于 `PiAgentAdapter.createSession` 置首拼接，PHASE1 机制段文字零改动、≤8k 预算不变；回归测试见 `server/tests/pi-adapter.test.ts` system briefing 用例。后续优化以该基线做可复现对照。
   - 验收：变更有可复现实验对照，不引入 Gold case 特判，不放宽 Core 门禁。
 - [ ] **Trait association / genomic annotation 可复用 family 闭包。** 按 [`architecture/trait-association-and-genomic-annotation-design.md`](architecture/trait-association-and-genomic-annotation-design.md) 实现来源无关的 projections 与 GWAS Catalog、supplementary archive、RefSNP 通用 providers；provider 与 family 保持多对多。
   - 验收：至少一个非 Alzheimer trait、两个不同数据库证明复用；variant/gene/region 粒度分别构建；不兼容 assembly、effect scale、allele/model 或 mapping method 的输入 fail closed；正式 Publication 通过 provenance/B3/ProductAssessment/Artifact hash 门。
@@ -72,7 +72,7 @@
 
 ## 模型卡点收集期（只登记，暂不修）
 
-- [ ] **gold 案例批量测完后统一分流修复模型卡点。** 收集清单见 [`evaluation/model-blockers.md`](evaluation/model-blockers.md)（gold1@qwen3.8-flash 已登记 B1–B6：观察缺口盲猜参数、动态路由零调用、时限幻觉、同路撞墙、activate 摩擦、GDC 浅尝辄止）。等组员把其余 gold 案例跑完补齐清单后，再按 prompt/产品/接口陷阱分流立项修复；期间**不改** `phase1-prompt.ts`、适配器或工具行为。
+- [ ] **gold 案例批量测完后统一分流修复模型卡点。** 收集清单见 [`evaluation/model-blockers.md`](evaluation/model-blockers.md)（分流总表在 [`evaluation/triage.md`](evaluation/triage.md)；gold1@qwen3.8-flash 已登记 B1–B6：观察缺口盲猜参数、动态路由零调用、时限幻觉、同路撞墙、activate 摩擦、GDC 浅尝辄止）。等组员把其余 gold 案例跑完补齐清单后，再按 prompt/产品/接口陷阱分流立项修复；期间**不改** `phase1-prompt.ts`、适配器或工具行为。
   - 验收：清单每条有证据（seq/正文）与归类；修复立项后逐条回写去向（prompt 提交 / TODO 新项 / ISSUES）。
 
 ## Deferred / 非当前工作

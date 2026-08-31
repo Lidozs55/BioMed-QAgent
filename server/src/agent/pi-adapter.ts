@@ -23,7 +23,7 @@ import {
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
-import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
+import { PHASE1_SYSTEM_PROMPT, SYSTEM_BRIEFING, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
 import {
   RunProgressContextTracker,
@@ -1506,6 +1506,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
       validated = await validateSessionConfig({
         ...config,
         systemPrompt:
+          SYSTEM_BRIEFING +
+          "\n\n" +
           PHASE1_SYSTEM_PROMPT +
           toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)) +
           systemContextSection(config.systemContext),

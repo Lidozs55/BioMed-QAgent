@@ -12,6 +12,7 @@ import {
   createDynamicFamilyPublicationTool,
   dynamicFamilyPublicationWire,
   createPrepareDynamicFamilyPublicationTool,
+  parseDynamicFamilyPublicationSubmission,
   type ParsedDynamicFamilyPublicationSubmission,
 } from "../agent/tools/dynamic-family-publication.js";
 import { createBusinessToolBundle } from "../agent/tools/business-tools.js";
@@ -603,8 +604,21 @@ export async function createPhase3Runtime(
         },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
-        resolveSubmission: async (preflightReceipt) =>
-          dynamicFamilyPreflight.resolveSubmission<ParsedDynamicFamilyPublicationSubmission>(preflightReceipt),
+        // The coordinator stores the JSON wire form returned by prepare. The
+        // submit path needs the derived `.projection` (and digest-bound parsed
+        // facts), so the stored wire is re-parsed here instead of trusting a
+        // closure variable: the wire is the authoritative prepared_submission
+        // copy and its digest chain is anchored by the receipt, so re-parsing
+        // is byte-safe. Without this, a fresh closure (task resume, run
+        // recovery, rebuilt workspace) resolves a wire with `.projection ===
+        // undefined` and the submission chain throws `Expected object at
+        // $projection` (model-blockers wire row, 5/5 dynamic gold runs).
+        resolveSubmission: async (preflightReceipt) => {
+          const stored = dynamicFamilyPreflight.resolveSubmission<Record<string, unknown>>(
+            preflightReceipt,
+          );
+          return parseDynamicFamilyPublicationSubmission(stored);
+        },
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");

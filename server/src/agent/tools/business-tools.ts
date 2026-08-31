@@ -117,6 +117,7 @@ export async function createBusinessToolBundle(
     registrar: context.registrar,
     taskId: context.taskId,
   };
+  const sourceAssetRegistry = context.sourceAssetRegistry ?? null;
   const limits = context.limits ?? DEFAULT_RUNTIME_LIMITS;
   const client = context.browser?.client ?? new PublicHttpClient({ timeoutMs: limits.http_timeout_seconds * 1000 });
   const cache = context.browser?.cache ?? new ContentCache(`${taskRoot}/cache`);
@@ -157,6 +158,7 @@ export async function createBusinessToolBundle(
   // Curated external data sources (P5-03..P5-06).
   register(createPubmedTools({
     ...shared,
+    sourceAssetRegistry,
     http: client,
     maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
@@ -174,6 +176,7 @@ export async function createBusinessToolBundle(
     hooks: context.hooks,
     registrar: context.registrar,
     taskId: context.taskId,
+    sourceAssetRegistry,
     eutils: geoEutils,
     maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
@@ -245,6 +248,7 @@ export async function createBusinessToolBundle(
       registrar: context.registrar,
       taskId: context.taskId,
       runId: context.runId,
+      sourceAssetRegistry,
       evidenceStore: new BrowserAcquisitionEvidenceStore({ taskRoot }),
       proposalStore: new BrowserAcquisitionProposalStore(taskRoot),
       formalizationHIL: context.hilGate ?? undefined,

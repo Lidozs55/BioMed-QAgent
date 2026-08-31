@@ -21,6 +21,7 @@ import {
   assembleLiteratureEvidenceCandidate,
   LITERATURE_EVIDENCE_FAMILY_ID,
   LITERATURE_EVIDENCE_ROW_GRANULARITY,
+  NoFullTextError,
   literatureEvidenceAdapterRegistrations,
   literatureEvidenceTables,
   validateLiteratureEvidenceCandidate,
@@ -220,6 +221,24 @@ describe("literature evidence family module", () => {
     const assetId = `asset_${createHash("sha256").update(bytes).digest("hex")}`;
     expect(() => transformBioCLiteratureEvidence({ bytes, assetId, logicalFile: "source_assets/low.xml", retrievedAt: "2026-08-18T00:00:00Z" })).toThrow(/low-confidence and unreviewed/);
     expect(() => transformBioCLiteratureEvidence({ bytes: Buffer.from("<collection><document>"), assetId, logicalFile: "source_assets/bad.xml", retrievedAt: "2026-08-18T00:00:00Z" })).toThrow(/malformed BioC XML/);
+  });
+
+  it("marks an empty BioC collection as a terminal no_fulltext fact, not a retryable parse defect", () => {
+    const bytes = Buffer.from("<collection><source>europepmc</source></collection>");
+    const assetId = `asset_${createHash("sha256").update(bytes).digest("hex")}`;
+    try {
+      transformBioCLiteratureEvidence({
+        bytes,
+        assetId,
+        logicalFile: "source_assets/empty.bioc.xml",
+        retrievedAt: "2026-08-18T00:00:00Z",
+      });
+      throw new Error("expected NoFullTextError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NoFullTextError);
+      expect((error as NoFullTextError).reason_code).toBe("no_fulltext");
+      expect(String((error as Error).message)).toMatch(/no_fulltext/);
+    }
   });
 
   it("parses structured non-Gold literature records and keeps source as a supporting carrier", async () => {

@@ -172,6 +172,13 @@ export interface BrowserToolsOptions {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /**
+   * Task-owned source-asset registry. When present, successful downloads are
+   * registered here right after publication so ``preview_core_asset`` can
+   * immediately resolve them (model-blockers I3: downloads reached only the
+   * global cache, so preview reported "registered asset was not found").
+   */
+  sourceAssetRegistry?: import("../../runtime/source-assets/registry.js").SourceAssetRegistry | null;
   /** Run id used to bind browser evidence to one durable run. */
   runId?: string | (() => string);
   evidenceStore?: BrowserAcquisitionEvidenceStore;
@@ -606,6 +613,13 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
         };
         const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
         const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+        if (options.sourceAssetRegistry !== undefined && options.sourceAssetRegistry !== null) {
+          await options.sourceAssetRegistry.register({
+            sourceId,
+            relativePath: asset.relative_path,
+            mediaType,
+          });
+        }
         const finalUrl = response.url ?? url;
         const evidence: BrowserAcquisitionEvidence = {
           schema_version: "1.0",

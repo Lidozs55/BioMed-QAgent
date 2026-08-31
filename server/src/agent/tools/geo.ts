@@ -119,6 +119,13 @@ export interface GeoToolsOptions {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /**
+   * Task-owned source-asset registry. When present, successful downloads are
+   * registered here right after publication so ``preview_core_asset`` can
+   * immediately resolve them (model-blockers D3/I3 "registered asset was not
+   * found": downloads previously reached only the global cache).
+   */
+  sourceAssetRegistry?: import("../../runtime/source-assets/registry.js").SourceAssetRegistry | null;
   /** Injectable retry/backoff sleeper (tests). */
   sleep?: (ms: number) => Promise<void>;
   /** E-utilities discovery client override (tests). */
@@ -543,6 +550,13 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
           progress: reportProgress,
           onPublished: (published) => options.registrar?.register("geo", published, options.taskId),
         });
+        if (result.asset !== null && options.sourceAssetRegistry !== undefined && options.sourceAssetRegistry !== null) {
+          await options.sourceAssetRegistry.register({
+            sourceId: `geo_${resolved.source.accession}`,
+            relativePath: result.asset.relative_path,
+            mediaType: result.asset.media_type,
+          });
+        }
         const payload: Record<string, unknown> = {
           source: "geo",
           accession: resolved.source.accession,
@@ -690,6 +704,13 @@ export function createDownloadGeoPlatformAnnotationTool(
           progress: reportProgress,
           onPublished: (published) => options.registrar?.register("geo", published, options.taskId),
         });
+        if (result.asset !== null && options.sourceAssetRegistry !== undefined && options.sourceAssetRegistry !== null) {
+          await options.sourceAssetRegistry.register({
+            sourceId: `geo_annotation_${gpl}`,
+            relativePath: result.asset.relative_path,
+            mediaType: result.asset.media_type,
+          });
+        }
         const payload: Record<string, unknown> = {
           source: "geo",
           platform: gpl,

@@ -1,4 +1,4 @@
-import { deflateRawSync } from "node:zlib";
+import { deflateRawSync, gzipSync } from "node:zlib";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -178,5 +178,68 @@ describe("core asset preview/extract tools", () => {
     expect(missing.isError).toBe(true);
     const unsafe = await extract.execute({ asset_id: zipAssetId, member: "../escape.csv" });
     expect(unsafe.isError).toBe(true);
+  });
+
+  it("previews a gzip asset as decoded text and extracts it with its true media type", async () => {
+    const { root, registry, tools } = await createFixture();
+    const gz = gzipSync(Buffer.from("record_id,value\nr1,1\nr2,2\n", "utf8"));
+    await writeFile(path.join(root, "source_assets", "GPL96.annot.csv.gz"), gz);
+    const receipt = await registry.register({
+      sourceId: "gzip_fixture",
+      relativePath: "source_assets/GPL96.annot.csv.gz",
+      mediaType: "application/gzip",
+    });
+    const [preview, extract] = tools;
+
+    // Preview decodes the stream instead of surfacing gzip binary (the
+    // gold1/gold4 failure shape: ".gz preview returns binary").
+    const head = await preview.execute({ asset_id: receipt.asset_ref.asset_id });
+    expect(head.isError).not.toBe(true);
+    const headBody = JSON.parse(head.content) as {
+      ok: boolean;
+      is_gzip: boolean;
+      decoded_size_bytes: number;
+      media_type: string;
+      head: string;
+    };
+    expect(headBody.ok).toBe(true);
+    expect(headBody.is_gzip).toBe(true);
+    expect(headBody.decoded_size_bytes).toBe(26);
+    expect(headBody.media_type).toBe("text/csv");
+    expect(headBody.head).toBe("record_id,value\nr1,1\nr2,2\n");
+
+    // Extract decodes the whole stream into a text/csv registered asset.
+    const extracted = await extract.execute({ asset_id: receipt.asset_ref.asset_id });
+    expect(extracted.isError).not.toBe(true);
+    const body = JSON.parse(extracted.content) as { ok: boolean; asset_id: string; media_type: string; member: string | null };
+    expect(body.ok).toBe(true);
+    expect(body.member).toBeNull();
+    expect(body.media_type).toBe("text/csv");
+    expect(body.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+    const resolved = await registry.resolveAny(body.asset_id);
+    expect(resolved.registration_receipt.media_type).toBe("text/csv");
+    expect(resolved.registration_receipt.relative_path.endsWith("GPL96.annot.csv")).toBe(true);
+
+    // A non-gzip file simply previews as its plain text (no magic bytes); a
+    // file whose extension claims gzip but is neither zip nor gzip fails
+    // closed on extraction instead of surfacing raw bytes or hanging.
+    await writeFile(path.join(root, "source_assets", "broken.csv.gz"), Buffer.from("not gzip bytes"));
+    const brokenReceipt = await registry.register({
+      sourceId: "broken_fixture",
+      relativePath: "source_assets/broken.csv.gz",
+      mediaType: "application/gzip",
+    });
+    const brokenHead = await preview.execute({ asset_id: brokenReceipt.asset_ref.asset_id });
+    expect(brokenHead.isError).not.toBe(true);
+    const brokenHeadBody = JSON.parse(brokenHead.content) as { ok: boolean; is_gzip?: boolean; head: string };
+    expect(brokenHeadBody.ok).toBe(true);
+    expect(brokenHeadBody.is_gzip).toBeUndefined();
+    expect(brokenHeadBody.head).toContain("not gzip bytes");
+    const brokenExtract = await extract.execute({ asset_id: brokenReceipt.asset_ref.asset_id });
+    expect(brokenExtract.isError).toBe(true);
+    expect(JSON.parse(brokenExtract.content)).toMatchObject({
+      ok: false,
+      error: { code: "core_archive_extract_rejected" },
+    });
   });
 });

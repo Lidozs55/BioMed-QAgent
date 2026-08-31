@@ -7,6 +7,7 @@
  */
 
 import { gzipSync, gunzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { PublicHttpClient } from "../../src/external/network/index.js";
 import { ContentCache } from "../../src/external/acquisition/index.js";
+import { SourceAssetRegistry } from "../../src/runtime/source-assets/registry.js";
 import {
   SKILL_TOOL_NAMES,
   toolOwner,
@@ -35,6 +37,10 @@ import {
   type FixtureHandler,
   type FixtureServer,
 } from "./helpers.js";
+
+function sha256Of(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/geo", import.meta.url));
 const EUTILS_HOST = "eutils.ncbi.nlm.nih.gov";
@@ -87,8 +93,12 @@ function toolOptions(overrides: {
   };
 }
 
-function tools(overrides: Parameters<typeof toolOptions>[0]): BioMedAgentTool[] {
-  return createGeoTools(toolOptions(overrides));
+function tools(
+  overrides: Parameters<typeof toolOptions>[0] & {
+    sourceAssetRegistry?: import("../../src/runtime/source-assets/registry.js").SourceAssetRegistry | null;
+  },
+): BioMedAgentTool[] {
+  return createGeoTools({ ...toolOptions(overrides), sourceAssetRegistry: overrides.sourceAssetRegistry });
 }
 
 /** Standard fixture routing for the GSE178352 flow. */
@@ -696,6 +706,37 @@ describe("download_geo_platform_annotation", () => {
     expect(localFiles).toHaveLength(1);
     expect(localFiles[0].endsWith("GPL570.annot.gz")).toBe(true);
     expect(await readFile(localFiles[0])).toEqual(compressed);
+  });
+
+  test("registers a successful download in the task source-asset registry", async () => {
+    const compressed = gzipSync(Buffer.from("gzip platform table bytes"));
+    const server = await startFixtureServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.endsWith("/GPL570/annot/")) {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end('<a href="GPL570.annot.gz">GPL570.annot.gz</a>');
+        return;
+      }
+      if (url.endsWith("/annot/GPL570.annot.gz")) {
+        res.writeHead(200, { "content-type": "application/gzip" });
+        res.end(compressed);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    fixtures.push(server);
+    const registry = new SourceAssetRegistry("task_geo_registry", root);
+    const [, , , , annotation] = tools({
+      port: server.port,
+      taskRoot: root,
+      sourceAssetRegistry: registry,
+    });
+    const result = await annotation.execute({ gpl: "GPL570", max_size_mb: 1 });
+    expect(JSON.parse(result.content)).not.toHaveProperty("error");
+    const assetId = await registry.resolveAny(`asset_${sha256Of(compressed)}`).catch(() => null);
+    expect(assetId).not.toBeNull();
+    expect(assetId?.registration_receipt.relative_path.endsWith("GPL570.annot.gz")).toBe(true);
   });
 
   test("rejects an invalid gpl before any network work", async () => {

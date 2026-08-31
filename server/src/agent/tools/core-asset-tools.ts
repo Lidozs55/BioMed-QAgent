@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 
 import type { BioMedAgentTool, BioMedToolResult } from "../contracts.js";
 import {
@@ -60,6 +61,33 @@ function isZipArchive(bytes: Uint8Array): boolean {
     && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07);
 }
 
+function isGzipArchive(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+/**
+ * Decompress a single gzip member so the model can inspect the exact text a
+ * transform would receive — the previous behavior surfaced raw gzip binary
+ * (model-blockers B1/C1/D1: ".gz preview returns binary"). Bounded, not
+ * unbounded: decompression is capped at the same extraction ceiling zip
+ * members use.
+ */
+function gunzipMemberBytes(bytes: Buffer): Buffer {
+  try {
+    const out = gunzipSync(bytes, { maxOutputLength: 256 * 1024 * 1024 });
+    return Buffer.isBuffer(out) ? out : Buffer.from(out);
+  } catch (error) {
+    throw new TypeError("asset is not a readable gzip stream", { cause: error });
+  }
+}
+
+/** Strip a ``.gz`` suffix so ``xxx.csv.gz`` registers as ``text/csv``. */
+function bareGzipName(member: string): string {
+  const bare = member.replace(/\.gz$/i, "");
+  if (bare === "") throw new TypeError("gzip member name is not a safe file name");
+  return bare;
+}
+
 function zipMembers(bytes: Buffer): readonly ZipMemberEntry[] {
   const members = readZipCentralDirectory(bytes);
   if (members.length > 4096) throw new TypeError("zip archive exceeds the 4096-member cap");
@@ -102,7 +130,56 @@ export function createPreviewCoreAssetTool(
           throw new TypeError("member must be a non-empty string when provided");
         }
         const { bytes, relativePath, mediaType } = await loadAssetBytes(options, request.asset_id);
-        if (!isZipArchive(bytes)) {
+        if (isZipArchive(bytes)) {
+          const members = zipMembers(bytes);
+          if (request.member === undefined) {
+            return {
+              content: JSON.stringify({
+                ok: true,
+                asset_id: request.asset_id,
+                relative_path: relativePath,
+                is_zip: true,
+                member_count: members.length,
+                members: members.slice(0, 128).map((member) => ({
+                  name: member.name,
+                  compressedBytes: member.compressedSize,
+                  uncompressedBytes: member.uncompressedSize,
+                  method: member.method,
+                })),
+              }),
+              details: { ok: true },
+            };
+          }
+          const memberBytes = zipMemberBytes(bytes, request.member);
+          const head = textHead(memberBytes);
+          return {
+            content: JSON.stringify({
+              ok: true,
+              asset_id: request.asset_id,
+              member: request.member,
+              size_bytes: memberBytes.byteLength,
+              ...head,
+            }),
+            details: { ok: true },
+          };
+        }
+        if (isGzipArchive(bytes)) {
+          const decoded = gunzipMemberBytes(bytes);
+          const head = textHead(decoded);
+          return {
+            content: JSON.stringify({
+              ok: true,
+              asset_id: request.asset_id,
+              relative_path: relativePath,
+              is_gzip: true,
+              decoded_size_bytes: decoded.byteLength,
+              media_type: mediaTypeFor(bareGzipName(relativePath)),
+              ...head,
+            }),
+            details: { ok: true },
+          };
+        }
+        {
           const head = textHead(bytes);
           return {
             content: JSON.stringify({
@@ -116,37 +193,6 @@ export function createPreviewCoreAssetTool(
             details: { ok: true },
           };
         }
-        const members = zipMembers(bytes);
-        if (request.member === undefined) {
-          return {
-            content: JSON.stringify({
-              ok: true,
-              asset_id: request.asset_id,
-              relative_path: relativePath,
-              is_zip: true,
-              member_count: members.length,
-              members: members.slice(0, 128).map((member) => ({
-                name: member.name,
-                compressedBytes: member.compressedSize,
-                uncompressedBytes: member.uncompressedSize,
-                method: member.method,
-              })),
-            }),
-            details: { ok: true },
-          };
-        }
-        const memberBytes = zipMemberBytes(bytes, request.member);
-        const head = textHead(memberBytes);
-        return {
-          content: JSON.stringify({
-            ok: true,
-            asset_id: request.asset_id,
-            member: request.member,
-            size_bytes: memberBytes.byteLength,
-            ...head,
-          }),
-          details: { ok: true },
-        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
@@ -166,14 +212,14 @@ export function createExtractCoreArchiveTool(
     name: "extract_core_archive",
     label: "Extract Core Archive Member",
     description:
-      "Extract one member of a task-owned zip asset into a NEW Core asset (deterministic Host-side decode, provenance receipt included). Returns the new asset_id to bind in prepare_dynamic_family_publication registered_sources. This is the formal path for binary_archive sources — never extract via python/shell/workspace_exec.",
+      "Extract one member of a task-owned zip asset, or decode a single-member gzip asset, into a NEW Core asset (deterministic Host-side decode, provenance receipt included). Returns the new asset_id to bind in prepare_dynamic_family_publication registered_sources. For a gzip asset, omit 'member' to decode the whole stream; the extracted text is registered with its true media type (e.g. xxx.csv.gz -> text/csv). This is the formal path for binary_archive sources — never extract via python/shell/workspace_exec.",
     parameters: {
       type: "object",
       properties: {
         asset_id: { type: "string", pattern: ASSET_ID_PATTERN.source },
         member: { type: "string", minLength: 1, maxLength: 256 },
       },
-      required: ["asset_id", "member"],
+      required: ["asset_id"],
       additionalProperties: false,
     },
     async execute(value): Promise<BioMedToolResult> {
@@ -182,43 +228,75 @@ export function createExtractCoreArchiveTool(
         if (typeof request.asset_id !== "string" || !ASSET_ID_PATTERN.test(request.asset_id)) {
           throw new TypeError("asset_id must be an asset_<sha256> id");
         }
-        if (typeof request.member !== "string" || request.member.length === 0) {
-          throw new TypeError("member is required");
+        const { bytes, relativePath } = await loadAssetBytes(options, request.asset_id);
+        if (isZipArchive(bytes)) {
+          if (typeof request.member !== "string" || request.member.length === 0) {
+            throw new TypeError("member is required for zip archives");
+          }
+          const memberBytes = zipMemberBytes(bytes, request.member);
+          const baseName = path.posix.basename(request.member.replaceAll("\\", "/"));
+          if (!SAFE_FILE_NAME.test(baseName)) {
+            throw new TypeError(
+              `member file name '${baseName}' is not a safe file name; extract a member with a simple name (letters, digits, dot, dash, underscore)`,
+            );
+          }
+          const derivedDir = `source_assets/extract/${request.asset_id.slice("asset_".length, "asset_".length + 12)}`;
+          await mkdir(path.resolve(options.sourceAssetsRoot, derivedDir), { recursive: true });
+          const memberRelative = `${derivedDir}/${baseName}`;
+          await writeFile(path.resolve(options.sourceAssetsRoot, memberRelative), memberBytes);
+          const receipt = await options.sourceAssetRegistry.register({
+            sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
+            relativePath: memberRelative,
+            // Register the member's true media type (registry fallback is
+            // octet-stream for .xml/.pdf/... which blocks media-gated parsers).
+            mediaType: mediaTypeFor(baseName),
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              asset_id: receipt.asset_ref.asset_id,
+              derived_from: request.asset_id,
+              member: request.member,
+              relative_path: receipt.relative_path,
+              size_bytes: receipt.size_bytes,
+              media_type: receipt.media_type,
+            }),
+            details: { ok: true },
+          };
         }
-        const { bytes } = await loadAssetBytes(options, request.asset_id);
-        if (!isZipArchive(bytes)) {
-          throw new TypeError("asset is not a zip archive");
+        if (isGzipArchive(bytes)) {
+          // gzip is a single-member format; decode the whole stream and
+          // register the text with its true (de-suffixed) media type.
+          const decoded = gunzipMemberBytes(bytes);
+          const baseName = path.posix.basename(bareGzipName(relativePath).replaceAll("\\", "/"));
+          if (!SAFE_FILE_NAME.test(baseName)) {
+            throw new TypeError(
+              `gzip member file name '${baseName}' is not a safe file name; extract an asset with a simple name`,
+            );
+          }
+          const derivedDir = `source_assets/extract/${request.asset_id.slice("asset_".length, "asset_".length + 12)}`;
+          await mkdir(path.resolve(options.sourceAssetsRoot, derivedDir), { recursive: true });
+          const memberRelative = `${derivedDir}/${baseName}`;
+          await writeFile(path.resolve(options.sourceAssetsRoot, memberRelative), decoded);
+          const receipt = await options.sourceAssetRegistry.register({
+            sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
+            relativePath: memberRelative,
+            mediaType: mediaTypeFor(baseName),
+          });
+          return {
+            content: JSON.stringify({
+              ok: true,
+              asset_id: receipt.asset_ref.asset_id,
+              derived_from: request.asset_id,
+              member: null,
+              relative_path: receipt.relative_path,
+              size_bytes: receipt.size_bytes,
+              media_type: receipt.media_type,
+            }),
+            details: { ok: true },
+          };
         }
-        const memberBytes = zipMemberBytes(bytes, request.member);
-        const baseName = path.posix.basename(request.member.replaceAll("\\", "/"));
-        if (!SAFE_FILE_NAME.test(baseName)) {
-          throw new TypeError(
-            `member file name '${baseName}' is not a safe file name; extract a member with a simple name (letters, digits, dot, dash, underscore)`,
-          );
-        }
-        const derivedDir = `source_assets/extract/${request.asset_id.slice("asset_".length, "asset_".length + 12)}`;
-        await mkdir(path.resolve(options.sourceAssetsRoot, derivedDir), { recursive: true });
-        const memberRelative = `${derivedDir}/${baseName}`;
-        await writeFile(path.resolve(options.sourceAssetsRoot, memberRelative), memberBytes);
-        const receipt = await options.sourceAssetRegistry.register({
-          sourceId: `extract_${request.asset_id.slice("asset_".length, "asset_".length + 12)}`,
-          relativePath: memberRelative,
-          // Register the member's true media type (registry fallback is
-          // octet-stream for .xml/.pdf/... which blocks media-gated parsers).
-          mediaType: mediaTypeFor(baseName),
-        });
-        return {
-          content: JSON.stringify({
-            ok: true,
-            asset_id: receipt.asset_ref.asset_id,
-            derived_from: request.asset_id,
-            member: request.member,
-            relative_path: receipt.relative_path,
-            size_bytes: receipt.size_bytes,
-            media_type: receipt.media_type,
-          }),
-          details: { ok: true },
-        };
+        throw new TypeError("asset is not a zip or gzip archive");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
