@@ -19,7 +19,7 @@ describe("malicious large input", () => {
   test("oversized and deeply nested settings do not crash the service", async () => {
     const settingsDir = await mkdtemp(path.join(os.tmpdir(), "biomed-malicious-"));
     roots.push(settingsDir);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const server = createServer((request, response) => {
       if (!service.handle(request, response)) response.writeHead(404).end();
     });

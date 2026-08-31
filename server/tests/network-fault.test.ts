@@ -16,7 +16,6 @@ describe("network fault injection", () => {
     roots.push(settingsDir);
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: {},
       resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
       fetcher: async () => {
         throw Object.assign(new Error("connect ECONNREFUSED 93.184.216.34:443"), { code: "ECONNREFUSED" });

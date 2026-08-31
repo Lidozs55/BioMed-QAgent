@@ -31,8 +31,6 @@ import {
 } from "./run-progress-context.js";
 import { SKILL_TOOL_MAP } from "./skills/skill-tool-map.js";
 
-type Environment = Record<string, string | undefined>;
-
 export interface PiUpstreamEvent {
   type: string;
   assistantMessageEvent?: { type: string; delta?: string };
@@ -97,7 +95,6 @@ export interface PiUpstreamSession {
 }
 
 export interface PiAgentAdapterOptions {
-  environment?: Environment;
   createUpstreamSession?: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
@@ -433,26 +430,6 @@ async function validateSessionConfig(
     ? undefined
     : await requireDirectory("session directory", config.sessionDir);
   return { ...config, cwd, resourceRoots, skillRoots, sessionDir };
-}
-
-function modelFromEnvironment(environment: Environment): BioMedModelConfig {
-  const provider = environment.PI_PROVIDER ?? "dashscope";
-  const modelId = environment.PI_MODEL ?? environment.MODEL_NAME;
-  const apiKey = environment.PI_API_KEY ?? environment.DASHSCOPE_API_KEY;
-  const baseUrl = environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL;
-  if (modelId === undefined || modelId.trim() === "") {
-    throw new BioMedAgentError(
-      "INVALID_CONFIGURATION",
-      "Pi model configuration is required",
-    );
-  }
-  if (apiKey === undefined || apiKey.trim() === "") {
-    throw new BioMedAgentError(
-      "INVALID_CONFIGURATION",
-      "Pi provider credentials are required",
-    );
-  }
-  return { provider, modelId, apiKey, baseUrl };
 }
 
 /**
@@ -791,12 +768,19 @@ export function toUpstreamEvent(
 
 async function createRealUpstreamSession(
   config: BioMedSessionConfig,
-  environment: Environment,
   resolveModel?: () => Promise<BioMedModelConfig>,
 ): Promise<PiUpstreamSession> {
-  let current = config.model ?? (resolveModel === undefined
-    ? modelFromEnvironment(environment)
-    : await resolveModel());
+  let current: BioMedModelConfig;
+  if (config.model !== undefined) {
+    current = config.model;
+  } else if (resolveModel !== undefined) {
+    current = await resolveModel();
+  } else {
+    throw new BioMedAgentError(
+      "INVALID_CONFIGURATION",
+      "Pi model configuration is required",
+    );
+  }
   const currentWindow = (): number => current.contextWindow ?? 131_072;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
@@ -1133,7 +1117,7 @@ export async function generateOneShotText(
     skillRoots: [],
     resourceRoots: [],
     tools: [],
-  }, process.env);
+  });
   let output = "";
   let reasoningChars = 0;
   let lengthContinuationStalls = 0;
@@ -1584,7 +1568,6 @@ class PiBioMedAgentSession implements BioMedAgentSession {
 }
 
 export class PiAgentAdapter implements BioMedAgentAdapter {
-  private readonly environment: Environment;
   private readonly createUpstreamSession: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
@@ -1592,11 +1575,10 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
   private readonly onResourceDiagnostic: (message: string) => void;
 
   constructor(options: PiAgentAdapterOptions = {}) {
-    this.environment = options.environment ?? process.env;
     this.createUpstreamSession =
       options.createUpstreamSession ??
       ((config) =>
-        createRealUpstreamSession(config, this.environment, options.resolveModel));
+        createRealUpstreamSession(config, options.resolveModel));
     this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
     this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
   }

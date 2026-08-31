@@ -1314,7 +1314,7 @@ describe("PiAgentAdapter", () => {
   });
 
   test("missing model credentials fail only when real session creation is requested", async () => {
-    const adapter = new PiAgentAdapter({ environment: {} });
+    const adapter = new PiAgentAdapter();
 
     await expect(adapter.createSession(sessionConfig)).rejects.toMatchObject({
       code: "INVALID_CONFIGURATION",

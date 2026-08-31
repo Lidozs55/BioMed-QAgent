@@ -51,7 +51,7 @@ export async function migrateLegacySettings(
   const legacy = await readJsonFile<JsonObject>(legacySettingsPath);
   if (legacy === undefined) return;
   const settings = registry.settings;
-  const defaults = defaultRegistry({}).settings;
+  const defaults = defaultRegistry().settings;
   const bounds = SETTING_NUMBER_BOUNDS;
   if (typeof legacy.base_url === "string") settings.base_url = legacy.base_url;
   if (typeof legacy.model_name === "string") settings.model_name = legacy.model_name;

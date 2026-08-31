@@ -62,7 +62,7 @@ export interface VlmToolHooks {
 }
 
 export interface VlmToolsConfig {
-  /** VLM credentials/model; missing fields fall back to env / defaults. */
+  /** VLM credentials/model; all values are explicitly injected. */
   vlmConfig?: Partial<VlmConfig>;
   /** Injectable HTTP client (fixture tests use a local-executor instance). */
   httpClient?: PublicHttpClient;
@@ -246,11 +246,11 @@ export async function reviewLowConfidencePoints(options: {
   }
 }
 
-/** Resolve VLM config: injected values > env fallbacks > defaults. */
-export function resolveVlmConfig(partial: Partial<VlmConfig> = {}, env: NodeJS.ProcessEnv = process.env): VlmConfig {
+/** Resolve VLM config from explicit values and code defaults only. */
+export function resolveVlmConfig(partial: Partial<VlmConfig> = {}): VlmConfig {
   return {
-    apiKey: partial.apiKey ?? env.DASHSCOPE_API_KEY ?? "",
-    baseUrl: partial.baseUrl ?? env.DASHSCOPE_BASE_URL ?? DEFAULT_DASHSCOPE_BASE_URL,
+    apiKey: partial.apiKey ?? "",
+    baseUrl: partial.baseUrl ?? DEFAULT_DASHSCOPE_BASE_URL,
     model: partial.model ?? VL_MODEL_NAME,
   };
 }
