@@ -532,6 +532,42 @@ describe("governed Task Workspace (data/workspaces/<taskId>)", () => {
     expect(audit.records.at(-1)).toMatchObject({ operation: "exec", result: "success" });
   });
 
+  test("exec of a non-executable file and a missing binary returns a structured spawn failure (never kills or throws)", async () => {
+    const { workspaceRoot, workspace, audit } = await fixture({ exec: true });
+    const noexec = path.join(workspaceRoot, "rw_test_file.txt");
+    await writeFile(noexec, "#!/bin/sh\necho hi\n", "utf8");
+    // Deliberately no chmod +x: the file is NOT executable.
+
+    const noexecResult = await workspace.exec({
+      executable: "./rw_test_file.txt",
+      args: [],
+    });
+    // The historical bug: spawn failed -> child.pid undefined ->
+    // killProcessTree(-1) -> process.kill(1, \"SIGKILL\"). The fixed path
+    // must return normally with a diagnostic instead of throwing EPERM or
+    // signalling init.
+    expect(noexecResult.policy).toBe("allowed");
+    expect(noexecResult.exitCode).toBeNull();
+    expect(noexecResult.stderr).toContain("EACCES");
+    expect(noexecResult.stderr).toContain("execute bit");
+    expect(noexecResult.timedOut).toBe(false);
+    expect(noexecResult.cancelled).toBe(false);
+
+    const missingResult = await workspace.exec({
+      executable: "definitely-missing-cmd-xyz",
+      args: [],
+    });
+    expect(missingResult.exitCode).toBeNull();
+    expect(missingResult.stderr).toContain("ENOENT");
+    expect(missingResult.stderr).toContain("command not found");
+
+    // Both spawn failures complete normally now (no throw): the audit shows
+    // them as completed ("success") runs whose stderr carries the errno.
+    const execAudits = audit.records.filter((record) => record.operation === "exec");
+    expect(execAudits).toHaveLength(2);
+    for (const record of execAudits) expect(record.result).toBe("success");
+  });
+
   test("round-3 audit: the approval card shows the FULL executable path, not a basename", async () => {
     const { workspace, permissionFixture } = await fixture();
     const running = workspace.exec({

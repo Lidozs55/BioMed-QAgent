@@ -308,6 +308,7 @@ export function toolCatalogPrompt(
     "Available curated skill/tool map (complete for this session):",
     "Use it before substantive work to choose the route and respect each trust boundary.",
     "Tools marked (active) have full schemas now. For other listed tools, call activate_agent_tools before use; activation does not bypass permissions, validation, or publication gates.",
+    "A tool call to a listed tool that is NOT active fails with 'Tool not found' — this never means the tool is missing. Exactly one recovery exists: call activate_agent_tools with that tool's name, then retry the call with its real schema. Do not invent parameters or guess signatures for inactive tools; the catalog above is the only schema source.",
     ...skillEntries,
     ...(otherTools.length === 0
       ? []
