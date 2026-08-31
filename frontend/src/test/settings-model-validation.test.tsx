@@ -472,6 +472,16 @@ describe("VisionModelSelector", () => {
     expect(labels.find((label) => label.includes("VL No Key"))).toContain("未配置密钥");
   });
 
+  it("shows the selected model's display name in the closed trigger", () => {
+    renderSelector(
+      mockApi(),
+      { ...SETTINGS, vision_model_id: "vl-ready" },
+    );
+    const trigger = screen.getByRole("combobox", { name: "视觉抽取模型" });
+    expect(trigger).toHaveTextContent("Qwen VL Plus");
+    expect(trigger).not.toHaveTextContent("vl-ready");
+  });
+
   it("saves only the visual role when a model is chosen", async () => {
     const saveSettings = vi.fn().mockResolvedValue({
       ...SETTINGS,

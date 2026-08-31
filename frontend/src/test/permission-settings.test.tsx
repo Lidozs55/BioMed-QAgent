@@ -117,8 +117,12 @@ describe("AgentPermissionSettingsSection (P6)", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "高级 ACL 设置" }));
     expect(screen.getByText("D:\\datasets\\TCGA")).toBeTruthy();
-    expect(screen.getByText("读取")).toBeTruthy();
-    expect(screen.getByText("递归")).toBeTruthy();
+    // "读取" now appears both as a rule badge and in the capability select
+    // trigger (which renders the label instead of the raw "fs.read" value).
+    const ruleRow = screen.getByText("D:\\datasets\\TCGA").closest("li");
+    expect(ruleRow).not.toBeNull();
+    expect(ruleRow).toHaveTextContent("读取");
+    expect(ruleRow).toHaveTextContent("递归");
     fireEvent.click(screen.getByRole("button", { name: /删除规则/ }));
     await waitFor(() => {
       expect(removeRule).toHaveBeenCalledWith("rule_1");

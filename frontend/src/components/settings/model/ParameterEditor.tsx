@@ -93,9 +93,13 @@ function SpecField({
   }
   if (spec.type === "select") {
     const options = spec.options ?? [];
+    // Base UI needs the `items` map to render the option label (not the raw
+    // value) in the closed trigger.
+    const items = options.map((option) => ({ value: option.value, label: option.label }));
     return (
       <Select
         id={controlId}
+        items={items}
         value={value === undefined ? "" : String(value)}
         onValueChange={(next) => onChange(next)}
       >

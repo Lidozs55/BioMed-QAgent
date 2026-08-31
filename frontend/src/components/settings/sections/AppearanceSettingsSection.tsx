@@ -211,6 +211,12 @@ export function AppearanceSettingsSection() {
       label: item.name,
     })),
   ];
+  // Base UI needs the `items` map to render the font name (not the raw key)
+  // in the closed trigger.
+  const fontItems = fontOptions.map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
 
   const importFontFile = async (file: File | undefined) => {
     if (!file) return;
@@ -329,7 +335,7 @@ export function AppearanceSettingsSection() {
             title="字体"
             description="切换后立即作用于整个应用。"
             control={
-              <Select value={font} onValueChange={(value) => setFont(value ?? "inter")}>
+              <Select items={fontItems} value={font} onValueChange={(value) => setFont(value ?? "inter")}>
                 <SelectTrigger className="w-48" aria-label="界面字体">
                   <SelectValue />
                 </SelectTrigger>
