@@ -286,26 +286,24 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
 - 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
 
-## gold7-r2 @ qwen3.8-flash（2026-08-31，main@4be9e3d51ab3，**规范版复测·进行中**，task_ts_a19e74b7-097f-4e88-ab48-68d7c8c9330a）
+## gold7-r2 @ qwen3.8-flash（2026-08-31，main@4be9e3d51ab3，**规范版复测·终**，task_ts_a19e74b7-097f-4e88-ab48-68d7c8c9330a）
 
-> 状态：running（截至 seq 2002，已跑 ~95 分钟，**十案最长**——1M 上下文放大了探索/试错时长；pubs 暂 0，模型已建 `output/ad_gwas_study.csv`、`output/ad_gwas_risk_loci.csv` staging 表并逐行回读自审，正在补 UniProt/TREM2 佐证，尚未进动态发布）。本节先记已坐实的观察，终态数字（usage/phase/发布数）待 run 结束补录。
+> **终态 blocked_no_publication——但这是全部十案中最重要的一次"失败"**：模型两次把真实 GWAS 载体（GWAS Catalog JSON、HGNC TSV、MOESM4 xlsx 解出的 Supplementary Table 5）喂进 `prepare_dynamic_family_publication` 且**均成功过 preflight**（wire 修复铁证生效），**然后发现动态路线的 topology 是 Core 写死的六表 bioactivity-chart 模板**（`activity_value_records` primary + chart_series/points 强制要求 image-bbox VLM locators 与人审）——"Topology is Core-owned and non-authorable"。要把 stage-wise OR/p 发出去，唯一办法是**把真实统计值伪装进 assay 单位和假 figure 坐标**。模型**拒绝**："Mapping stage-wise ORs into fabricated assay units/figure coordinates would corrupt provenance, so I refused that path rather than force it."
+> **对比 r1**：r1 发的是 383 字节探针（同样塞不进真数据）；r2 看清模板强加后宁 0 发布。两案同一病灶：**动态路对 GWAS 类拓扑是假通路——能过 preflight，不能装真产品**。这是十案修复迭代后**新暴露的一层**（wire 不通时看不见它）。
+>
+> **成本：177 calls / ~3h / 41.69M token（十案之最，此前最高 7.94M 的 5.2 倍；r1 的 6.4 倍）/ cache_read 占 95.5% / 峰值上下文 366,708**。成本结构：1M 窗口 + 高密度自审（89/89 rsID 逐个坐标核验、每个 staging 行 workspace_search 复核、MOESM4 Table 5 解析后全表通读）。**不是空转**（每轮有实证产出），是 1M 规范下"验证密度无预算上限"+ P2/P3 死锁前的穷尽试探叠加。终答 122,928 字符（单条 4 万 token，自身也是成本项）。
+>
+> 数据成果（全部真值可溯、未发布）：`output/ad_gwas_study.csv` 1 行、`ad_gwas_risk_loci.csv` 15 行（75 位点中最高显著度，stage1/2/12 OR+CI+异质性+GRCh38+75 集标记）、`ad_gwas_variant_gene_map.csv` 17 行；89/89 rsID dbSNP 坐标核验，`rs60755019` 显式标"未核验"。模型自判 "No NO_DATA applies — the data was reached and cross-checked; only deterministic publication is blocked."
 
-### 运行中断事件复盘（"记分员"死亡，run 无恙——与操作员重启框架无关）
-- **run 全程未断**：跑在 detached `node dist/index.js --static`（pid 42824），操作员重启的是工具会话、非该 server 进程；seq 单调 1512→1721→2002，事件流零 `run_interrupted`/`task_recovered`，active_run 从未丢。
-- **supervisor 死于自身 1h 墙钟超时**：我设 `--timeout 3600000`（=1h），本案 1M 下探索超 1h（十案首次），`supervisor timeout exceeded`。已改 3h `--adopt` 重挂，journal 1669→2002 追平，数据零损。**运维铁律更新：1M 规范下 supervisor `--timeout` 至少 3h（10800000）**。
-- 附带再踩并现场确认 **O2/adopt-run_id 缺陷**（triage 运维行已记：`--adopt` 不持久化 run_id → HIL/超时后 `--resume` 需手工补 state；本案未 HIL，adopt 重挂即续）。
-
-### 已坐实的新卡点
+### 卡点终判
 | # | 卡点 | 归类 | 证据 | 状态 |
 | - | ---- | ---- | ---- | ---- |
-| P2 | **`source_files` 绑定契约三向死锁**（GWAS/variant_evidence 静态路彻底不通）：bare `asset_<64hex>` → 报"must be a relative source_assets path"；改相对路径 → 报"has no registered asset ID"；MOESM4 解出成员已是 `text/csv` → 报"media type not allowed: text/csv"。**没有任何单一取值能同时满足"相对路径 + 已注册资产 id + 非 csv 介质"三条**。这是 D3（下载即登记）与 a5a6003d（成员真实 media-type）**两处修复未对齐**的夹缝：登记修好了 id、media-type 修好了标签，但 static variant_evidence 适配器仍拒 text/csv → 静态闭合对 GWAS 衍生表结构性不可能。模型 13× 撞墙后自行判"两形态穷尽→转动态"（正确逃生） | 框架（契约死锁，链 2/D2 的静态侧新实例） | execute@1064-1205 同签名 13 连败（`bridge_unavailable`）；终答前自述"两形态穷尽"；seq1902 再证 mapping_files 路同拒 | 开放，高优先（与 H1/I2/D2 同族合并立项） |
+| P2 | `source_files` 绑定契约三向死锁（上节已详） | 框架 | execute×8 终判 + mapping_files/workflow_recipe 均 non-retryable | **终判坐实，开放** |
+| **P3** | **动态 Family 拓扑不可定制**：`prepare_dynamic_family_publication` 的闭包拓扑由 Core 写死为 bioactivity-chart 六表（`activity_value_records`+chart bbox/人审），任何非生物活性拓扑（GWAS 三表、名册、临床分组）要么塞假模板（模型正确拒绝），要么 0 发布。**r1"探针发布"与 r2"零发布"是同一病灶的两种症状**——此前被 wire 死锁遮蔽，修复后立即现形。这是"动态族"叙事的核心承诺（表达任意拓扑）未兑现 | 框架（**架构级**，十案总根因） | 终答 "Why publication is structurally closed" 节：两次 prepare 成功、identical six-table closure、"non-authorable" | **开放，最高优先——gold 系列（GWAS/名册/临床表）能否发布全卡在此** |
+| P4 | 1M 规范下自审密度无成本闸：177 调用 95% 是 cache_read；12 万字符终答单条 4 万 token | 框架（预算）+ prompt | usage 结构 | 开放：给"发布前证据核对"设预算/摘要化终答 |
 
-### 行为观察（相对 r1 的正向）
-- **`inspect_source_coverage` 空参连败 ~19 次**——一度疑似 L1 式 tic，但模型**自行完成因果诊断**："coverage artifact 只有在 Publication 之后才存在，构建前调用必然 `no_source_coverage_artifact`，它 gate 不了自己"→ 主动弃用转独立源。**结论：这是 O2（新工具 description 无用法引导）诱发的可避免烧钱，不是模型退化**；模型最终跳出=正样本（对比 gold10-L1 真退化未跳出）。
-- `scaffold_dataset_profile` 又误用（O2 第 N 次，cleaning 套件持续无引导）。
-- 载体甄别/纠错保持水准：workspace_search 发现自写 study 行误引 "Supplementary Table 3"，主动核对字节改为 "Table 5"（stage-wise OR/p 真实所在表），拒绝沿用错误 provenance。
-
-> 待 run 终态补录：usage 全量+phase 拆分、是否动态发布/几表、HIL 是否触发、P2 最终是否逼停发布。
+### 行为面终评（正面为主）
+`inspect_source_coverage` 16 连败被模型正确因果归因并切源（"closed by source switch, not repetition"）；navigate 404→换端点；"Tool not found"→激活后完成；假命中表名（Table 3→5）自纠；**P3 的拒绝伪造 provenance 是全批次最重要的一次模型守界行为——它证明了信任规则在模型侧生效，反衬产品侧没有兑现合法出口**。求助清单精确（gwas_* profile / 注册 JSON 载体 / 授权扩 75 行）。
 
 ## gold8 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_304c82c8-7dfe-4372-8479-d99efa121e0a）
 
