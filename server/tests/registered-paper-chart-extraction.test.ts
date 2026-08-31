@@ -165,6 +165,8 @@ interface FixtureDeps {
   now: () => Date;
 }
 
+type FixtureResponse = string | ((callNumber: number, imagePath: string, prompt: string) => string);
+
 interface Fixture {
   roots: string[];
   taskRoot: string;
@@ -186,15 +188,23 @@ async function writeFileAndRegister(
   const filePath = path.join(taskRoot, "source_assets", fileName);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, bytes);
-  return registry.register({
+  const receipt = await registry.register({
     sourceId: `fixture_${fileName.replaceAll(/[^A-Za-z0-9_-]/g, "_")}`,
     relativePath: `source_assets/${fileName}`,
     mediaType,
     role,
   });
+  await registry.registerCoreAcquisitionProvenance(receipt, {
+    provider_id: "fixture.files.v1",
+    implementation_digest: "f".repeat(64),
+    request_identity_digest: createHash("sha256")
+      .update(`fixture:${receipt.asset_ref.asset_id}:${role}`)
+      .digest("hex"),
+  });
+  return receipt;
 }
 
-async function makeFixture(responseContent: string): Promise<Fixture> {
+async function makeFixture(responseContent: FixtureResponse): Promise<Fixture> {
   const roots: string[] = [];
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "registered-paper-chart-"));
   roots.push(taskRoot);
@@ -221,6 +231,7 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
   };
   const calls: FakeClientCall[] = [];
   const prompts: string[] = [];
+  let callNumber = 0;
   const fakeClient: VlmClient = {
     call: async () => {
       throw new Error("legacy call() must not be used by the governed extraction");
@@ -228,7 +239,11 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
     callWithMeta: async (imagePath, prompt) => {
       calls.push({ imagePath, prompt, configModel: RESOLVED_MODEL });
       prompts.push(prompt);
-      return { content: responseContent, model: PROVIDER_MODEL_VERSION };
+      const content = typeof responseContent === "function"
+        ? responseContent(callNumber, imagePath, prompt)
+        : responseContent;
+      callNumber += 1;
+      return { content, model: PROVIDER_MODEL_VERSION };
     },
   };
   const pageImage = Buffer.from("fake page raster bytes", "utf8");
@@ -274,6 +289,37 @@ function baseRequest(fixture: Fixture): {
     paper_id: "31234567",
     paper_id_namespace: "pubmed",
   };
+}
+
+async function makeTwoPageFixture(responseContent: FixtureResponse): Promise<Fixture> {
+  const fixture = await makeFixture(responseContent);
+  fixture.depsDefaults.extractPageImages = async (_pdfBytes, _sourceLabel, destDir) => {
+    await mkdir(destDir, { recursive: true });
+    const images = [];
+    for (const pageIndex of [1, 2]) {
+      const imagePath = path.join(destDir, `paper_p${pageIndex}_img0.png`);
+      await writeFile(imagePath, `fake page ${pageIndex} raster bytes`, "utf8");
+      images.push({ path: imagePath, pageIndex, bbox: "0,0,612,792" });
+    }
+    return { images, skippedPages: 0 };
+  };
+  return fixture;
+}
+
+function responseWithoutExperimentProtein(): string {
+  const body = JSON.parse(makeVlmResponse()) as Record<string, unknown>;
+  const experiments = body.experiments;
+  if (!Array.isArray(experiments) || experiments.length === 0) {
+    throw new Error("fixture response has no experiment to corrupt");
+  }
+  const first = experiments[0];
+  if (typeof first !== "object" || first === null || Array.isArray(first)) {
+    throw new Error("fixture experiment is not an object");
+  }
+  const malformed = { ...(first as Record<string, unknown>) };
+  delete malformed.protein;
+  body.experiments = [malformed];
+  return JSON.stringify(body);
 }
 
 async function readCarrier(fixture: Fixture, relativePath: string): Promise<Record<string, unknown>> {
@@ -491,6 +537,13 @@ describe("registered paper chart evidence extraction", () => {
         mediaType: "application/pdf",
         role: "carrier",
       });
+      await fixture.registry.registerCoreAcquisitionProvenance(fixture.assets.pdfReceipt, {
+        provider_id: "fixture.files.v1",
+        implementation_digest: "f".repeat(64),
+        request_identity_digest: createHash("sha256")
+          .update(`fixture:${fixture.assets.pdfReceipt.asset_ref.asset_id}:carrier`)
+          .digest("hex"),
+      });
 
       const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
         taskRoot: fixture.taskRoot,
@@ -526,6 +579,103 @@ describe("registered paper chart evidence extraction", () => {
       expect(result.warnings).toContain(
         "4 additional PDF page candidate(s) were not rendered because of the page cap",
       );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("isolates a malformed page and preserves valid aggregate evidence from another page", async () => {
+    const fixture = await makeTwoPageFixture((_, imagePath) =>
+      path.basename(imagePath).startsWith("paper_p1_")
+        ? responseWithoutExperimentProtein()
+        : makeVlmResponse(),
+    );
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+
+      expect(result.rows.experiment_records).toBe(1);
+      expect(result.rows.chart_series).toBe(1);
+      expect(result.rows.chart_points).toBe(2);
+      expect(fixture.calls.filter((call) => path.basename(call.imagePath).startsWith("paper_p1_")).length)
+        .toBe(2);
+      expect(fixture.calls.filter((call) => path.basename(call.imagePath).startsWith("paper_p2_")).length)
+        .toBe(1);
+      expect(result.warnings.some((warning) => warning.includes("page 1") && warning.includes("schema")))
+        .toBe(true);
+      expect(result.warnings.some((warning) => warning.includes("experiment protein"))).toBe(true);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("retries a clear empty-point series once and sends recovered points to vlm_extraction HIL", async () => {
+    const fixture = await makeFixture((callNumber) =>
+      callNumber === 0 ? makeVlmResponse({ points: [] }) : makeVlmResponse(),
+    );
+    const reviewRequests: Array<{ reviewType: string | null; itemCount: number }> = [];
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async (input) => {
+            reviewRequests.push({ reviewType: input.review_type, itemCount: input.review_items.length });
+            return {
+              schema_version: "1.0",
+              review_id: "review_retry_recovered",
+              request_id: "request_retry_recovered",
+              decision: { action: "accept" as const },
+              reviewer: "user" as const,
+              reviewed_at: "2026-08-30T11:00:00.000Z",
+              evidence_digest: "c".repeat(64),
+              reason: null,
+            };
+          },
+        },
+      });
+
+      expect(fixture.calls).toHaveLength(2);
+      expect(fixture.prompts[1]).toContain("no usable chart points");
+      expect(fixture.prompts[1]).toMatch(/do not guess/i);
+      expect(result.rows.chart_points).toBe(2);
+      expect(reviewRequests).toEqual([{ reviewType: "vlm_extraction", itemCount: 2 }]);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("bounds an exhausted no-point retry and keeps the series unclear without HIL", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ points: [] }));
+    let reviewCallCount = 0;
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async () => {
+            reviewCallCount += 1;
+            throw new Error("no-point series must not create VLM review");
+          },
+        },
+      });
+
+      expect(fixture.calls).toHaveLength(2);
+      expect(result.rows.chart_points).toBe(0);
+      expect(reviewCallCount).toBe(0);
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      const series = rowsOf(carrier, "chart_series")[0] as Record<string, unknown>;
+      expect(series.axis_validation_status).toBe("unclear");
+      expect(series.legend_validation_status).toBe("unclear");
+      expect(result.warnings.some((warning) => warning.includes("retry"))).toBe(true);
+      expect(result.warnings.some((warning) => warning.includes("no points") && warning.includes("unclear")))
+        .toBe(true);
+      expect(result.warnings.length).toBeLessThanOrEqual(20);
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }
@@ -586,6 +736,103 @@ describe("registered paper chart evidence extraction", () => {
         expect(point.review_status).toBe("pending");
         expect(point.review_id).toBeNull();
       }
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("binds candidate and reviewed carriers through derived provenance for formal dynamic resolution", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async () => ({
+            schema_version: "1.0",
+            review_id: "review_carrier_provenance",
+            request_id: "request_carrier_provenance",
+            decision: { action: "accept" as const },
+            reviewer: "user" as const,
+            reviewed_at: "2026-08-30T11:00:00.000Z",
+            evidence_digest: "c".repeat(64),
+            reason: "accepted after checking the chart evidence",
+          }),
+        },
+      });
+
+      if (result.reviewed_carrier === undefined) {
+        throw new Error("accepted chart evidence did not produce a reviewed carrier");
+      }
+      const candidateProvenance = await fixture.registry.resolveDerivedProvenance(result.carrier.asset_id);
+      expect(candidateProvenance.operation_kind).toBe("vlm_extraction");
+      expect(candidateProvenance.parent_asset_ids).toEqual([
+        fixture.assets.xmlReceipt.asset_ref.asset_id,
+        fixture.assets.pdfReceipt.asset_ref.asset_id,
+        fixture.assets.supplementReceipt.asset_ref.asset_id,
+      ]);
+      const candidateResult = await fixture.registry.resolveDerivedOperationResult(
+        candidateProvenance.operation_result_id,
+      );
+      expect(candidateResult).toMatchObject({
+        task_id: "task_gold6_t5",
+        run_id: "core",
+        operation_kind: "derive",
+        output_kind: "derived_evidence",
+        status: "succeeded",
+        commit: { state: "committed" },
+      });
+      expect(candidateResult.output_files).toEqual([{
+        relative_path: result.carrier.relative_path,
+        size_bytes: result.carrier.size_bytes,
+        sha256: result.carrier.sha256,
+      }]);
+      await expect(fixture.registry.resolveFormalInput(result.carrier.asset_id))
+        .resolves.toMatchObject({
+          acquisition_provenance: null,
+          derived_provenance: { asset_id: result.carrier.asset_id },
+        });
+
+      const reviewedProvenance = await fixture.registry.resolveDerivedProvenance(
+        result.reviewed_carrier.asset_id,
+      );
+      expect(reviewedProvenance.operation_kind).toBe("vlm_extraction");
+      expect(reviewedProvenance.parent_asset_ids).toContain(result.carrier.asset_id);
+      expect(reviewedProvenance.parent_asset_ids).toHaveLength(2);
+      const reviewedResult = await fixture.registry.resolveDerivedOperationResult(
+        reviewedProvenance.operation_result_id,
+      );
+      expect(reviewedResult).toMatchObject({
+        task_id: "task_gold6_t5",
+        run_id: "core",
+        operation_kind: "derive",
+        output_kind: "derived_evidence",
+        status: "succeeded",
+        commit: { state: "committed" },
+      });
+      expect(reviewedResult.output_files).toEqual([{
+        relative_path: result.reviewed_carrier.relative_path,
+        size_bytes: result.reviewed_carrier.size_bytes,
+        sha256: result.reviewed_carrier.sha256,
+      }]);
+      await expect(fixture.registry.resolveFormalInput(result.reviewed_carrier.asset_id))
+        .resolves.toMatchObject({
+          acquisition_provenance: null,
+          derived_provenance: { asset_id: result.reviewed_carrier.asset_id },
+        });
+      const closure = await fixture.registry.resolveFormalProvenanceClosure(
+        result.reviewed_carrier.asset_id,
+      );
+      expect(closure.filter((item) => "asset_id" in item).map((item) => item.asset_id)).toEqual(
+        expect.arrayContaining([
+          fixture.assets.xmlReceipt.asset_ref.asset_id,
+          fixture.assets.pdfReceipt.asset_ref.asset_id,
+          fixture.assets.supplementReceipt.asset_ref.asset_id,
+          result.carrier.asset_id,
+          result.reviewed_carrier.asset_id,
+        ]),
+      );
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }

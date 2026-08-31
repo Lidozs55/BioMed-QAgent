@@ -1,0 +1,311 @@
+[
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_1be87d68-70f7-46e5-b7af-2665237c5651",
+    "request_id": "req_carrier_europepmc_pdf_v1_PMC10408569",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.pdf.v1",
+    "attempt_number": 1,
+    "status": "failed",
+    "url": "https://europepmc.org/api/getPdf?pmcid=PMC10408569",
+    "bytes_received": 0,
+    "error_code": "http_server_error",
+    "retryable": true,
+    "started_at": "2026-08-31T12:38:18.867Z",
+    "finished_at": "2026-08-31T12:38:20.225Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_f9c7c168df31b6e1b034d65010b862c23b237d1274295ad4ec1ff676eb40e88a",
+      "request_identity_digest": "f9c7c168df31b6e1b034d65010b862c23b237d1274295ad4ec1ff676eb40e88a",
+      "cache_blob_sha256": null,
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": null
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_03880148-8055-4082-8f9e-9e2ab250dc2a",
+    "request_id": "req_carrier_europepmc_fulltext_xml_v1_PMC10408569",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.fulltext_xml.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10408569/fullTextXML",
+    "bytes_received": 257660,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:18.869Z",
+    "finished_at": "2026-08-31T12:38:22.015Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_58829c1ff4d7b66b9c9b4a38dcc22f4c1dbefa244b71a2371538f5fd7044ddb6",
+      "request_identity_digest": "58829c1ff4d7b66b9c9b4a38dcc22f4c1dbefa244b71a2371538f5fd7044ddb6",
+      "cache_blob_sha256": "7ccdaf88e6d55a19e9f5fb9c66bcbdfc6db66d6984053aa45228239d89bf7f00",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_7ccdaf88e6d55a19e9f5fb9c66bcbdfc6db66d6984053aa45228239d89bf7f00",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_3d8c0c50-f9a2-4b1e-8102-525d9eb98e27",
+    "request_id": "req_carrier_europepmc_pdf_v1_PMC10408569",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.pdf.v1",
+    "attempt_number": 2,
+    "status": "succeeded",
+    "url": "https://europepmc.org/api/getPdf?pmcid=PMC10408569",
+    "bytes_received": 5670054,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:20.229Z",
+    "finished_at": "2026-08-31T12:38:28.943Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_f9c7c168df31b6e1b034d65010b862c23b237d1274295ad4ec1ff676eb40e88a",
+      "request_identity_digest": "f9c7c168df31b6e1b034d65010b862c23b237d1274295ad4ec1ff676eb40e88a",
+      "cache_blob_sha256": "80a418ac0aba09c0c7ca9ba53eccf4614e36c5c8a996f59659dfeee1a5ca768b",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_80a418ac0aba09c0c7ca9ba53eccf4614e36c5c8a996f59659dfeee1a5ca768b",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_e9941cb6-fed2-4837-bc4d-0fc70c13317e",
+    "request_id": "req_carrier_europepmc_supplementary_v1_PMC10408569",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.supplementary.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC10408569/supplementaryFiles",
+    "bytes_received": 11753944,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:18.869Z",
+    "finished_at": "2026-08-31T12:38:34.803Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_61c41f97e23c087eb2d83878ead74018169e5378937a3020351df9595158a580",
+      "request_identity_digest": "61c41f97e23c087eb2d83878ead74018169e5378937a3020351df9595158a580",
+      "cache_blob_sha256": "ee82ae157707f186df288c55ed6f33cbda82cce45928e7a9e58462f84f914827",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_ee82ae157707f186df288c55ed6f33cbda82cce45928e7a9e58462f84f914827",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_b0ba9a32-8877-4eed-95b1-6f4c4f30af6c",
+    "request_id": "req_carrier_europepmc_pdf_v1_PMC5355725",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.pdf.v1",
+    "attempt_number": 1,
+    "status": "failed",
+    "url": "https://europepmc.org/api/getPdf?pmcid=PMC5355725",
+    "bytes_received": 0,
+    "error_code": "http_server_error",
+    "retryable": true,
+    "started_at": "2026-08-31T12:38:41.363Z",
+    "finished_at": "2026-08-31T12:38:42.021Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_6bb155851d2a9abda6d9d346890b5df1b834b1a59cb17ad59ebd38dc696c7c5e",
+      "request_identity_digest": "6bb155851d2a9abda6d9d346890b5df1b834b1a59cb17ad59ebd38dc696c7c5e",
+      "cache_blob_sha256": null,
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": null
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_3c424ed9-f2d4-4e82-bf16-97b80a83d6e5",
+    "request_id": "req_carrier_europepmc_fulltext_xml_v1_PMC5094958",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.fulltext_xml.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC5094958/fullTextXML",
+    "bytes_received": 85714,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:41.364Z",
+    "finished_at": "2026-08-31T12:38:43.095Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_eeb391a026c522c3349cb71357d3865cdcde2784a214a568a0e9560caeef3404",
+      "request_identity_digest": "eeb391a026c522c3349cb71357d3865cdcde2784a214a568a0e9560caeef3404",
+      "cache_blob_sha256": "b7935b97f7ecaa41a3e9cef72b1f7309466c0bc6c11cc64f84a258bae98450c6",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_b7935b97f7ecaa41a3e9cef72b1f7309466c0bc6c11cc64f84a258bae98450c6",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_ff6084a1-dd0d-4480-a493-94926023c947",
+    "request_id": "req_carrier_europepmc_fulltext_xml_v1_PMC5355725",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.fulltext_xml.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC5355725/fullTextXML",
+    "bytes_received": 104362,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:41.363Z",
+    "finished_at": "2026-08-31T12:38:43.108Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_d312b20224b31796f075fc5ff7541c8aebb5f61d4f82920fc2b83f68b115f19b",
+      "request_identity_digest": "d312b20224b31796f075fc5ff7541c8aebb5f61d4f82920fc2b83f68b115f19b",
+      "cache_blob_sha256": "69d4a8740aabcecb920a122cad0ad501462a5e292a91b15e98da5618759b05f7",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_69d4a8740aabcecb920a122cad0ad501462a5e292a91b15e98da5618759b05f7",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_f12b0a24-b67f-497d-b903-70f8b2b0bc71",
+    "request_id": "req_carrier_europepmc_pdf_v1_PMC5355725",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.pdf.v1",
+    "attempt_number": 2,
+    "status": "succeeded",
+    "url": "https://europepmc.org/api/getPdf?pmcid=PMC5355725",
+    "bytes_received": 2178009,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:42.023Z",
+    "finished_at": "2026-08-31T12:38:44.923Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_6bb155851d2a9abda6d9d346890b5df1b834b1a59cb17ad59ebd38dc696c7c5e",
+      "request_identity_digest": "6bb155851d2a9abda6d9d346890b5df1b834b1a59cb17ad59ebd38dc696c7c5e",
+      "cache_blob_sha256": "3bf34506ada3dbf3f271f1cc832a9d512c083ea2873cc4a62acb51e4605f0bde",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_3bf34506ada3dbf3f271f1cc832a9d512c083ea2873cc4a62acb51e4605f0bde",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_1f049841-4324-46a5-8867-1bf368037ff3",
+    "request_id": "req_carrier_europepmc_supplementary_v1_PMC5094958",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.supplementary.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC5094958/supplementaryFiles",
+    "bytes_received": 440447,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:41.363Z",
+    "finished_at": "2026-08-31T12:38:45.638Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_9852a2239ed5d03084c18021de5bbb1d5d4d417c610debd53741acbb70b000a4",
+      "request_identity_digest": "9852a2239ed5d03084c18021de5bbb1d5d4d417c610debd53741acbb70b000a4",
+      "cache_blob_sha256": "4fee564e673fd3d209870e7535a68fa357332de918682b10254af63c707efed5",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_4fee564e673fd3d209870e7535a68fa357332de918682b10254af63c707efed5",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_11255c36-256a-44f5-8df6-a825bf27e3b4",
+    "request_id": "req_carrier_europepmc_supplementary_v1_PMC5355725",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.supplementary.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC5355725/supplementaryFiles",
+    "bytes_received": 1346868,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:41.363Z",
+    "finished_at": "2026-08-31T12:38:45.993Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_885394c3839dd033ea32dafbdda3693a78f23c7a2bf945a3c05cd98eaa69fc11",
+      "request_identity_digest": "885394c3839dd033ea32dafbdda3693a78f23c7a2bf945a3c05cd98eaa69fc11",
+      "cache_blob_sha256": "168516b502c22dba00743b9f8dd38c4b142bcf7671c618d844ca9bc96562a688",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_168516b502c22dba00743b9f8dd38c4b142bcf7671c618d844ca9bc96562a688",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "attempt_id": "download_attempt_32040dcf-3b91-4528-be45-3b16c79d6361",
+    "request_id": "req_carrier_europepmc_pdf_v1_PMC5094958",
+    "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+    "provider_id": "europepmc.pdf.v1",
+    "attempt_number": 1,
+    "status": "succeeded",
+    "url": "https://europepmc.org/api/getPdf?pmcid=PMC5094958",
+    "bytes_received": 2864383,
+    "error_code": null,
+    "retryable": false,
+    "started_at": "2026-08-31T12:38:41.363Z",
+    "finished_at": "2026-08-31T12:38:49.177Z",
+    "cache_lineage": {
+      "schema_version": "1.0",
+      "cache_key": "acq_64571108d84c8be4ff8ab6d221a5e957d1e970b593da6696f873b1c43cb91445",
+      "request_identity_digest": "64571108d84c8be4ff8ab6d221a5e957d1e970b593da6696f873b1c43cb91445",
+      "cache_blob_sha256": "30dbe82385d7d001b8820de8b69f1af7d63c5b8765fb2d65acdb8c6161e81728",
+      "resumed_from_attempt_id": null,
+      "part_relative_path": null
+    },
+    "asset": {
+      "schema_version": "1.0",
+      "asset_id": "asset_30dbe82385d7d001b8820de8b69f1af7d63c5b8765fb2d65acdb8c6161e81728",
+      "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+      "role": "carrier"
+    }
+  }
+]

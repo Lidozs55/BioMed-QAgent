@@ -816,6 +816,7 @@ export async function createPhase3Runtime(
       const datasetTools = createDatasetExecutionTools({
         client: service,
         familyRegistry: createDefaultDatasetFamilyRegistry(),
+        sourceAssetRegistry,
         taskId,
         taskRoot,
         runId: () => currentRunId,

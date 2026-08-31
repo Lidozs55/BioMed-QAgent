@@ -54,6 +54,80 @@ async function getJson(base, path) {
   return response.json();
 }
 
+export const EVENT_PAGE_SIZE = 1_000;
+export const MAX_EVENT_COUNT = 100_000;
+
+/**
+ * Loads the task event log through the bounded Host cursor API. The event log
+ * is expected to be immutable and contiguous while this assertion runs;
+ * rejecting any cursor anomaly keeps closure checks from evaluating a partial
+ * or reordered log.
+ */
+export async function loadTaskEvents(base, taskId, {
+  fetchImpl = globalThis.fetch,
+  pageSize = EVENT_PAGE_SIZE,
+  maxEvents = MAX_EVENT_COUNT,
+} = {}) {
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > EVENT_PAGE_SIZE) {
+    throw new RangeError(`event page size must be an integer between 1 and ${EVENT_PAGE_SIZE}`);
+  }
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < 1) {
+    throw new RangeError("maximum event count must be a positive safe integer");
+  }
+
+  const events = [];
+  const seenSequences = new Set();
+  let afterSequence = 0;
+  for (let pageNumber = 1; ; pageNumber += 1) {
+    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/events?after_sequence=${afterSequence}&limit=${pageSize}`;
+    const response = await fetchImpl(`${base}${path}`);
+    if (!response.ok) throw new Error(`GET ${path} failed: HTTP ${response.status}`);
+    const body = await response.json();
+    const pageEvents = body?.events;
+    if (!Array.isArray(pageEvents)) throw new TypeError(`GET ${path} returned an invalid events page`);
+    if (pageEvents.length > pageSize) {
+      throw new Error(`GET ${path} returned ${pageEvents.length} events for limit ${pageSize}`);
+    }
+
+    for (const [index, event] of pageEvents.entries()) {
+      if (event === null || typeof event !== "object") {
+        throw new TypeError(`event page ${pageNumber} event ${index + 1} is not an object`);
+      }
+      if (event.task_id !== taskId) {
+        throw new Error(`event page ${pageNumber} event ${index + 1} has task_id ${event.task_id}; expected ${taskId}`);
+      }
+      if (!Number.isSafeInteger(event.sequence) || event.sequence <= 0) {
+        throw new Error(`event page ${pageNumber} event ${index + 1} has invalid sequence ${event.sequence}`);
+      }
+    }
+    if (events.length + pageEvents.length > maxEvents) {
+      throw new Error(`maximum event count of ${maxEvents} exceeded`);
+    }
+    if (pageEvents.length === 0) return events;
+
+    const nextSequence = pageEvents.at(-1).sequence;
+    if (pageEvents.length === pageSize && nextSequence <= afterSequence) {
+      throw new Error(`full event page did not advance cursor beyond ${afterSequence}`);
+    }
+    for (const [index, event] of pageEvents.entries()) {
+      const expectedSequence = afterSequence + index + 1;
+      if (event.sequence !== expectedSequence) {
+        throw new Error(
+          `event page ${pageNumber} event ${index + 1}: expected sequence ${expectedSequence}, ` +
+          `received ${event.sequence} after cursor ${afterSequence}`,
+        );
+      }
+      if (seenSequences.has(event.sequence)) {
+        throw new Error(`event page ${pageNumber} contains duplicate sequence ${event.sequence}`);
+      }
+      seenSequences.add(event.sequence);
+      events.push(event);
+    }
+    afterSequence = nextSequence;
+    if (pageEvents.length < pageSize) return events;
+  }
+}
+
 async function getBytes(base, path) {
   const response = await fetch(`${base}${path}`);
   if (!response.ok) throw new Error(`GET ${path} failed: HTTP ${response.status}`);
@@ -84,8 +158,9 @@ function parseCsv(text) {
   return rows.slice(1).map((row) => Object.fromEntries(header.map((name, index) => [name, row[index] ?? ""])));
 }
 
-const options = args(process.argv.slice(2));
-const result = JSON.parse(readFileSync(resolve(options.resultFile), "utf8"));
+async function main() {
+  const options = args(process.argv.slice(2));
+  const result = JSON.parse(readFileSync(resolve(options.resultFile), "utf8"));
 const baseUrl = options.baseUrl ?? result.base_url ?? "http://127.0.0.1:5173";
 
 // -- 1. Commit and frozen-context hashes must match the CURRENT frozen files.
@@ -164,7 +239,7 @@ if (accepted === null || accepted === undefined) {
 // -- 4. Event evidence: one publication, resolved acceptance review, and
 // current-task carrier acquisitions for every frozen PMCID.
 const events = liveTask
-  ? (await getJson(baseUrl, `/api/v1/tasks/${taskId}/events?limit=100000`)).events ?? []
+  ? await loadTaskEvents(baseUrl, taskId)
   : [];
 const publicationsCreated = events.filter((event) => event.payload.type === "publication_created");
 if (liveTask && publicationsCreated.length !== 1) {
@@ -290,4 +365,9 @@ if (rejections.length > 0) {
   console.error(`[gold-v1] run ${taskId} rejected with ${rejections.length} problem(s)`);
   process.exit(1);
 }
-console.log(`[gold-v1] run ${taskId} (commit ${currentCommit}) passes current-commit Gold6 closure assertions`);
+  console.log(`[gold-v1] run ${taskId} (commit ${currentCommit}) passes current-commit Gold6 closure assertions`);
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

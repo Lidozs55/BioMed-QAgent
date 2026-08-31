@@ -3,8 +3,8 @@
  * task 5). Consumes ONLY task-owned SourceAsset registrations (paper full-text
  * XML, paper PDF, supplementary carriers), extracts candidate paper /
  * experiment / activity / series / point evidence with the configured visual
- * model, and registers ONE content-addressed JSON carrier under the task
- * ``source_assets`` root through the task ``SourceAssetRegistry``.
+ * model, and registers content-addressed JSON carriers under the task
+ * ``source_assets`` root as committed Core-derived assets.
  *
  * Trust boundary: the Dataset Core remains the only component that parses,
  * validates, assembles, assesses, and publishes. VLM output here is candidate
@@ -18,7 +18,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { HILSubject, JsonValue, SourceLocatorV2 } from "@biomed/contracts";
+import type {
+  HILSubject,
+  JsonValue,
+  OperationResultManifest,
+  SourceAssetRegistrationReceipt,
+  SourceLocatorV2,
+} from "@biomed/contracts";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 import type { CoreResolvedRegisteredAsset } from "../../dataset/adapters/registered/types.js";
@@ -51,7 +57,6 @@ import {
 import { parseMeasurementRelation } from "../../dataset/schema/common/index.js";
 import { MAX_XML_CARRIER_BYTES } from "../../dataset/runtime/provider-limits.js";
 import { PublicHttpClient } from "../../external/network/http-client.js";
-import type { SourceAssetRegistrationReceipt } from "@biomed/contracts";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { parseVlmJsonObject, ChartExtractionError } from "./chart-json.js";
 import type { PdfPageRaster } from "./pdf-images.js";
@@ -60,8 +65,8 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.1.0";
-export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.2.0";
+export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v3";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
@@ -177,7 +182,7 @@ export interface RegisteredPaperChartEvidenceResult {
    * Present only after the evidence-bound review resolved with accept or
    * correct: the review-closed publication carrier (second content-addressed
    * registration) whose rows pass the publication-stage review gate and which
-   * carries Core acquisition provenance for dynamic-route binding. The
+   * carries committed Core-derived provenance for dynamic-route binding. The
    * candidate carrier keeps its pending rows and is never bound for publication.
    */
   reviewed_carrier?: RegisteredPaperChartCarrierSummary;
@@ -471,8 +476,193 @@ interface PageExtraction {
   providerModel: string | null;
 }
 
+const MAX_WARNING_LENGTH = 320;
+const MAX_RETRY_DEFICITS = 4;
+const DOSE_RESPONSE_TERMS = /\b(?:dose|concentration|conc\.?|ic50|ec50|ki|inhibition|inhibitor|ligand|compound|drug|response)\b/i;
+
+function finiteNumericToken(value: string): boolean {
+  return value.trim() !== "" && Number.isFinite(Number(value));
+}
+
+function hasClearSeriesEvidence(series: ParsedSeriesCandidate): boolean {
+  return series.axis_validation_status === "clear"
+    && series.legend_validation_status === "clear"
+    && series.figure_id !== null
+    && series.bbox !== null
+    && series.x_axis_name !== PAPER_ID_ABSENT
+    && series.y_axis_name !== PAPER_ID_ABSENT
+    && series.x_axis_unit !== null
+    && series.y_axis_unit !== null
+    && series.legend_text !== null;
+}
+
+function isDoseResponseCandidate(
+  series: ParsedSeriesCandidate,
+  response: RegisteredPaperChartResponse,
+): boolean {
+  const labels = [
+    series.series_label,
+    series.x_axis_name,
+    series.y_axis_name,
+    series.legend_text ?? "",
+  ].join(" ");
+  if (DOSE_RESPONSE_TERMS.test(labels)) return true;
+  return response.activities.some((activity) => /^(?:IC50|EC50|Ki)$/i.test(activity.activity_type.trim()));
+}
+
+function hasUsablePointCandidate(
+  response: RegisteredPaperChartResponse,
+  series: ParsedSeriesCandidate,
+): boolean {
+  const activityKeys = new Set(response.activities.map((activity) => activity.activity_key));
+  return response.points.some((point) =>
+    point.series_key === series.series_key
+      && activityKeys.has(point.activity_key)
+      && point.bbox !== null
+      && point.extraction_confidence !== null
+      && point.confidence_reason !== null
+      && finiteNumericToken(point.x_value)
+      && finiteNumericToken(point.y_value),
+  );
+}
+
+function retryDeficits(response: RegisteredPaperChartResponse): string[] {
+  const candidates = response.series.filter((series) =>
+    hasClearSeriesEvidence(series) && isDoseResponseCandidate(series, response),
+  );
+  const deficits: string[] = [];
+  for (const series of candidates) {
+    if (hasUsablePointCandidate(response, series)) continue;
+    const seriesPoints = response.points.filter((point) => point.series_key === series.series_key);
+    deficits.push(seriesPoints.length === 0
+      ? `series ${series.series_key}: no usable chart points were returned`
+      : `series ${series.series_key}: point candidates failed finite-coordinate, locator, confidence, or activity-reference validation`);
+  }
+  return deficits.slice(0, MAX_RETRY_DEFICITS);
+}
+
+function retryPrompt(deficits: readonly string[]): string {
+  const boundedDeficits = deficits.slice(0, MAX_RETRY_DEFICITS);
+  return `${REGISTERED_PAPER_CHART_PROMPT}
+
+Corrective retry on the same rendered page. Validation deficits only:
+${boundedDeficits.map((deficit) => `- ${deficit}`).join("\n")}
+
+Re-check the image and return the complete JSON object required above. Recover
+only values visibly supported by this page. Do not guess, infer, interpolate,
+or fabricate coordinates, units, protein identity, figure identity, axis or
+legend semantics, or any other field. If a value remains unclear, leave it
+empty and mark the relevant series unclear; do not emit a point.`;
+}
+
+function warningDetail(error: unknown): string {
+  const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  if (detail.length <= MAX_WARNING_LENGTH) return detail;
+  return `${detail.slice(0, MAX_WARNING_LENGTH - 3)}...`;
+}
+
+function pageWarning(pageNumber: number, code: string, detail: string): string {
+  return `page ${pageNumber} code=${code} detail=${warningDetail(detail)}`;
+}
+
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function registerDerivedJsonAsset(options: {
+  taskRoot: string;
+  sourceAssetRegistry: SourceAssetRegistry;
+  sourceId: string;
+  relativePath: string;
+  role: "source" | "carrier";
+  bytes: Buffer;
+  parentAssetIds: readonly string[];
+  requirementId: string;
+  stage: "candidate" | "review_evidence" | "reviewed";
+  parametersDigest: string;
+  evidence: JsonValue;
+}): Promise<SourceAssetRegistrationReceipt> {
+  const parentClosures = await Promise.all(options.parentAssetIds.map((assetId) =>
+    options.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId)));
+  const upstreamResultIds = [...new Set(parentClosures.flatMap((closure) =>
+    closure.flatMap((item) => "operation_result_id" in item ? [item.operation_result_id] : [])))];
+  const outputDigest = sha256(options.bytes);
+  const implementationDigest = sha256(Buffer.from(
+    `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+    "utf8",
+  ));
+  const operationResultId = `result_chart_${sha256(Buffer.from(JSON.stringify({
+    requirement_id: options.requirementId,
+    parent_asset_ids: options.parentAssetIds,
+    parameter_digest: options.parametersDigest,
+    output_digest: outputDigest,
+  }), "utf8")).slice(0, 32)}`;
+  const finalPath = path.join(options.taskRoot, ...options.relativePath.split("/"));
+  await mkdir(path.dirname(finalPath), { recursive: true });
+  const tempPath = `${finalPath}.${process.pid}.tmp`;
+  await writeFile(tempPath, options.bytes);
+  await rename(tempPath, finalPath);
+  const registered = await options.sourceAssetRegistry.registerDerived({
+    sourceId: options.sourceId,
+    relativePath: options.relativePath,
+    role: options.role,
+    mediaType: "application/json",
+    parentAssetIds: options.parentAssetIds,
+    operationKind: "vlm_extraction",
+    operationResultId,
+    implementationId: REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
+    implementationVersion: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
+    parametersDigest: options.parametersDigest,
+    evidence: options.evidence,
+  });
+  if (
+    registered.receipt.sha256 !== outputDigest
+    || registered.receipt.size_bytes !== options.bytes.length
+  ) {
+    throw new ChartExtractionError(
+      `derived ${options.stage} carrier registration did not bind the written bytes`,
+    );
+  }
+  const operationResult: OperationResultManifest = {
+    schema_version: "1.0",
+    result_manifest_id: operationResultId,
+    task_id: registered.receipt.task_id,
+    run_id: "core",
+    requirement_id: options.requirementId,
+    operation_id: operationResultId,
+    operation_kind: "derive",
+    operation_attempt_id: `attempt_${operationResultId}`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: sha256(Buffer.from(options.parentAssetIds.join("\u0000"), "utf8")),
+    parameter_digest: options.parametersDigest,
+    implementation_digest: implementationDigest,
+    output_digest: outputDigest,
+    output_kind: "derived_evidence",
+    output_summary: {
+      stage: options.stage,
+      asset_id: registered.receipt.asset_ref.asset_id,
+      sha256: outputDigest,
+    },
+    output_files: [{
+      relative_path: registered.receipt.relative_path,
+      size_bytes: registered.receipt.size_bytes,
+      sha256: registered.receipt.sha256,
+    }],
+    dependency_closure: {
+      input_asset_ids: [...options.parentAssetIds],
+      upstream_result_manifest_ids: upstreamResultIds,
+      parameter_digest: options.parametersDigest,
+      implementation_digest: implementationDigest,
+    },
+    commit: {
+      state: "committed",
+      commit_id: `commit_${operationResultId}`,
+      committed_at: registered.provenance.created_at,
+    },
+  };
+  await options.sourceAssetRegistry.recordDerivedOperationResult(operationResult);
+  return registered.receipt;
 }
 
 function requireAssetId(value: unknown, field: string): string {
@@ -856,11 +1046,18 @@ export async function extractRegisteredPaperChartEvidence(
     assertSupplementaryMediaType(asset.receipt);
     supplements.push(asset);
   }
-  const registeredIds = new Set([
-    xmlAssetId,
-    pdfAssetId,
-    ...supplementIds,
-  ]);
+  const formalParentAssetIds = [xmlAssetId, pdfAssetId, ...supplementIds];
+  for (const assetId of formalParentAssetIds) {
+    try {
+      await deps.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId);
+    } catch (error) {
+      throw new ChartExtractionError(
+        `source asset ${assetId} lacks formal Core provenance: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  const registeredIds = new Set(formalParentAssetIds);
 
   // -- 3. Authoritative metadata + complete page raster extraction. The
   // registered JATS XML, not a visual-model repetition, owns paper metadata.
@@ -882,7 +1079,9 @@ export async function extractRegisteredPaperChartEvidence(
     );
   }
 
-  // -- 4. Resolve the visual model live, then run one VLM call per page.
+  // -- 4. Resolve the visual model live, then run one initial call per page.
+  // A page-local schema/point deficit gets at most one corrective retry; a
+  // failed page is recorded and omitted so valid sibling pages can proceed.
   const config = await deps.resolveVlmConfig();
   const client = deps.vlmClientFactory !== undefined
     ? deps.vlmClientFactory(config)
@@ -893,31 +1092,89 @@ export async function extractRegisteredPaperChartEvidence(
   } catch {
     fail("resolved VLM base URL is invalid");
   }
-  const pages: PageExtraction[] = [];
-  for (const image of pageImages.images) {
-    const imageBytes = await readFile(image.path);
-    const { content, model } = await client.callWithMeta(
-      image.path,
-      REGISTERED_PAPER_CHART_PROMPT,
-      signal,
-    );
-    pages.push({
-      pageNumber: image.pageIndex,
-      parsed: parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`),
-      inputDigest: sha256(imageBytes),
-      outputDigest: sha256(Buffer.from(content, "utf8")),
-      providerModel: model,
-    });
-  }
-  const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
-
-  // -- 5. Merge page responses into merged candidates (with page context).
   const warnings: string[] = [];
+  const pageFailures: string[] = [];
   if (pageImages.skippedPages > 0) {
     warnings.push(
       `${pageImages.skippedPages} additional PDF page candidate(s) were not rendered because of the page cap`,
     );
   }
+  const pages: PageExtraction[] = [];
+  for (const image of pageImages.images) {
+    const imageBytes = await readFile(image.path);
+    const inputDigest = sha256(imageBytes);
+    let parsed: RegisteredPaperChartResponse | null = null;
+    let deficits: string[] = [];
+
+    const response = await client.callWithMeta(
+      image.path,
+      REGISTERED_PAPER_CHART_PROMPT,
+      signal,
+    );
+    let content = response.content;
+    let providerModel = response.model;
+    try {
+      parsed = parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`);
+    } catch (error) {
+      deficits = [`schema validation failed: ${warningDetail(error)}`];
+      const detail = deficits[0] ?? "schema validation failed";
+      pageFailures.push(pageWarning(image.pageIndex, "schema", detail));
+      warnings.push(pageWarning(image.pageIndex, "schema", detail));
+    }
+
+    if (parsed !== null) {
+      deficits = retryDeficits(parsed);
+    }
+    if (deficits.length > 0) {
+      warnings.push(pageWarning(image.pageIndex, "retry", deficits.join("; ")));
+      try {
+        const retry = await client.callWithMeta(
+          image.path,
+          retryPrompt(deficits),
+          signal,
+        );
+        const retryParsed = parseRegisteredPaperChartResponse(
+          retry.content,
+          `page ${image.pageIndex} retry`,
+        );
+        content = retry.content;
+        providerModel = retry.model;
+        parsed = retryParsed;
+        if (retryDeficits(retryParsed).length > 0) {
+          warnings.push(pageWarning(
+            image.pageIndex,
+            "no_points",
+            "corrective retry returned no usable points; clear series will remain unclear",
+          ));
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        const detail = warningDetail(error);
+        warnings.push(pageWarning(image.pageIndex, "retry_failed", detail));
+        if (parsed === null) {
+          pageFailures.push(pageWarning(image.pageIndex, "retry_failed", detail));
+        }
+        // Keep a valid initial response when only its corrective retry failed.
+      }
+    }
+
+    if (parsed === null) {
+      const detail = "page omitted after at most one corrective response could not be validated";
+      pageFailures.push(pageWarning(image.pageIndex, "discarded", detail));
+      warnings.push(pageWarning(image.pageIndex, "discarded", detail));
+      continue;
+    }
+    pages.push({
+      pageNumber: image.pageIndex,
+      parsed,
+      inputDigest,
+      outputDigest: sha256(Buffer.from(content, "utf8")),
+      providerModel,
+    });
+  }
+  const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
+
+  // -- 5. Merge page responses into merged candidates (with page context).
   for (const page of pages) {
     if (page.parsed.paper !== null && page.parsed.paper.title !== paperMeta.title) {
       warnings.push(
@@ -957,8 +1214,18 @@ export async function extractRegisteredPaperChartEvidence(
     }
     pointCandidates.push(...page.parsed.points.map((candidate) => ({ page, candidate })));
   }
-  if (experimentCandidates.length === 0) fail("experiment_records must not be empty: no experiment candidates");
-  if (seriesCandidates.length === 0) fail("chart_series must not be empty: no series candidates");
+  if (experimentCandidates.length === 0) {
+    const failureContext = pageFailures.length === 0
+      ? ""
+      : `; page-local failures: ${pageFailures.slice(0, MAX_RETRY_DEFICITS).join("; ")}`;
+    fail(`experiment_records must not be empty: no experiment candidates${failureContext}`);
+  }
+  if (seriesCandidates.length === 0) {
+    const failureContext = pageFailures.length === 0
+      ? ""
+      : `; page-local failures: ${pageFailures.slice(0, MAX_RETRY_DEFICITS).join("; ")}`;
+    fail(`chart_series must not be empty: no series candidates${failureContext}`);
+  }
 
   // -- 6. Build the formal rows.
   const pmid = paperNamespace === "pubmed" ? paperId : PAPER_ID_ABSENT;
@@ -1344,16 +1611,34 @@ export async function extractRegisteredPaperChartEvidence(
   const bytes = Buffer.from(JSON.stringify(carrier), "utf8");
   const digest = sha256(bytes);
   const relativePath = `source_assets/paper_chart_evidence/evidence_${digest.slice(0, 12)}.json`;
-  const finalPath = path.join(deps.taskRoot, ...relativePath.split("/"));
-  await mkdir(path.dirname(finalPath), { recursive: true });
-  const tempPath = `${finalPath}.${process.pid}.tmp`;
-  await writeFile(tempPath, bytes);
-  await rename(tempPath, finalPath);
-  const receipt = await deps.sourceAssetRegistry.register({
+  const candidateParametersDigest = canonicalDigest({
+    stage: "candidate",
+    parent_asset_ids: formalParentAssetIds,
+    prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+    model_name: config.model,
+    model_version: modelVersion,
+  });
+  const receipt = await registerDerivedJsonAsset({
+    taskRoot: deps.taskRoot,
+    sourceAssetRegistry: deps.sourceAssetRegistry,
     sourceId: `paper_chart_evidence_${digest.slice(0, 12)}`,
     relativePath,
     role: "carrier",
-    mediaType: "application/json",
+    bytes,
+    parentAssetIds: formalParentAssetIds,
+    requirementId: "registered_paper_chart_candidate",
+    stage: "candidate",
+    parametersDigest: candidateParametersDigest,
+    evidence: {
+      carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
+      paper_id: paperId,
+      paper_id_namespace: paperNamespace,
+      source_asset_ids: formalParentAssetIds,
+      prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+      model_name: config.model,
+      model_version: modelVersion,
+      output_sha256: digest,
+    },
   });
 
   // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
@@ -1437,8 +1722,8 @@ export async function extractRegisteredPaperChartEvidence(
   // -- 10. Review-closed publication carrier (Gold6 T8). The candidate
   // carrier keeps its pending rows and is never bound for publication; the
   // deterministic review application derives a SECOND content-addressed
-  // carrier whose rows pass the publication-stage review gate, registered
-  // with Core acquisition provenance so the dynamic route can bind it as a
+  // carrier whose rows pass the publication-stage review gate and whose
+  // committed Core-derived provenance lets the dynamic route bind it as a
   // task-owned formal source.
   let reviewedCarrier: RegisteredPaperChartCarrierSummary | null = null;
   if (carrierReview !== null && pointRows.length > 0) {
@@ -1470,6 +1755,7 @@ export async function extractRegisteredPaperChartEvidence(
         papers: chartRows.papers,
         sources: chartRows.sources,
       },
+      candidateCarrierReceipt: receipt,
       seriesRows,
       pointRows,
       derivedActivityIds,
@@ -1526,14 +1812,15 @@ export async function extractRegisteredPaperChartEvidence(
  * every estimate with review provenance, correct preserves the original
  * values and appends a ``human_correction`` transform step, and the resulting
  * rows must pass the strict publication-stage chart gate before the reviewed
- * carrier is registered. The reviewed carrier carries Core acquisition
- * provenance (provider ``registered_paper_chart_extraction.v1``) so a dynamic
- * submission can bind it exactly like any other Core-acquired carrier.
+ * carrier is registered. The reviewed carrier is Core-derived from the
+ * candidate and byte-bound review evidence so dynamic submission can resolve
+ * it without disguising model output as provider acquisition.
  */
 async function registerReviewedPublicationCarrier(options: {
   taskRoot: string;
   retrievedAt: string;
   candidateCarrier: Record<string, unknown>;
+  candidateCarrierReceipt: SourceAssetRegistrationReceipt;
   seriesRows: ChartSeriesInput[];
   pointRows: ChartPointInput[];
   derivedActivityIds: ReadonlySet<string>;
@@ -1653,6 +1940,46 @@ async function registerReviewedPublicationCarrier(options: {
     );
   }
 
+  const reviewEvidence = {
+    schema_version: "1.0",
+    evidence_kind: "registered_paper_chart_review",
+    candidate_carrier: {
+      asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      sha256: options.candidateCarrierReceipt.sha256,
+      relative_path: options.candidateCarrierReceipt.relative_path,
+    },
+    review,
+  };
+  const reviewEvidenceBytes = Buffer.from(JSON.stringify(reviewEvidence), "utf8");
+  const reviewEvidenceDigest = sha256(reviewEvidenceBytes);
+  const reviewEvidenceParametersDigest = canonicalDigest({
+    stage: "review_evidence",
+    candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+    request_id: review.request_id,
+    review_id: review.review_id,
+    evidence_digest: review.evidence_digest,
+    action: review.action,
+  });
+  const reviewEvidenceReceipt = await registerDerivedJsonAsset({
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
+    sourceId: `paper_chart_review_${reviewEvidenceDigest.slice(0, 12)}`,
+    relativePath: `source_assets/paper_chart_evidence/review_${reviewEvidenceDigest.slice(0, 12)}.json`,
+    role: "source",
+    bytes: reviewEvidenceBytes,
+    parentAssetIds: [options.candidateCarrierReceipt.asset_ref.asset_id],
+    requirementId: "registered_paper_chart_review_evidence",
+    stage: "review_evidence",
+    parametersDigest: reviewEvidenceParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      review_id: review.review_id,
+      request_id: review.request_id,
+      review_evidence_digest: review.evidence_digest,
+      output_sha256: reviewEvidenceDigest,
+    },
+  });
+
   const reviewedCarrier = {
     ...options.candidateCarrier,
     chart_points: reviewedPoints,
@@ -1660,37 +1987,34 @@ async function registerReviewedPublicationCarrier(options: {
   const reviewedBytes = Buffer.from(JSON.stringify(reviewedCarrier), "utf8");
   const reviewedDigest = sha256(reviewedBytes);
   const reviewedRelativePath = `source_assets/paper_chart_evidence/reviewed_${reviewedDigest.slice(0, 12)}.json`;
-  const reviewedFinalPath = path.join(options.taskRoot, ...reviewedRelativePath.split("/"));
-  await mkdir(path.dirname(reviewedFinalPath), { recursive: true });
-  const reviewedTempPath = `${reviewedFinalPath}.${process.pid}.tmp`;
-  await writeFile(reviewedTempPath, reviewedBytes);
-  await rename(reviewedTempPath, reviewedFinalPath);
-  const reviewedReceipt = await options.sourceAssetRegistry.register({
+  const reviewedParametersDigest = canonicalDigest({
+    stage: "reviewed",
+    candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+    review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
+    review_id: review.review_id,
+    review_action: review.action,
+  });
+  const reviewedReceipt = await registerDerivedJsonAsset({
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
     sourceId: `paper_chart_evidence_reviewed_${reviewedDigest.slice(0, 12)}`,
     relativePath: reviewedRelativePath,
     role: "carrier",
-    mediaType: "application/json",
-  });
-  // Dynamic-route binding resolves carriers through the Core acquisition
-  // provenance ledger; the governed extraction records its own deterministic
-  // identity so the review-closed carrier is a first-class formal source.
-  const implementationDigest = sha256(Buffer.from(
-    `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
-    "utf8",
-  ));
-  const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
-    carrier_asset_id: reviewedReceipt.asset_ref.asset_id,
-    review_id: review.review_id,
-    review_action: review.action,
-  }), "utf8"));
-  await options.sourceAssetRegistry.registerCoreAcquisitionProvenance(reviewedReceipt, {
-    provider_id: "registered_paper_chart_extraction.v1",
-    implementation_digest: implementationDigest,
-    request_identity_digest: requestIdentityDigest,
-    canonical_accession: typeof options.candidateCarrier.paper_id === "string"
-      ? options.candidateCarrier.paper_id
-      : null,
-    provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+    bytes: reviewedBytes,
+    parentAssetIds: [
+      options.candidateCarrierReceipt.asset_ref.asset_id,
+      reviewEvidenceReceipt.asset_ref.asset_id,
+    ],
+    requirementId: "registered_paper_chart_reviewed",
+    stage: "reviewed",
+    parametersDigest: reviewedParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
+      review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
+      review_id: review.review_id,
+      review_action: review.action,
+      output_sha256: reviewedDigest,
+    },
   });
   return {
     asset_id: reviewedReceipt.asset_ref.asset_id,
