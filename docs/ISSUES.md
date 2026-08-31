@@ -18,6 +18,7 @@
 - **已修复：** 六表 profile/E2E、dynamic source entries、receipt-only submit、prepare receipt 的 task-owned 重启恢复、运行时 locator admission、SourceLocator wire 指导、Host health/监督器 commit 精确核验，以及已知 429/503/流中断恢复。
 - **仍阻塞：** provider 长时间 429/503、VLM 轴估算假精度、SourceLocator live exact-match 尚未成功、credential HIL 重复、turn 预算与来源重复探索；修复后的 fresh live run 尚未形成 Publication。
 - **证据与下一步：** 见 [`reports/2026-08-30-gold6-live-analysis.md`](reports/2026-08-30-gold6-live-analysis.md)。在真实 `publication_acceptance`、B3、Manifest 和 Artifact API hash 闭环前不得标记 Gold6 通过。
+- **2026-08-31 fresh rerun（`fa5b3356`）：** 原 `gpt-5.6-terra`（task `task_ts_c4e0fea8-6bca-4079-88e0-d262456d64a6`）与经用户授权临时切换的 `gpt-5.6-terra-openai-compact`（task `task_ts_b7c130ed-4894-4b9b-970e-3b858066f276`）均在首轮连续 7 次收到 `502 upstream_error: Upstream access forbidden`，总 token 为 0、零工具调用、零 HIL、零 Publication；两轮 expected/observed commit 均精确等于 `fa5b3356eb62aadf52a7a4a98daa13788fa54eb7`，监督证据分别位于 ignored 目录 `data/gold/evidence/gold6-20260831-fa5b3356-01` 与 `data/gold/evidence/gold6-20260831-fa5b3356-compact-02`。同 provider 的 `/models` discovery 可用，但 completion 被统一拒绝，故继续枚举同 provider 模型没有信息增益；需 provider 管理员恢复 completion 权限或配置另一可用 provider 后再 fresh run。compact 临时模型记录已删除，活动/视觉角色已恢复原 Terra。
 
 ### gold7 trait association 请求没有形成正式 publication
 
