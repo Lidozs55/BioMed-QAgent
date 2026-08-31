@@ -8,10 +8,10 @@
 
 1. **Execution honesty**：backend/receipt 固定声明 `in_process_unisolated`；`node:vm` 只用于同步 timeout，不得称为 sandbox、isolation 或 security boundary。
 2. **Explicit opt-in**：只有 `submit_dynamic_family_publication` 的 exact `execution_backend=in_process_unisolated` 可进入动态fixed slot；不能静默fallback或从static build自动切换。
-3. **Registered immutable input**：正式输入必须闭合到当前task的registered SourceAsset/committed OperationResult receipt；按handle/order/owner/size/SHA-256重验。workspace path和discovery bytes不是carrier。
+3. **Registered immutable input**：正式来源闭包必须闭合到当前 task 的 registered SourceAsset/committed OperationResult receipt。`transform_input` 按 handle/order/owner/size/SHA-256 重验并且只有它能进入 Transform Host；显式 `provenance_only` binding 同样逐字节和递归来源重验，但只进入 Core provenance/dependency closure，绝不暴露给 transform，也不放宽 UTF-8/gzip-UTF-8 runtime input 约束。workspace path 和 discovery bytes 不是 carrier；binding kind 不得按媒体类型猜测。
 4. **Compile/descriptor closure**：normalized source、emitted bundle、compiler/options、dependency/runtime/policy、FamilySpec、Projection和declared output digests必须在执行前精确闭合。
 5. **Host receipt != Core trust**：runtime bytes必须进入私有quarantine，Core重hash、closed-world admission并创建native OperationResult；不能直接成为candidate/publication。
-6. **Publication authority**：只有Core创建PublicationCandidate、B3结果、ProductAssessment和Publication。Agent/Transform/FamilySpec/workspace不能直接publish。
+6. **Publication authority**：只有 Core 创建 PublicationCandidate、B3 结果、ProductAssessment 和 Publication。Agent/Transform/FamilySpec/workspace 不能直接 publish。只有 committed candidate 命中显式 typed 产品拒绝（literature semantic profile、最终 B3/ProductAssessment 不可发布或 `publication_acceptance` 人工 reject/skip）时，Host 才可将重读、重算 hash 的候选表复制到 task-level untrusted quarantine；该 fallback 必须保持 formal rejection，不能创建正式事件、`current_publication_id` 或 Artifact。
 7. **Conservative semantics**：FamilySpec没有科学field type时只生成`dynamic_string_preserving.v1`；不得推断numeric/unit/ontology/domain语义。
 8. **Provenance closure**：每个table必须有disjoint data/provenance/confidence refs，并闭合到registered assets和native OperationResults。
 9. **HIL fail closed**：含`review_status`/`human_review_status`字段，或含`confidence`/`confidence_level`/`extraction_confidence`抽取置信度字段的动态产品（字段分隔符`_`/`-`等价），必须保持`human_review_pending`，直到Core在B3后创建、候选/assessment/table字节证据绑定的`publication_acceptance` HIL并收到matching `accept`；credential `approve`不能满足此门。accepted review identity/snapshot必须进入immutable assessment/provenance。当前动态publication HIL支持同一live process内suspend/resume；跨Host重启的deterministic dynamic continuation尚未完成，重启场景必须fail closed，不能声称自动恢复。
@@ -46,6 +46,19 @@ registered immutable source receipts
   -> atomic immutable Publication
   -> Artifact API download + SHA-256 verification
 ```
+
+若 committed candidate 命中显式 typed 产品拒绝（literature semantic profile、最终
+B3/ProductAssessment 不可发布，或 `publication_acceptance` 人工 reject/skip），可走单向旁路：
+
+```text
+committed candidate bytes
+  -> canonical path + size/SHA-256 re-verification
+  -> task quarantine ua_* receipts (authoritative=false, trust=untrusted)
+  -> Assets UI 的“未准入”分组
+```
+
+该旁路不是第二套 Publisher；未知异常以及控制、资源、I/O 或完整性失败（cancel、timeout、
+stale generation、fence loss、身份错配、路径越界、摘要漂移）不得降级归档。
 
 receipt-only submit（`submit_dynamic_family_publication` 只回传 `preflight_receipt`）
 依赖 Host 进程内 preflight coordinator 保存的 prepared submission

@@ -200,6 +200,21 @@ the member and parent ZIP; parser failures remain failed OperationResults and do
 not become formal inputs. Agent shell, Python and `tar` extraction are outside
 this path.
 
+A binary PDF/image member needed to prove supplementary coverage may be bound as
+explicit `provenance_only`. Core still verifies its exact bytes, committed derive
+receipt and recursive parent closure, and includes it in the candidate dependency
+closure. It is not a Transform Host input and therefore is never decoded as UTF-8
+or exposed through `inputs[]`. Text/parser/VLM evidence consumed by transform stays
+an explicit `transform_input`; media type never chooses the binding kind implicitly.
+
+If a committed candidate later reaches an explicitly typed product rejection
+(literature semantic profile, final B3/ProductAssessment non-publishable, or a
+`publication_acceptance` reject/skip), its re-hashed table bytes may be copied
+into task-level untrusted quarantine for inspection. Unknown errors and control,
+resource, I/O or integrity failures are never eligible. This preserves usable
+partial work but does not alter ProductAssessment, `current_publication_id`, formal
+Artifact projections or the Gold pass condition.
+
 ## Compatibility
 
 Existing family schemas and four-table projections remain valid compatibility
