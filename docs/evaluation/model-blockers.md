@@ -168,6 +168,17 @@
 - **正样本**：6 次 execute 失败每次只修一个具体输入事实（"Fixing only that fact"，对照 gold1-r1 的乱猜参数是质变）；拒绝臆造 VCV/NCT/asset；终答逐 blocker 标注路由判定+归因+求助清单，且明确区分"失败事实 vs 范围决策"。
 - 行为形态变化（三案对比）：gold1-r1=乱撞墙后幻觉时限放弃；gold1-r3=成功但发布后无界复核（79% token）；gold3=**未撞墙但提前收手**（工具在手不用）。C2 与 E3/E4 是两个方向的极端，提示词需要同时含"发布后收敛界"与"上交前穷尽界"。
 
+## gold3-r2 @ qwen3.8-flash（2026-08-31，main@d50dc190ee60，**规范版复测**，task_ts_31a55800-ac0c-40a5-b137-6d3b9e2bada8）
+
+> 规范流程：TOPIC 原文、1M 上下文、supervisor 全程挂账（本次无 500，journal 642 全量 + closure 自动产出，artifact 下载合计 ~28KB 无大文件问题）。**36 calls / 1.47M token / ~6 分钟**（上案 20 calls/0.78M 但只发 1 表）。终态 **succeeded_publication ×2**（上案 1/5，本案 2/5）：`pub_egfr-target-identity_…` + **`pub_egfr-structures_ec15d414651cd857`（PDB 2ITY 等复合物正式发表——上案宣称"PDB 需逐 ID 动态绑定、超合理轮次"而零尝试的那一类）**。
+
+**复验结论**：
+1. **上案 E3（发现工具全激活零调用）已修复**：`search_uniprot`/`search_pdb`/`lookup_dbsnp`/`lookup_clinvar_counts` 本 run 全部实际使用——`[System briefing]` 穷尽界条款活体生效。
+2. **上案 E4 的"想象复杂度"拿到反向证据**：PDB structures 走**静态 execute 即成功**（protein_structure 族），全程 0 次 prepare/submit。上案"动态绑定超出合理轮次"的判断不成立——路由认知错误，条目转正样本素材（briefing 生效后此类错误在本 run 未现）。
+3. **N1（新框架卡点，比 E1/E2 定位更准）**：ClinVar/ClinicalTrials 的 fixed provider **契约自相矛盾**——先报 `does not accept binding parameters; this is a fixed provider`，按注册源路径走又报 `ClinVar /result/uids must be a non-empty array`（ClinicalTrials 同款 `/studies must be a non-empty array`）。**没有哪种输入形态能同时满足两条** → 这两个 live 源从 agent 侧结构不可绑定（上案 E1/E2"缺发现工具"的表述可收窄为"fixed provider 参数契约死锁"）。
+4. **行为面成熟**：发现数据（ClinVar 4181/251、rs121434568 L858R、4WKQ/4I22/3UG2）全部标注"discovery only，never fabricated into rows"；drug-info 拒绝手编动态语义（信任规则引用准确）；COSMIC 边界一致；无 provisional（理由：可发的已发，未发的 blocker 真实）。
+5. execute×12 中 10 错为第二/三表参数迭代（每次错误形态不同，无同签名循环）；`lookup_clinvar_counts` 单次成功。
+
 ## gold4 @ qwen3.8-flash（2026-08-30，main@0b534ce30d5a，task_ts_7d6e45c2-e136-4cbf-80f5-4d32cc06d1f5）
 
 > 身份断言通过。**首次跑前安装 Playwright Chromium**（D1-④/E2 环境项消除；本 run 未依赖浏览器通道）。终态 **succeeded_publication ×2（2/4 交付）**：`pub_sarscov2-spike-ace2-structures_ef36631509d5bf32`（4 PDB 载体：6M0J/6LZG/6XM5/7JWY，含链/配体/pH 实验条件）+ `pub_sarscov2-spike-ace2-targets_edb3ace3986bf001`（Q9BYF1+P0DTC2），各 7 artifacts，走静态族路线。
