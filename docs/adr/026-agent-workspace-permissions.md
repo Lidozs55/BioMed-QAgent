@@ -97,8 +97,8 @@ policy:     allow | ask | deny
   Restricted additionally invalidates ALL pending requests host-wide
   (broker registry) so stale approval cards are settled immediately.
 - Round-3 audit (sensitive scope): `sensitive` is its own ResourceScope for
-  `.env*` (except the committed `.env.example` template), `*.key`/`*.pem`/
-  `*.p12`/`*.pfx`, `credentials.json` and `secrets.json` anywhere outside
+  every `.env*` file, `*.key`/`*.pem`/`*.p12`/`*.pfx`, `credentials.json` and
+  `secrets.json` anywhere outside
   the framework control plane and the current task's own workspace/output.
   An ordinary project/external grant can never cover them: the default
   policy is read=ask, write/edit=deny (Restricted denies all; Full Access

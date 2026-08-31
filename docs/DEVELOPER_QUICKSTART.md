@@ -27,21 +27,15 @@ git --version
 ```bash
 git clone <repository-url>
 cd BioMedQAgent
-copy .env.example .env       # Windows
-# cp .env.example .env       # POSIX
 ```
 
-编辑 `.env`，至少提供一个可用模型的 key：
+模型与 API key 不再从环境变量自动引导。首次启动后打开页面右上角 **设置 → 模型**：
 
-```dotenv
-DASHSCOPE_API_KEY=your-api-key
-DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-MODEL_NAME=qwen3.7-plus
-HOST=127.0.0.1
-PORT=5173
-```
+1. 添加 OpenAI-compatible Provider 并保存 API key；
+2. 添加并激活主模型；
+3. Gold6 等图形任务还要选择具备图像能力的视觉模型。
 
-Pi 可用 `PI_PROVIDER`、`PI_MODEL`、`PI_API_KEY`、`PI_BASE_URL` 单独覆盖。使用 NCBI E-utilities 时还要配置有效的 `NCBI_EMAIL` 和 `NCBI_TOOL`。其余并发、分页、日志和路径选项以 [`.env.example`](../.env.example) 为准，不在本文复制完整清单。
+设置分别持久化到本机 `data/settings/model-registry.json` 和权限收紧的 `data/settings/model-auth.json`；后者只掩码返回，禁止提交或输出原始 key。根 `.env` 是可选的 Host/部署覆盖入口，例如 `HOST`、`PORT`、`SHUTDOWN_TIMEOUT_MS`、`BIOMED_PYTHON_BIN`，但不再是模型凭据或模型选择来源。使用 Commonly 或需要外部工具身份时，可按相应脚本文档在本地 `.env` 中设置其专用变量。
 
 ## 3. 安装依赖
 
@@ -134,7 +128,7 @@ workspace 外的文件和命令访问经过 `allow / ask / deny`。即使用户�
 
 ### 应用提示模型 key 缺失
 
-确认 `.env` 位于仓库根，变量名与 provider 对应，并重启 Host。不要把 key 粘贴进日志、截图或 issue。
+打开 **设置 → 模型**，确认 Provider 已保存 API key、主模型已激活；视觉任务还要确认视觉模型已选择且声明图像能力。不要把 key 粘贴进日志、截图或 issue。
 
 ### 页面正常但 API/WS 失败
 

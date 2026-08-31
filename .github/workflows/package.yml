@@ -112,7 +112,6 @@ jobs:
           # （server 行写法不同：目标 staging/server/src 尚不存在，直接复制即可。）
           cp -r frontend/. staging/frontend/
           rm -rf staging/frontend/node_modules
-          cp .env.example staging/
 
       - name: Create archive
         run: |
@@ -186,7 +185,7 @@ jobs:
           trap cleanup EXIT
 
           pnpm --filter @biomed/server run prestart
-          node --env-file-if-exists=.env server/dist/index.js --static > start.log 2>&1 &
+          node server/dist/index.js --static > start.log 2>&1 &
           host_pid=$!
           base_url=""
           for i in $(seq 1 60); do
@@ -212,7 +211,7 @@ jobs:
           wait "$host_pid" || true
           host_pid=""
 
-          node --env-file-if-exists=.env server/dist/index.js --static > restart.log 2>&1 &
+          node server/dist/index.js --static > restart.log 2>&1 &
           host_pid=$!
           restarted_url=""
           for i in $(seq 1 60); do

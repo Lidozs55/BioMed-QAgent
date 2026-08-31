@@ -1014,9 +1014,9 @@ describe("round-3 audit: sensitive scope", () => {
       expect((await classify(path.join(repositoryRoot, name), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
         .toBe("sensitive");
     }
-    // .env.example is a committed template; package.json is ordinary project.
+    // There is no readable template exception: every .env* file is sensitive.
     expect((await classify(path.join(repositoryRoot, ".env.example"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
-      .toBe("project");
+      .toBe("sensitive");
     expect((await classify(path.join(repositoryRoot, "package.json"), workspaceRoot, repositoryRoot, taskOutputRoot)).scope)
       .toBe("project");
     // The agent's OWN workspace stays workspace even for .env-named files.

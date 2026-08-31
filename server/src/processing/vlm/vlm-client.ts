@@ -5,8 +5,9 @@
  * policy + pinned DNS + redirect revalidation).
  *
  * Credentials and endpoint are supplied entirely through the injected config;
- * the default model is
- * ``qwen-vl-max`` (Python ``VL_MODEL_NAME``).
+ * the default model is ``qwen-vl-max``. Production callers inject the
+ * Settings-resolved visual-model configuration; defaults remain only for
+ * explicit fixture/degradation helpers.
  */
 
 import { readFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ import path from "node:path";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { ChartExtractionError } from "./chart-json.js";
 
-/** Visual model name (Python ``VL_MODEL_NAME``). */
+/** Visual model name used only by explicit fixture/degradation defaults. */
 export const VL_MODEL_NAME = "qwen-vl-max";
 
 /** Default DashScope OpenAI-compatible base URL. */
@@ -88,7 +89,7 @@ export function createVlmClient(
   const callWithMeta = async (imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult> => {
     if (config.apiKey.trim() === "") {
       throw new ChartExtractionError(
-        `DASHSCOPE_API_KEY (VLM credential) is missing; cannot call ${config.model}`,
+        `Visual model credential is missing; configure the visual model provider API key in Settings before calling ${config.model}`,
       );
     }
     const mime = inferMime(imagePath);

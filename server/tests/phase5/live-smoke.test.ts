@@ -6,6 +6,8 @@
  * Explicitly gated behind BIOMED_LIVE_SMOKE=1 — CI never runs these (public
  * services fail transiently); release verification runs them once and records
  * date/endpoint/results (docs/migration/phase5-external-capabilities-completion-plan.md §11.3).
+ * The VLM case reads the same persisted Settings used by the Host; it does not
+ * accept a separate model credential or model-selection environment variable.
  * Fixture parity tests are the deterministic CI gate.
  */
 
@@ -18,12 +20,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const ENABLED = process.env.BIOMED_LIVE_SMOKE === "1";
 const describeLive = ENABLED ? describe : describe.skip;
-/** VLM needs a real DashScope credential; skipped (and recorded) without one. */
-const describeVlm = ENABLED && process.env.DASHSCOPE_API_KEY ? describe : describe.skip;
 
 /** Real PNG fixture for the VLM smoke (a scanned figure from the PDF spike). */
+const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = path.resolve(TEST_DIRECTORY, "..", "..", "..");
 const VLM_FIXTURE_IMAGE = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
+  TEST_DIRECTORY,
   "fixtures", "pdf", "_spike", "scanned_extracted.png",
 );
 
@@ -32,8 +34,10 @@ let taskRoot = "";
 
 beforeAll(async () => {
   if (!ENABLED) return;
-  taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-live-"));
-  roots.push(taskRoot);
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "p5-live-"));
+  roots.push(dataRoot);
+  taskRoot = path.join(dataRoot, "output", "tasks", "live-smoke-task");
+  await mkdir(taskRoot, { recursive: true });
 });
 
 afterAll(async () => {
@@ -219,15 +223,22 @@ describeLive("live:browser", () => {
   }, 120_000);
 });
 
-describeVlm("live:vlm", () => {
-  it("reaches DashScope Qwen-VL and extracts chart data from a real image", async () => {
+describeLive("live:vlm", () => {
+  it("reaches the Settings-selected visual model and extracts chart data from a real image", async () => {
     const { createChartDataVlmTool } = await import("../../src/agent/tools/extract-chart-data-vlm.js");
+    const { ModelSettingsService } = await import("../../src/settings/model-settings.js");
+    const settingsDir = path.join(REPOSITORY_ROOT, "data", "settings");
+    const modelSettings = await ModelSettingsService.create({
+      settingsDir,
+      legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
+    });
     const figureDir = path.join(taskRoot, "source_assets", "figures");
     await mkdir(figureDir, { recursive: true });
     await copyFile(VLM_FIXTURE_IMAGE, path.join(figureDir, "chart.png"));
     const [tool] = createChartDataVlmTool({
       taskRoot,
       approvalGate: { request: async () => "approve" },
+      resolveVlmConfig: modelSettings.resolveVlmConfig,
     });
     const result = await tool.execute({ source_path: "source_assets/figures/chart.png" });
     expect(result.isError).toBeUndefined();

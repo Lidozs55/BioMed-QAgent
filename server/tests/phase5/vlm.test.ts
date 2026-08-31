@@ -335,7 +335,9 @@ describe("createVlmClient L1 tier", () => {
       { apiKey: "", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
       new PublicHttpClient(),
     );
-    await expect(client.call(imagePath, VLM_PROMPT)).rejects.toThrow(/DASHSCOPE_API_KEY/);
+    await expect(client.call(imagePath, VLM_PROMPT)).rejects.toThrow(
+      /visual model credential is missing; configure the visual model provider API key in Settings/i,
+    );
   });
 });
 
