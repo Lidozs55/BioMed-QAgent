@@ -61,8 +61,20 @@ async function executeBounded(
       };
       return success(details, true);
     }
+    // Unexpected internal failures must stay visible: degrade to a generic
+    // code but keep the concrete message (plus errno, when present) so the
+    // caller can self-correct instead of blind-retrying. Messages never
+    // contain secrets; user-supplied values are not echoed by our own code.
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
     return success(
-      { code: "WORKSPACE_OPERATION_FAILED", message: "Workspace operation failed" },
+      {
+        code: "WORKSPACE_OPERATION_FAILED",
+        message,
+        ...(typeof code === "string" ? { errno: code } : {}),
+      },
       true,
     );
   }
@@ -230,7 +242,9 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
         return success(
           result,
           result.policy !== "allowed" || result.cancelled || result.timedOut ||
-            (result.exitCode !== null && result.exitCode !== 0),
+            // null exitCode means the process never ran (spawn failure;
+            // stderr carries the spawn diagnostic).
+            result.exitCode !== 0,
         );
       }),
     },

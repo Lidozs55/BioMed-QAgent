@@ -102,6 +102,14 @@
 
 ## 运行环境
 
+### [P0] workspace_exec 对 spawn 失败的进程组 SIGKILL 会命中 PID 1（Linux/POSIX，已修复待合入）
+
+- **状态：** 2026-08-31 由 Linux `rwx` 测试（`task_ts_e22585c2`）暴露；修复在 `fix/workspace-exec-spawn-kill` 分支，回归测试已入 `server/tests/workspace.test.ts`（非可执行文件 + ENOENT 两变体），全量 server 套件 2062 测试通过；合入 main 后从本文件删除。
+- **现象：** `spawn` 在进程创建前失败（无 x-bit 的 `EACCES`、不存在命令的 `ENOENT`）时 `child.pid` 为 `undefined`，`exec.ts` 的 `killProcessTree(child.pid ?? -1)` 使 `process.kill(-pid, "SIGKILL")` 变成 `process.kill(1, "SIGKILL")` ——字面量指向 init。uid 1000 下内核保护 PID 1 返回 `EPERM`，该异常沿 `terminate()` → `executeWorkspaceCommand` 上抛，被 `executeBounded` 吞成零信息的 `WORKSPACE_OPERATION_FAILED`（模型无法自纠，只能盲目重试）。Windows 走 taskkill 分支不触发，因此只在 Linux 测试中暴露。**容器/以 root 运行时无 PID 1 保护，同一行代码会真实 SIGKILL init 并带崩整个 Host。**
+- **最小复现：** `spawn("./noexec.sh")`（无执行位）后立即 `process.kill(-pid, "SIGKILL")`（`pid = child.pid ?? -1`），非 root 报 `EPERM`、root 杀 init。
+- **修复要点：** `killProcessTree` 对 `pid <= 1` 直接返回（Windows/POSIX 同保护）；POSIX 组 kill 同时吞 `ESRCH` 与 `EPERM`（组已退出或已在回收）；`terminate()` 在 `child.pid === undefined` 时不再对子进程补 SIGKILL；spawn 失败的 errno 以 `Failed to spawn <executable>: <errno>` 前缀写入结果 stderr（EACCES/ENOENT/EISDIR 附自纠提示），`workspace_exec` 的 `isError` 判定含 `exitCode !== 0`（spawn 失败不再被标为成功）；`executeBounded` 兜底分支保留真实 message/errno，不再折叠为固定文案。
+- **关联修复：** `activate_agent_tools` 延迟激活机制下，未激活工具调用得到 pi 侧 `Tool workspace_edit not found`（本次 run 的第二个无效重试点）。工具地图提示词已补充“未激活工具调用必失败、唯一恢复动作是 activate_agent_tools、禁止猜参数”的显式指导；`durable-agent-runtime` resume 路径的同名报错追加恢复指引。
+
 ### [P1] 多 Host 实例共享同一 data 目录会互相中断 run 并撕裂 events.jsonl
 
 - **状态：** 2026-08-27 晚在 gold7/gold8 rerun2（`main@43928b79`）中实际发生两次，run 证据见 `data/gold-runs/43928b79-gold*-rerun2-execfix*`。
