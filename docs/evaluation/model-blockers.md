@@ -263,6 +263,20 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - 合规：TOPIC 原文 ✓、1M ✓、supervisor 协议 ✓（首次含 HIL resume 全流程：human-review.jsonl → --resume 投递）。**运维注记：--adopt 路径不持久化 run_id，HIL 后 --resume 报 "requires supervisor state with run_id"，需手工补 state 才能续**（supervisor adopt 小缺陷，登记）。
 
+## gold6-r3 @ qwen3.8-flash（2026-08-31，main@e680d4232531，**唯一规范版复测·终**，task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1）
+
+> TOPIC 原文（SHA-256 `f30ab310…c298`）、单 Host、supervisor `--adopt/--resume` 全链。49 model calls / 9.17M total tokens / 17,497 events；run 自然 completed，但 closure **`blocked_no_publication`**，0 Publication / 0 Artifact / 0 `publication_acceptance`。3 次 HIL 全是逐 request 的 VLM credential 批准。证据包：`data/gold-runs/e680d4232531-gold6-qwen38flash-r3-standard/`。
+>
+> 正面复验：9 个 Europe PMC XML/PDF/ZIP carrier 全由本 task Core acquisition 获取；三份 evidence carrier 均带 exact-byte `vlm_extraction` OperationResult provenance。输出总计 3 papers / 121 experiments / 221 activity values / 103 chart series / **0 chart points**；无点 series 全部降为 unclear，没有伪造坐标或将 provisional staging 冒充 Publication。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| P5 | **Supplementary member admission 两道 gate 互斥。** `literature_experiment_chart` publication validator 要求 Core-owned supplementary **member**；transform host 又要求所有 registered transform inputs 为 UTF-8/gzip-UTF-8。三篇官方 supplementary ZIP 的 37/20/21 个成员均为 PDF/JPG/GIF。只绑定 JSON evidence carrier 时 submit 报 `requires a Core-owned supplementary member asset`（seq 4901/7018/8532）；绑定真实 binary member 时报 `Registered transform input must contain UTF-8 text…`（seq 6227/13401）；只注册不绑定时 preflight 报 undeclared binding（seq 9244）。这是当前 Gold6 无合法动态闭包的直接框架根因 | 框架（准入契约） | 完整 events + `provisional/STATUS_AND_BLOCKER.md`；实现落点 `literature-experiment-chart/validation.ts:84` 与 `transform-host/in-process-unisolated.ts:471` | 将 binary member 作为 provenance-only、非 transform-text input 的显式绑定；或由 Core-owned parser 生成真实 UTF-8 derivative member，再由 OperationResult 绑定 parent/member bytes。不可把 PDF/JPG 冒充文本 |
+| Q1 | **明确 dynamic-route 锁后仍切 static route。** 冻结执行规则禁止同一语义 requirement 在 dynamic rejection 后转 static；模型却改 requirement id，把六表需求拆成 curated `bioactivity_measurement` 单表尝试。`validate_dataset_execution` valid 后仍执行 7 次，全部被 asset/path bridge 拒绝；没有 BuildResult/Publication，因此未污染正式结果，但消耗显著且终答把 static 称为第二条受治理路线，语义不准确 | 模型（路由纪律）+ 框架可执行性缺口 | execute ×7 全 error；最终 `current_publication_id=null`、Artifact API 0 件；Gold assertion 5 REJECT | 提示词已明确仍未约束住：可考虑把 task/run 的 semantic requirement route choice durable 化，由 Host 对同 requirement 的跨 route submit 直接拒绝；至少把“换 requirement_id 不改变语义 requirement”写入工具拒绝文案 |
+| Q2 | **103 条 chart series 仍为 0 points，且无 review IDs。** 有界纠错重试按设计运行，缺轴单位/图例后全部 fail-closed 降为 unclear；因此没有 `vlm_extraction` 数据审查可批准。该行为是诚实阻断，不是回归，但说明 Gold6 的核心剂量-反应坐标尚未取得 | 数据质量/源可读性 | 三 carrier row counts；`chart_series_pending_review.csv`；0 publication acceptance | 增加真实轴单位/图例解析证据或人工 point-correction 候选通道；只有非空 point evidence + durable review closure 才可重跑发布 |
+
+**终判：** R2 的 derived provenance、页面隔离、assert 分页、supervisor race 修复均获 live 正证；R3 新暴露的是 P5 准入契约死锁。修 P5 与 0-point closure 前不得启动 R4，也不得把 6 份 `provisional/` 文件算作 Gold 产物。
+
 ## gold7 @ qwen3.8-flash（2026-08-30，main@9e90eb252089，task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1）
 
 > 题面依据 gold789-case-chapter §5.2 重建（无 prompts 文件）。历史死点（"GWAS family/Core provider 缺失，只能 workspace staging"）本次被**动态 Family 路线突破**：`pub_ad_gwas_risk_map_e76103f1b9751ace`（risk_loci 89 行正式发表，逐行 association_id+source_url 可溯）。

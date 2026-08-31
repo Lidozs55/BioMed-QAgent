@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "classification": "blocked_no_publication",
+  "product_commit": "e680d42325310e7aeade2deff0395a55bc282843",
+  "task_id": "task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1",
+  "run_id": "run_ts_be6adffd-0bd8-49d7-9ca4-4c373ef1d993",
+  "task_status": "completed",
+  "run_status": "completed",
+  "current_publication_id": null,
+  "event_count": 17497,
+  "terminal_sequence": 17497,
+  "terminal_event": "run_completed",
+  "credential_hil_reviews": 3,
+  "publication_acceptance_reviews": 0,
+  "artifact_count": 0,
+  "prompt_sha256": "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298",
+  "blocker_codes": [
+    "literature_experiment_chart requires a Core-owned supplementary member asset",
+    "Registered transform input must contain UTF-8 text or gzip-compressed UTF-8 text",
+    "$.registered_sources[3].binding_id is not a declared source binding"
+  ]
+}
