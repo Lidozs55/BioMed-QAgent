@@ -48,20 +48,21 @@
 | C3 | basic_statistics 对大表字符串溢出（V8 单串上限） | 流式/分块解析或声明上限+抽样 |
 | G3 | literature_evidence provider 可靠性：Europe PMC `http_client_error` 双复现、BioC 空文档回 `invalid_input` 误导重试。**gold4-r2（08-31）第 2 案复现**：模型准确归因"host-side 非输入侧"并建议 retry window——NoFullTextError 分型已落，http_client_error 本体仍开放 | 复现对照 headers；空全文应回结构化 `no_fulltext` |
 | B6（后半） | search_gdc 查询 "breast cancer TCGA" 首结果 TCGA-LUAD | provider 查询→project 映射排序修复 |
-| H1 | **ChEMBL 发现→绑定断链**：`search_chembl` 拿到的真 CHEMBL ID 喂不进 `chembl.files.v1` 固定 provider 的 validity 门（~11 种参数形态全拒），gold5 题面 activity 数据结构性进不来 | 复现并修复 provider accession 校验门，接受自家发现工具的输出形态（链 2 合并立项） |
+| H1 | **ChEMBL 发现→绑定断链**：`search_chembl` 拿到的真 CHEMBL ID 喂不进 `chembl.files.v1` 固定 provider 的 validity 门（~11 种参数形态全拒），gold5 题面 activity 数据结构性进不来。**gold5-r2（08-31）再证且精化**：模型将死锁总结为"单 target-ID（静态 entities）vs 1-32 compound-IDs（fixed provider）二律背反"——立项表述采用之 | 复现并修复 provider accession 校验门，接受自家发现工具的输出形态（链 2 合并立项） |
 | H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
 | I1 | **Dynamic 单 projection 全表耦合**：一张空表（variant_genes）拖死同 build 内数据已全部核实的 studies 表，gold7 因此 2/3 交付 | per-table partial publish，或拒绝信息直接指路"拆独立 build"；另：模型给出拆建方案后停手等确认——穷尽界提示词一并覆盖 |
 | I2 | `dbsnp.files.v1` Core provider 返回空载荷（工具面 lookup_dbsnp 正常）→ GRCh38 坐标核验进不了正式链 | 复现 provider egress/解析；并入链 2 变异发现立项 |
 | I3 / J3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"；**gold8 把该链的发布回执端放大到极限——为读回 1 个发布回执烧 29 调用/71% 墙钟，preview×17 全拒、4 次 `/publications/*` 外部锚定停审 deny**（链 1 断点最全形态） | 链 1 修复时覆盖 download_supplementary 登记原子性 + permission deny 响应附"无此读取通道"语义 |
 | J1 | **名册类外部源零 provider + 官方站全灭 + 无"用户上传→Core 权威资产"通道**：DILIrank 六通道逐 URL 实证不可达（DNS/404/401/ETIMEDOUT），题面 2/4 表 NO_DATA；quarantine 旁路明确非权威、进不了正式链 | 定义"用户上传→task-owned Core 资产→绑定"受治理正式通道（区别于 quarantine 非权威旁路）；DILIrank 镜像准入 |
 | J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
-| — | **wire 缺陷（gold7 新证，gold8 第 3 案，gold9-K4 第 4 案，gold10-L4 第 5 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现；**gold9 模型自己数出 receipt-only `$projection undefined`×3 计入对账表——5/5 动态案全中**，stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | **已按 2026-08-31 落点修复**（resolveSubmission 对存储 wire 重跑 parse）；**待动态案活体复验**——gold1-r4 未走动态路线，需 gold7/9/10 任一重跑闭环 |
+| — | ~~wire 缺陷~~ **已修+活体复验通过（2026-08-31，gold5-r2 第 6 动态案）**：receipt-only submit 直达业务校验并进入 publication_acceptance HIL，全程 0 次 `$projection`；5/5 复现史终结（gold10-L4 为末案） | **销案**。保留回归用例：prepare→纯 receipt submit 金路径 |
+| P1 | **HIL reject 理由不透传到模型**（gold5-r2 首例 HIL）：toolResult 仅回 "not accepted: reject"，`user_input_resumed.detail.reason` 里的审查理由模型看不到 → 模型请求"reviewer statement"，"人审后定向修正"闭环断在最后一公里 | HIL 决议注入 continuation 消息时携带 reason 全文（一行 wire 改动）；赛题加分项"寻求人类建议后修正"的前置 |
 | K1 | **静态适配器 32MiB 容量上限**：Orphadata 54MB XML 物理进不了 registered 文件通道，题面起点（疾病目录）只剩动态 transform 硬啃 | 大 XML 分块/流式 provider 或容量分级准入 |
 | L2 | **DA 载体 media-type 断链（gold10）**：论文补充 xlsx 经 acquire/extract 全链路 media type 恒为 `application/octet-stream`，DA 适配器只收 `text/csv`/真 xlsx → 唯一现实数据源进不去；`paper_supplement_differential_abundance` xlsx 解析通道存在但 guidance 未覆盖，模型外围试探 20+ 次不可见 | extract 解码产物按成员真实类型标注 media type；research_data_guidance microbiome 段点名 xlsx→DA 绑定姿势 |
 | L5 | **spec-as-string 4096 字符 transport 限制**（与 K2 同族）：多绑定四表 spec 逼近上限，压缩 transform 表达 | 与 K2 信封提升合并立项 |
 | K2 | **transform_source 尺寸天花板**：完整四表 integrator 装不进一次 prepare/submit 信封，多次截断失败后模型被迫发 383 字节"通路探针"代替产品 | prepare 分步传模块 / 提上限 / receipt 端存代码、submit 只传引用 |
 | K3（方言半） | **transform 沙箱方言陷阱**：禁 bracket access + JSON 内 `\n` 到 Core 变字面 backslash-n，同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮，是 20M token 主要来源 | admission 报错附最小可复现样例 + 官方 workaround 清单（换行用 String.fromCharCode(10) 等）写进 transform 工具描述 |
-| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
+| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身。**gold5-r2 新案：`--adopt` 不持久化 run_id → HIL 后 `--resume` 拒绝续挂，需手工补 state**（首踩；任何走到 HIL 的 case 都会必经此路） | 运维面：supervisor 加重试；adopt 分支同步 writeState(run_id)；查 server events 端点 500 根因 |
 | H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
 ### 不属于两类（外部源边界，合理阻断）

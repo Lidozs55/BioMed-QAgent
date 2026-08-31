@@ -246,6 +246,23 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - **正样本（显著成长）**：发布后自检仅 9 轮即止损——逐一试探 4 种 ID 命名空间、**主动修正自己上一条的 overstatement**（"Correction: … 那言过其实了"）、明确"没有读取路径我就不声称读过"；突变体处理给出专业判断（L858R/T790M 应为 assay 的 variant_context 列而非独立 target ID，并请用户确认口径）；候选药物 CID/InChIKey 全部真值留档不冒充已发布。
 
+## gold5-r2 @ qwen3.8-flash（2026-08-31，main@99da5a351fa9，**规范版复测 + 首个 HIL 全链案**，task_ts_3067996b-26d1-4ba4-aa98-76ce1bde1017）
+
+> supervisor 全程（journal 716=全量事件、自动 closure、`run_usage` 由协议自动产出）。**54 calls / ~21min / 4.12M token（output 68k）**；峰值 211k/1M（1M 下无压缩）。终态 **blocked_no_publication**——但这是**评测批次首个走到 `publication_acceptance` HIL 门的 run**：动态 prepare→submit 成功、candidate 8 表+8 关系+provenance/confidence 全绑定、B3 124 checks 0 失败，停在人审；operator 审后 **reject**（chart_points 派生表=0 行、activities 仅 4 行 vs 题面千级）——门真实拦下了过早发布。
+
+**里程碑级复验结论**：
+1. **wire `$projection` 修复全案闭环（第 6 动态案）**：submit 直达业务校验（"table 'chart_series' must not be empty"）并进入 HIL，全程 0 次 `$projection`。此前 5/5 全中的死结确认消失。**triage wire 行销案。**
+2. **H1 再证且精化**：ChEMBL 死锁被模型总结为"单 target-ID vs 1-32 compound-IDs 二律背反"（静态 entities 要单 target、fixed provider 要化合物列表）；终答明确该 dichotomy 需修复或授权导出资产。
+3. **P1（新框架条目）：HIL reject 的 reason 不透传工具返回**——`submit` 收到的 toolResult 只有 `dynamic publication review was not accepted: reject`；详细理由实际在事件流 `user_input_resumed.detail.reason` 但模型看不到 → 终答不得不请求 "the reviewer statement behind the reject verdict"。**"寻求人类建议后修正"加分项被这个最后一公里卡住的活案例**：reject 后模型正确地没有盲改重交，但也无力做定向修正，转写状态笔记诚实收尾。
+4. **reject 后行为=合格样本**：不重试伪装、写 `notes/egfr_chembl_pubchem_build_status.md` 结构化存档、覆盖对账（0 正式发布/失败分类/发现级 ID 全列）、指出 PubChem 无活性数据须回 ChEMBL（题面核心判断准确）。
+5. **O2 再证**：`scaffold_dataset_profile` 又 2 次误用（@291/@497），新工具无引导持续付税。
+
+| 阶段 | 调用 | input | output | cache_read | token |
+| --- | --- | --- | --- | --- | --- |
+| 全程（HIL 前构建；发布后 0——reject 即终） | 54 | 658,537 | 68,170 | 3,394,944 | 4,121,651 |
+
+- 合规：TOPIC 原文 ✓、1M ✓、supervisor 协议 ✓（首次含 HIL resume 全流程：human-review.jsonl → --resume 投递）。**运维注记：--adopt 路径不持久化 run_id，HIL 后 --resume 报 "requires supervisor state with run_id"，需手工补 state 才能续**（supervisor adopt 小缺陷，登记）。
+
 ## gold7 @ qwen3.8-flash（2026-08-30，main@9e90eb252089，task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1）
 
 > 题面依据 gold789-case-chapter §5.2 重建（无 prompts 文件）。历史死点（"GWAS family/Core provider 缺失，只能 workspace staging"）本次被**动态 Family 路线突破**：`pub_ad_gwas_risk_map_e76103f1b9751ace`（risk_loci 89 行正式发表，逐行 association_id+source_url 可溯）。
