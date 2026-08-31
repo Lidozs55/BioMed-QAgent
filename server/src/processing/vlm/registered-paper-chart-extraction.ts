@@ -60,8 +60,8 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.1.0";
-export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.2.0";
+export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v3";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
@@ -469,6 +469,95 @@ interface PageExtraction {
   inputDigest: string;
   outputDigest: string;
   providerModel: string | null;
+}
+
+const MAX_WARNING_LENGTH = 320;
+const MAX_RETRY_DEFICITS = 4;
+const DOSE_RESPONSE_TERMS = /\b(?:dose|concentration|conc\.?|ic50|ec50|ki|inhibition|inhibitor|ligand|compound|drug|response)\b/i;
+
+function finiteNumericToken(value: string): boolean {
+  return value.trim() !== "" && Number.isFinite(Number(value));
+}
+
+function hasClearSeriesEvidence(series: ParsedSeriesCandidate): boolean {
+  return series.axis_validation_status === "clear"
+    && series.legend_validation_status === "clear"
+    && series.figure_id !== null
+    && series.bbox !== null
+    && series.x_axis_name !== PAPER_ID_ABSENT
+    && series.y_axis_name !== PAPER_ID_ABSENT
+    && series.x_axis_unit !== null
+    && series.y_axis_unit !== null
+    && series.legend_text !== null;
+}
+
+function isDoseResponseCandidate(
+  series: ParsedSeriesCandidate,
+  response: RegisteredPaperChartResponse,
+): boolean {
+  const labels = [
+    series.series_label,
+    series.x_axis_name,
+    series.y_axis_name,
+    series.legend_text ?? "",
+  ].join(" ");
+  if (DOSE_RESPONSE_TERMS.test(labels)) return true;
+  return response.activities.some((activity) => /^(?:IC50|EC50|Ki)$/i.test(activity.activity_type.trim()));
+}
+
+function hasUsablePointCandidate(
+  response: RegisteredPaperChartResponse,
+  series: ParsedSeriesCandidate,
+): boolean {
+  const activityKeys = new Set(response.activities.map((activity) => activity.activity_key));
+  return response.points.some((point) =>
+    point.series_key === series.series_key
+      && activityKeys.has(point.activity_key)
+      && point.bbox !== null
+      && point.extraction_confidence !== null
+      && point.confidence_reason !== null
+      && finiteNumericToken(point.x_value)
+      && finiteNumericToken(point.y_value),
+  );
+}
+
+function retryDeficits(response: RegisteredPaperChartResponse): string[] {
+  const candidates = response.series.filter((series) =>
+    hasClearSeriesEvidence(series) && isDoseResponseCandidate(series, response),
+  );
+  const deficits: string[] = [];
+  for (const series of candidates) {
+    if (hasUsablePointCandidate(response, series)) continue;
+    const seriesPoints = response.points.filter((point) => point.series_key === series.series_key);
+    deficits.push(seriesPoints.length === 0
+      ? `series ${series.series_key}: no usable chart points were returned`
+      : `series ${series.series_key}: point candidates failed finite-coordinate, locator, confidence, or activity-reference validation`);
+  }
+  return deficits.slice(0, MAX_RETRY_DEFICITS);
+}
+
+function retryPrompt(deficits: readonly string[]): string {
+  const boundedDeficits = deficits.slice(0, MAX_RETRY_DEFICITS);
+  return `${REGISTERED_PAPER_CHART_PROMPT}
+
+Corrective retry on the same rendered page. Validation deficits only:
+${boundedDeficits.map((deficit) => `- ${deficit}`).join("\n")}
+
+Re-check the image and return the complete JSON object required above. Recover
+only values visibly supported by this page. Do not guess, infer, interpolate,
+or fabricate coordinates, units, protein identity, figure identity, axis or
+legend semantics, or any other field. If a value remains unclear, leave it
+empty and mark the relevant series unclear; do not emit a point.`;
+}
+
+function warningDetail(error: unknown): string {
+  const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  if (detail.length <= MAX_WARNING_LENGTH) return detail;
+  return `${detail.slice(0, MAX_WARNING_LENGTH - 3)}...`;
+}
+
+function pageWarning(pageNumber: number, code: string, detail: string): string {
+  return `page ${pageNumber} code=${code} detail=${warningDetail(detail)}`;
 }
 
 function sha256(bytes: Buffer): string {
@@ -882,7 +971,9 @@ export async function extractRegisteredPaperChartEvidence(
     );
   }
 
-  // -- 4. Resolve the visual model live, then run one VLM call per page.
+  // -- 4. Resolve the visual model live, then run one initial call per page.
+  // A page-local schema/point deficit gets at most one corrective retry; a
+  // failed page is recorded and omitted so valid sibling pages can proceed.
   const config = await deps.resolveVlmConfig();
   const client = deps.vlmClientFactory !== undefined
     ? deps.vlmClientFactory(config)
@@ -893,31 +984,89 @@ export async function extractRegisteredPaperChartEvidence(
   } catch {
     fail("resolved VLM base URL is invalid");
   }
-  const pages: PageExtraction[] = [];
-  for (const image of pageImages.images) {
-    const imageBytes = await readFile(image.path);
-    const { content, model } = await client.callWithMeta(
-      image.path,
-      REGISTERED_PAPER_CHART_PROMPT,
-      signal,
-    );
-    pages.push({
-      pageNumber: image.pageIndex,
-      parsed: parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`),
-      inputDigest: sha256(imageBytes),
-      outputDigest: sha256(Buffer.from(content, "utf8")),
-      providerModel: model,
-    });
-  }
-  const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
-
-  // -- 5. Merge page responses into merged candidates (with page context).
   const warnings: string[] = [];
+  const pageFailures: string[] = [];
   if (pageImages.skippedPages > 0) {
     warnings.push(
       `${pageImages.skippedPages} additional PDF page candidate(s) were not rendered because of the page cap`,
     );
   }
+  const pages: PageExtraction[] = [];
+  for (const image of pageImages.images) {
+    const imageBytes = await readFile(image.path);
+    const inputDigest = sha256(imageBytes);
+    let parsed: RegisteredPaperChartResponse | null = null;
+    let deficits: string[] = [];
+
+    const response = await client.callWithMeta(
+      image.path,
+      REGISTERED_PAPER_CHART_PROMPT,
+      signal,
+    );
+    let content = response.content;
+    let providerModel = response.model;
+    try {
+      parsed = parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`);
+    } catch (error) {
+      deficits = [`schema validation failed: ${warningDetail(error)}`];
+      const detail = deficits[0] ?? "schema validation failed";
+      pageFailures.push(pageWarning(image.pageIndex, "schema", detail));
+      warnings.push(pageWarning(image.pageIndex, "schema", detail));
+    }
+
+    if (parsed !== null) {
+      deficits = retryDeficits(parsed);
+    }
+    if (deficits.length > 0) {
+      warnings.push(pageWarning(image.pageIndex, "retry", deficits.join("; ")));
+      try {
+        const retry = await client.callWithMeta(
+          image.path,
+          retryPrompt(deficits),
+          signal,
+        );
+        const retryParsed = parseRegisteredPaperChartResponse(
+          retry.content,
+          `page ${image.pageIndex} retry`,
+        );
+        content = retry.content;
+        providerModel = retry.model;
+        parsed = retryParsed;
+        if (retryDeficits(retryParsed).length > 0) {
+          warnings.push(pageWarning(
+            image.pageIndex,
+            "no_points",
+            "corrective retry returned no usable points; clear series will remain unclear",
+          ));
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        const detail = warningDetail(error);
+        warnings.push(pageWarning(image.pageIndex, "retry_failed", detail));
+        if (parsed === null) {
+          pageFailures.push(pageWarning(image.pageIndex, "retry_failed", detail));
+        }
+        // Keep a valid initial response when only its corrective retry failed.
+      }
+    }
+
+    if (parsed === null) {
+      const detail = "page omitted after at most one corrective response could not be validated";
+      pageFailures.push(pageWarning(image.pageIndex, "discarded", detail));
+      warnings.push(pageWarning(image.pageIndex, "discarded", detail));
+      continue;
+    }
+    pages.push({
+      pageNumber: image.pageIndex,
+      parsed,
+      inputDigest,
+      outputDigest: sha256(Buffer.from(content, "utf8")),
+      providerModel,
+    });
+  }
+  const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
+
+  // -- 5. Merge page responses into merged candidates (with page context).
   for (const page of pages) {
     if (page.parsed.paper !== null && page.parsed.paper.title !== paperMeta.title) {
       warnings.push(
@@ -957,8 +1106,18 @@ export async function extractRegisteredPaperChartEvidence(
     }
     pointCandidates.push(...page.parsed.points.map((candidate) => ({ page, candidate })));
   }
-  if (experimentCandidates.length === 0) fail("experiment_records must not be empty: no experiment candidates");
-  if (seriesCandidates.length === 0) fail("chart_series must not be empty: no series candidates");
+  if (experimentCandidates.length === 0) {
+    const failureContext = pageFailures.length === 0
+      ? ""
+      : `; page-local failures: ${pageFailures.slice(0, MAX_RETRY_DEFICITS).join("; ")}`;
+    fail(`experiment_records must not be empty: no experiment candidates${failureContext}`);
+  }
+  if (seriesCandidates.length === 0) {
+    const failureContext = pageFailures.length === 0
+      ? ""
+      : `; page-local failures: ${pageFailures.slice(0, MAX_RETRY_DEFICITS).join("; ")}`;
+    fail(`chart_series must not be empty: no series candidates${failureContext}`);
+  }
 
   // -- 6. Build the formal rows.
   const pmid = paperNamespace === "pubmed" ? paperId : PAPER_ID_ABSENT;

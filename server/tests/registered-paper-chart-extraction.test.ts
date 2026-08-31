@@ -165,6 +165,8 @@ interface FixtureDeps {
   now: () => Date;
 }
 
+type FixtureResponse = string | ((callNumber: number, imagePath: string, prompt: string) => string);
+
 interface Fixture {
   roots: string[];
   taskRoot: string;
@@ -194,7 +196,7 @@ async function writeFileAndRegister(
   });
 }
 
-async function makeFixture(responseContent: string): Promise<Fixture> {
+async function makeFixture(responseContent: FixtureResponse): Promise<Fixture> {
   const roots: string[] = [];
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "registered-paper-chart-"));
   roots.push(taskRoot);
@@ -221,6 +223,7 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
   };
   const calls: FakeClientCall[] = [];
   const prompts: string[] = [];
+  let callNumber = 0;
   const fakeClient: VlmClient = {
     call: async () => {
       throw new Error("legacy call() must not be used by the governed extraction");
@@ -228,7 +231,11 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
     callWithMeta: async (imagePath, prompt) => {
       calls.push({ imagePath, prompt, configModel: RESOLVED_MODEL });
       prompts.push(prompt);
-      return { content: responseContent, model: PROVIDER_MODEL_VERSION };
+      const content = typeof responseContent === "function"
+        ? responseContent(callNumber, imagePath, prompt)
+        : responseContent;
+      callNumber += 1;
+      return { content, model: PROVIDER_MODEL_VERSION };
     },
   };
   const pageImage = Buffer.from("fake page raster bytes", "utf8");
@@ -274,6 +281,37 @@ function baseRequest(fixture: Fixture): {
     paper_id: "31234567",
     paper_id_namespace: "pubmed",
   };
+}
+
+async function makeTwoPageFixture(responseContent: FixtureResponse): Promise<Fixture> {
+  const fixture = await makeFixture(responseContent);
+  fixture.depsDefaults.extractPageImages = async (_pdfBytes, _sourceLabel, destDir) => {
+    await mkdir(destDir, { recursive: true });
+    const images = [];
+    for (const pageIndex of [1, 2]) {
+      const imagePath = path.join(destDir, `paper_p${pageIndex}_img0.png`);
+      await writeFile(imagePath, `fake page ${pageIndex} raster bytes`, "utf8");
+      images.push({ path: imagePath, pageIndex, bbox: "0,0,612,792" });
+    }
+    return { images, skippedPages: 0 };
+  };
+  return fixture;
+}
+
+function responseWithoutExperimentProtein(): string {
+  const body = JSON.parse(makeVlmResponse()) as Record<string, unknown>;
+  const experiments = body.experiments;
+  if (!Array.isArray(experiments) || experiments.length === 0) {
+    throw new Error("fixture response has no experiment to corrupt");
+  }
+  const first = experiments[0];
+  if (typeof first !== "object" || first === null || Array.isArray(first)) {
+    throw new Error("fixture experiment is not an object");
+  }
+  const malformed = { ...(first as Record<string, unknown>) };
+  delete malformed.protein;
+  body.experiments = [malformed];
+  return JSON.stringify(body);
 }
 
 async function readCarrier(fixture: Fixture, relativePath: string): Promise<Record<string, unknown>> {
@@ -526,6 +564,103 @@ describe("registered paper chart evidence extraction", () => {
       expect(result.warnings).toContain(
         "4 additional PDF page candidate(s) were not rendered because of the page cap",
       );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("isolates a malformed page and preserves valid aggregate evidence from another page", async () => {
+    const fixture = await makeTwoPageFixture((_, imagePath) =>
+      path.basename(imagePath).startsWith("paper_p1_")
+        ? responseWithoutExperimentProtein()
+        : makeVlmResponse(),
+    );
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+
+      expect(result.rows.experiment_records).toBe(1);
+      expect(result.rows.chart_series).toBe(1);
+      expect(result.rows.chart_points).toBe(2);
+      expect(fixture.calls.filter((call) => path.basename(call.imagePath).startsWith("paper_p1_")).length)
+        .toBe(2);
+      expect(fixture.calls.filter((call) => path.basename(call.imagePath).startsWith("paper_p2_")).length)
+        .toBe(1);
+      expect(result.warnings.some((warning) => warning.includes("page 1") && warning.includes("schema")))
+        .toBe(true);
+      expect(result.warnings.some((warning) => warning.includes("experiment protein"))).toBe(true);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("retries a clear empty-point series once and sends recovered points to vlm_extraction HIL", async () => {
+    const fixture = await makeFixture((callNumber) =>
+      callNumber === 0 ? makeVlmResponse({ points: [] }) : makeVlmResponse(),
+    );
+    const reviewRequests: Array<{ reviewType: string | null; itemCount: number }> = [];
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async (input) => {
+            reviewRequests.push({ reviewType: input.review_type, itemCount: input.review_items.length });
+            return {
+              schema_version: "1.0",
+              review_id: "review_retry_recovered",
+              request_id: "request_retry_recovered",
+              decision: { action: "accept" as const },
+              reviewer: "user" as const,
+              reviewed_at: "2026-08-30T11:00:00.000Z",
+              evidence_digest: "c".repeat(64),
+              reason: null,
+            };
+          },
+        },
+      });
+
+      expect(fixture.calls).toHaveLength(2);
+      expect(fixture.prompts[1]).toContain("no usable chart points");
+      expect(fixture.prompts[1]).toMatch(/do not guess/i);
+      expect(result.rows.chart_points).toBe(2);
+      expect(reviewRequests).toEqual([{ reviewType: "vlm_extraction", itemCount: 2 }]);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("bounds an exhausted no-point retry and keeps the series unclear without HIL", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ points: [] }));
+    let reviewCallCount = 0;
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        hilGate: {
+          requestHIL: async () => {
+            reviewCallCount += 1;
+            throw new Error("no-point series must not create VLM review");
+          },
+        },
+      });
+
+      expect(fixture.calls).toHaveLength(2);
+      expect(result.rows.chart_points).toBe(0);
+      expect(reviewCallCount).toBe(0);
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      const series = rowsOf(carrier, "chart_series")[0] as Record<string, unknown>;
+      expect(series.axis_validation_status).toBe("unclear");
+      expect(series.legend_validation_status).toBe("unclear");
+      expect(result.warnings.some((warning) => warning.includes("retry"))).toBe(true);
+      expect(result.warnings.some((warning) => warning.includes("no points") && warning.includes("unclear")))
+        .toBe(true);
+      expect(result.warnings.length).toBeLessThanOrEqual(20);
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }
