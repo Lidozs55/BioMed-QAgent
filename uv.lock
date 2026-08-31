@@ -91,7 +91,21 @@ wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/bf/96/493770daebd68c0a67f1549fdf519f53be51fc435186c0585bcc272fd76c/ruff-0.16.3-py3-none-linux_armv6l.whl", hash = "sha256:0c5710e247a58a4521e66e124ba9a74655b414f61ba3a2e9e3811e11098f48f7" },
     { url = "https://mirrors.aliyun.com/pypi/packages/5e/e6/2becf3942fddc29a29b8df47691d456fb1085391a694f74d84513251418c/ruff-0.16.3-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:fe155130631a2471fd2e14a7a664a4dfbd7194b8229c3d7b2a40b21178639081" },
     { url = "https://mirrors.aliyun.com/pypi/packages/3e/1e/4b8b72f0d006dbf19326aa99f9ca0ee2ff374187c4d301cf529a51aa06fe/ruff-0.16.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e2ed719e14aa64d895c2ee922594a90a43c861a93f0575a95ff8c47cdbd13eb9" },
-    { url = "https://mirrors.aliyun.com/pypi/packages/92/32/2201fa49ba1f6c101ee321e83f051ac7a4b8d07b0ef6b4d3f2772b302275/ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9e0b1da805eb043654645d74d5de1e5ce2edc686e40790d2b86f56d71cc06a84" },
+    { url = "https# XeLaTeX writes XDV first; make its TeX Live PDF converter discoverable when
+# the front-end commands are exposed through symlinks in a user-local bin dir.
+my $tex_bin = `kpsewhich -var-value=SELFAUTOLOC`;
+chomp $tex_bin;
+my $converter = ($^O eq 'MSWin32')
+    ? "$tex_bin/xdvipdfmx.exe"
+    : "$tex_bin/xdvipdfmx";
+if ($tex_bin ne '' && -x $converter) {
+    my $path_sep = ($^O eq 'MSWin32') ? ';' : ':';
+    my $path = $ENV{PATH} // '';
+    my %path_entries = map { $_ => 1 } split /\Q$path_sep\E/, $path;
+    $ENV{PATH} = "$tex_bin$path_sep$path"
+        unless $path_entries{$tex_bin};
+}
+://mirrors.aliyun.com/pypi/packages/92/32/2201fa49ba1f6c101ee321e83f051ac7a4b8d07b0ef6b4d3f2772b302275/ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9e0b1da805eb043654645d74d5de1e5ce2edc686e40790d2b86f56d71cc06a84" },
     { url = "https://mirrors.aliyun.com/pypi/packages/c3/66/4afc5c8363bd04d45effce1b7c8713ca037d7a6740b7451a2403a6e3a972/ruff-0.16.3-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:a37bdea0bbe21780f590bf437d6412c8c4e1b6cd010f91a65c2c40c5e5f5f870" },
     { url = "https://mirrors.aliyun.com/pypi/packages/53/fd/c67d246bf36bf1698551c56de39e95cd07f70e64433e0098e6267d77061b/ruff-0.16.3-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:09571e6d1288ed9be475207a3ac04ada404f1cd898104be0f6ab8d7df438575b" },
     { url = "https://mirrors.aliyun.com/pypi/packages/67/0b/00ecbceb99a263af7b12f6f05ac3c92bc47b905e91adc3f207a836e3bc01/ruff-0.16.3-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2c18c5a101eb540010638cc1ff3c84944d3adb3df62b8d98ca8f22ba484d3413" },
