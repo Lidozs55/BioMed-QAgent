@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   FilesIcon,
   ShieldWarningIcon,
+  TreeStructureIcon,
 } from "@phosphor-icons/react";
 
 import {
@@ -10,6 +11,7 @@ import {
 } from "@/components/ArtifactPanel";
 import PublicationResultsViewer from "@/components/PublicationResultsViewer";
 import QuarantinePanel from "@/components/QuarantinePanel";
+import SourceAssetsPanel from "@/components/SourceAssetsPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -37,6 +39,7 @@ import { useAgentStore } from "@/stores/agentStore";
 
 export const ASSETS_FORMAL_TAB = "artifacts";
 export const ASSETS_UNTRUSTED_TAB = "untrusted";
+export const ASSETS_SOURCE_TAB = "sources";
 
 interface AssetsSheetProps {
   open: boolean;
@@ -46,8 +49,11 @@ interface AssetsSheetProps {
   taskId?: string | null;
   /** 存在 Publication 时，正式产物栏展示 manifest 驱动的发布视图。 */
   publicationId?: string | null;
-  /** 初始标签页；需要直接检查未准入文件时可传 untrusted。 */
-  defaultTab?: typeof ASSETS_FORMAL_TAB | typeof ASSETS_UNTRUSTED_TAB;
+  /** 初始标签页；需要直接检查未准入/来源登记时可传 untrusted / sources。 */
+  defaultTab?:
+    | typeof ASSETS_FORMAL_TAB
+    | typeof ASSETS_UNTRUSTED_TAB
+    | typeof ASSETS_SOURCE_TAB;
 }
 
 /**
@@ -84,7 +90,7 @@ export function AssetsSheet({
         <SheetHeader>
           <SheetTitle>资源</SheetTitle>
           <SheetDescription>
-            正式产物已验证可用；未准入文件（ua_*）为非权威参考，不会进入正式发布。
+            正式产物已验证可用；未准入文件（ua_*）为非权威参考，不进入正式发布；来源/证据登记为只读清单。
           </SheetDescription>
         </SheetHeader>
         <Tabs
@@ -104,6 +110,10 @@ export function AssetsSheet({
               <ShieldWarningIcon data-icon="inline-start" aria-hidden="true" />
               未准入
               <Badge variant="destructive">非权威</Badge>
+            </TabsTrigger>
+            <TabsTrigger value={ASSETS_SOURCE_TAB}>
+              <TreeStructureIcon data-icon="inline-start" aria-hidden="true" />
+              来源/证据
             </TabsTrigger>
           </TabsList>
           <TabsContent
@@ -141,6 +151,12 @@ export function AssetsSheet({
             className="min-h-0 overflow-y-auto"
           >
             <QuarantinePanel taskId={taskId} />
+          </TabsContent>
+          <TabsContent
+            value={ASSETS_SOURCE_TAB}
+            className="min-h-0 overflow-y-auto"
+          >
+            <SourceAssetsPanel taskId={taskId} />
           </TabsContent>
         </Tabs>
       </SheetContent>
