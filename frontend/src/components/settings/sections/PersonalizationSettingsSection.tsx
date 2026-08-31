@@ -26,6 +26,13 @@ const PERSONALITY_OPTIONS: { value: Personality; label: string; description: str
   { value: "rigorous", label: "严谨", description: "结构化、明确区分事实与推断" },
 ];
 
+// Base UI renders the raw value in the trigger unless `items` is provided;
+// trigger text uses the primary label, descriptions stay popup-only.
+const PERSONALITY_ITEMS = PERSONALITY_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "请求失败";
 }
@@ -144,6 +151,7 @@ export function PersonalizationSettingsSection({ api }: { api: SettingsAPIClient
             description="切换后立即生效并持久化。"
             control={
               <Select
+                items={PERSONALITY_ITEMS}
                 value={settings?.personality ?? "pragmatic"}
                 onValueChange={(value) => {
                   if (value) void changePersonality(value);

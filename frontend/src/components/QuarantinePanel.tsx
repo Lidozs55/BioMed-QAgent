@@ -33,6 +33,13 @@ function formatScope(scope: readonly string[]): string {
   return scope.length === 0 ? "无" : scope.join("、");
 }
 
+/** Label map so the trigger shows Chinese labels instead of raw enum keys. */
+const COVERAGE_ITEMS = [
+  { value: "complete", label: "覆盖完整" },
+  { value: "partial", label: "覆盖部分范围" },
+  { value: "unknown", label: "覆盖范围未知" },
+] as const;
+
 interface QuarantinePanelProps {
   taskId: string;
 }
@@ -136,7 +143,7 @@ export default function QuarantinePanel({ taskId }: QuarantinePanelProps) {
               <div className="grid gap-3 md:grid-cols-3">
                 <Field>
                   <FieldLabel htmlFor={`quarantine-coverage-${taskId}`}>覆盖状态</FieldLabel>
-                  <Select value={coverageStatus} onValueChange={(value) => {
+                  <Select items={COVERAGE_ITEMS} value={coverageStatus} onValueChange={(value) => {
                     if (isCoverageStatus(value)) setCoverageStatus(value);
                   }}>
                     <SelectTrigger id={`quarantine-coverage-${taskId}`}>

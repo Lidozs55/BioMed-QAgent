@@ -46,6 +46,13 @@ const COMMON_WINDOWS = [
   2_000_000,
 ] as const;
 
+/** Unit options for the custom context popover; labels equal values here. */
+const UNIT_ITEMS = [
+  { value: "B", label: "B" },
+  { value: "K", label: "K" },
+  { value: "M", label: "M" },
+] as const;
+
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
 /* ------------------------------------------------------------------ */
@@ -94,6 +101,13 @@ export function ContextWindowSelect({
     ? String(value)
     : "";
 
+  // Base UI renders the raw value in the trigger unless `items` is provided;
+  // pass the label map so the trigger shows "128K" instead of "128000".
+  const items = options.map((option) => ({
+    value: String(option.tokens),
+    label: option.label,
+  }));
+
   const handleSelect = useCallback(
     (raw: string | null) => {
       if (raw === null) return;
@@ -125,7 +139,7 @@ export function ContextWindowSelect({
         )}
       </div>
       <div className="flex items-center gap-2">
-        <Select value={selectedKey} onValueChange={handleSelect}>
+        <Select items={items} value={selectedKey} onValueChange={handleSelect}>
           <SelectTrigger aria-label="上下文窗口" className="w-full sm:w-64">
             <SelectValue placeholder="选择上下文窗口" />
           </SelectTrigger>
@@ -232,7 +246,7 @@ function CustomContextPopover({
             className="h-8 flex-1"
             placeholder="数值"
           />
-          <Select value={unit} onValueChange={(v) => setUnit(v as TokenUnit)}>
+          <Select items={UNIT_ITEMS} value={unit} onValueChange={(v) => setUnit(v as TokenUnit)}>
             <SelectTrigger size="sm" className="w-16">
               <SelectValue />
             </SelectTrigger>
