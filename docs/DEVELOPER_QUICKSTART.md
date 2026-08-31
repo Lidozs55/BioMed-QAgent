@@ -53,6 +53,8 @@ uv run python database/bridge.py --self-test
 
 根 `pnpm-lock.yaml` 是唯一 Node lockfile。`uv sync` 只为 stdlib-only database bridge 安装 pytest/ruff 等开发工具；生产 bridge 本身不依赖第三方 Python 包。
 
+仓库的 pnpm 布局已固定为 `nodeLinker: hoisted` + `packageImportMethod: copy`，并把 `@biomed/contracts` 作为 injected 本地文件快照安装；这是为了让同一条安装命令在 NTFS 与不支持符号链接的 exFAT 工作区都可复现。不要在本机覆盖这些设置，也不要手工复制 contracts 或依赖 `node_modules/.pnpm` 的内部目录。`predev` / `pretest` / `prestart` 共用的 `scripts/build-contracts-if-needed.mjs` 会在构建后同步物理安装副本；普通支持 symlink 的工作区链接则保持原样。
+
 ## 4. 启动应用
 
 ```bash

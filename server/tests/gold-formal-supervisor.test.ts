@@ -172,15 +172,15 @@ function options(values: { baseUrl: string; promptFile: string; evidenceDir: str
 }
 
 function healthy(): JsonRecord {
-  return { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts" };
+  return { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts", product_commit: "f".repeat(40) };
 }
 
-function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onPermission?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
+function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; health?: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onPermission?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
   let snapshot = config.snapshot;
   return listen((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://fixture");
-      if (url.pathname === "/api/v1/health") { json(response, 200, healthy()); return; }
+      if (url.pathname === "/api/v1/health") { json(response, 200, config.health ?? healthy()); return; }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}` && request.method === "GET") { json(response, 200, snapshot); return; }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/events` && request.method === "GET") {
         const after = Number(url.searchParams.get("after_sequence") ?? "0");
@@ -274,6 +274,19 @@ describe("Gold formal rerun supervisor", () => {
       publication: { publication_id: PUBLICATION_ID },
     }).classification).toBe("succeeded_publication");
     expect(classifyTerminal({ run: { status: "completed" }, publication: null }).classification).toBe("blocked_no_publication");
+  });
+
+  test("fails closed when expected-commit evidence is missing from Host health", async () => {
+    const fixture = await setup();
+    const host = await apiServer({
+      events: [],
+      snapshot: taskSnapshot("queued", null),
+      health: { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts" },
+    });
+    try {
+      await expect(supervise(options({ ...fixture, baseUrl: host.baseUrl })))
+        .rejects.toMatchObject({ code: "health" });
+    } finally { await close(host.server); }
   });
 
   test("reads current_publication_id from the snapshot top level, not from the task object", () => {

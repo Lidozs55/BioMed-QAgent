@@ -281,7 +281,7 @@ Ctrl+⌘ 可对单条消息执行相反操作。半透明侧边栏开启时，�
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | 健康检查 |
+| GET | `/health` | 健康检查；包含 Host 实际 `product_commit`（Git checkout 或显式 `BIOMED_PRODUCT_COMMIT`）供同提交证据核验 |
 | GET | `/databases` | 列出内置 + 用户声明式数据库 |
 | GET | `/databases/{name}` | 获取单个数据库（含声明式 manifest） |
 | POST | `/databases` | 注册声明式数据库 |

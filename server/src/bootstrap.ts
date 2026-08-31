@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import type { RuntimeLimits } from "@biomed/contracts";
@@ -58,6 +59,29 @@ export interface BootstrapInput {
 
 export type BootstrapOptions = Omit<ApplicationHostOptions, "frontend">;
 
+export function resolveProductCommit(
+  repositoryRoot: string,
+  environment: Record<string, string | undefined> = process.env,
+): string | null {
+  const configured = environment.BIOMED_PRODUCT_COMMIT?.trim();
+  if (configured !== undefined && configured !== "") {
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(configured)) {
+      throw new Error("BIOMED_PRODUCT_COMMIT must be a lowercase 40- or 64-character commit hash");
+    }
+    return configured;
+  }
+  try {
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commit) ? commit : null;
+  } catch {
+    return null;
+  }
+}
+
 function combineApis(...apis: ApiSurface[]): ApiSurface {
   return {
     handle(request, response) {
@@ -93,6 +117,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     cacheDir,
     settingsDir,
     database,
+    productCommit: resolveProductCommit(repositoryRoot),
   });
   const skillIterationApi = input.skillIterationApi ?? createSkillIterationApi({
     repositoryRoot,

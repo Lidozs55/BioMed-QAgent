@@ -3,6 +3,7 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
+  injectWorkspacePackages: true
 
 importers:
 
@@ -30,8 +31,8 @@ importers:
         specifier: ^1.6.0
         version: 1.6.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@biomed/contracts':
-        specifier: workspace:*
-        version: link:../packages/contracts
+        specifier: file:../packages/contracts
+        version: file:packages/contracts
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
@@ -83,6 +84,9 @@ importers:
       zustand:
         specifier: ^4.5.5
         version: 4.5.7(@types/react@19.2.17)(immer@11.1.18)(react@19.2.7)
+    dependenciesMeta:
+      '@biomed/contracts':
+        injected: true
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -163,8 +167,8 @@ importers:
   server:
     dependencies:
       '@biomed/contracts':
-        specifier: workspace:*
-        version: link:../packages/contracts
+        specifier: file:../packages/contracts
+        version: file:packages/contracts
       '@earendil-works/pi-coding-agent':
         specifier: 0.82.1
         version: 0.82.1(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)
@@ -198,6 +202,9 @@ importers:
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
+    dependenciesMeta:
+      '@biomed/contracts':
+        injected: true
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -524,6 +531,9 @@ packages:
     peerDependenciesMeta:
       '@types/react':
         optional: true
+
+  '@biomed/contracts@file:packages/contracts':
+    resolution: {directory: packages/contracts, type: directory}
 
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
@@ -5256,6 +5266,8 @@ snapshots:
       use-sync-external-store: 1.6.0(react@19.2.7)
     optionalDependencies:
       '@types/react': 19.2.17
+
+  '@biomed/contracts@file:packages/contracts': {}
 
   '@bramus/specificity@2.4.2':
     dependencies:

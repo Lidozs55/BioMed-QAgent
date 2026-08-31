@@ -14,8 +14,9 @@
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createWriteStream, readdirSync } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,7 @@ const FIXTURES_ROOT = path.resolve(
   "..", "..", "tests", "fixtures",
 );
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const VITE_NODE_ENTRY = createRequire(import.meta.url).resolve("vite-node/vite-node.mjs");
 const ZERO_256MIB_SHA256 =
   "a6d72ac7690f53be6ae46ba88506bd97302a093f7108472bd9efc3cefda06484";
 const LARGE_MIB = 256;
@@ -90,24 +92,10 @@ function runHashChild(
   heapMb: number,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const script = path.join(REPO_ROOT, "server", "tests", "phase5", "fixtures", "stream-hash-child.mts");
-  const pnpmDir = path.join(REPO_ROOT, "node_modules", ".pnpm");
-  const viteNodeVersions = readdirSync(pnpmDir)
-    .filter((name) => name.startsWith("vite-node@"))
-    .sort();
-  if (viteNodeVersions.length === 0) {
-    throw new Error("vite-node not found in node_modules/.pnpm");
-  }
-  const viteNodeEntry = path.join(
-    pnpmDir,
-    viteNodeVersions[viteNodeVersions.length - 1]!,
-    "node_modules",
-    "vite-node",
-    "vite-node.mjs",
-  );
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["--no-warnings", `--max-old-space-size=${heapMb}`, viteNodeEntry, script, workRoot, String(sizeMiB)],
+      ["--no-warnings", `--max-old-space-size=${heapMb}`, VITE_NODE_ENTRY, script, workRoot, String(sizeMiB)],
       { stdio: "pipe" },
     );
     let stdout = "";

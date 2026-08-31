@@ -204,7 +204,9 @@ proposal 和 registered source/acquisition bindings，并严格执行 prepare/su
 合法 prepare skeleton；prepare 派生 Family、Projection、transform binding 和 Host
 descriptor digest。Host 按 receipt digest 保留该大体积 prepared submission，Agent 在 submit
 时只回传不可变 `preflight_receipt`，Core 再取回并完整复验，不再要求模型复制约 20 KB 的
-服务端对象。旧的严格 submit parser 仅为内部兼容，不是 Agent-facing 主路径。
+服务端对象。未消费 submission 已进入 task-owned 原子状态，Host 重启后仍可按 receipt
+恢复；已 reserve 的 receipt 在重启后 fail closed，不恢复失去执行 fence 的 in-flight
+副作用。旧的严格 submit parser 仅为内部兼容，不是 Agent-facing 主路径。
 
 ### 7.3 Core acquisition closure 缺失
 

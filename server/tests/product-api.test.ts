@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { createProductApi, type ProductDatabaseClient } from "../src/product/product-api.js";
+const PRODUCT_COMMIT = "f".repeat(40);
 const servers: Server[] = [];
 const roots: string[] = [];
 
@@ -34,6 +35,7 @@ async function startApi(
     cacheDir: path.join(root, "cache"),
     settingsDir: path.join(root, "settings"),
     database,
+    productCommit: PRODUCT_COMMIT,
   });
   const server = createServer((request, response) => {
     if (!api.handle(request, response)) response.writeHead(404).end("Not Found");
@@ -77,7 +79,7 @@ describe("Phase 7 product API", () => {
     const { base } = await startApi(root, database);
 
     expect(await (await fetch(`${base}/health`)).json()).toMatchObject({
-      status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts",
+      status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts", product_commit: PRODUCT_COMMIT,
     });
     expect(await (await fetch(`${base}/databases`)).json()).toEqual({
       // Phase 8: TS builtin catalogue (9 entries) merged with user manifests.
@@ -128,6 +130,7 @@ describe("Phase 7 product API", () => {
       app_host: "ts",
       agent_runtime: "pi",
       dataset_core: "ts",
+      product_commit: PRODUCT_COMMIT,
     });
     const unsupported = await fetch(`${base}/health`, { method: "PUT" });
     expect(unsupported.status).toBe(405);

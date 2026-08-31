@@ -723,7 +723,8 @@ function observedCommit(...values) {
 function checkExpectedCommit(expected, ...values) {
   if (expected === null || expected === undefined) return null;
   const observed = observedCommit(...values);
-  if (observed !== null && observed !== expected) throw new SupervisorError("health", "Host product commit does not match expected commit");
+  if (observed === null) throw new SupervisorError("health", "Host product commit evidence is missing");
+  if (observed !== expected) throw new SupervisorError("health", "Host product commit does not match expected commit");
   return observed;
 }
 
@@ -948,7 +949,7 @@ export async function supervise(input, dependencies = {}) {
     } else {
       terminal = classifyTerminal({ run, publication: boundPublication });
     }
-    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail);
+    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail, health);
     if (terminal.classification !== "succeeded_publication") {
       await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(redacted({ schema_version: "1.0", case_label: options.caseLabel, task_id: options.taskId, run_id: runId, expected_commit: options.expectedCommit ?? null, observed_commit: observedFinalCommit ?? healthCommit, health, terminal, run_usage: run.summary?.usage ?? null }), null, 2)}\n`);
       throw errorForTerminal(terminal);

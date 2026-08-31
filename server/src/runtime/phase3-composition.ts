@@ -438,7 +438,9 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let currentPublicationId: string | null = null;
-      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator();
+      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator({
+        statePath: path.join(options.tasksRoot, taskId, "state", "dynamic-family-preflight.json"),
+      });
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).

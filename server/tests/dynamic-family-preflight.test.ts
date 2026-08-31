@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -530,6 +534,33 @@ describe("dynamic family prepare/submit preflight", () => {
 });
 
 describe("dynamic family preflight composition fencing", () => {
+  it("restores an unconsumed prepared submission after Host restart", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-preflight-restart-"));
+    try {
+      const statePath = path.join(root, "state", "dynamic-preflight.json");
+      const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
+      const submissionDigest = dynamicFamilyPreflightSubmissionDigest(submission);
+      const storedSubmission = { schema_version: "1.0", marker: "durable" };
+      const first = createDynamicFamilyPreflightCoordinator({ statePath });
+      const preparation = first.beginPrepare("build_preflight");
+      const receipt = await prepareDynamicFamilyPublication({
+        taskId: "task_preflight",
+        requirementId: "build_preflight",
+        generation: preparation.generation,
+        submission,
+      });
+      first.commitPrepare(preparation, receipt, submissionDigest, storedSubmission);
+
+      const restarted = createDynamicFamilyPreflightCoordinator({ statePath });
+      expect(restarted.resolveSubmission(receipt)).toEqual(storedSubmission);
+      restarted.reserve(receipt, submissionDigest);
+      const restartedAfterReserve = createDynamicFamilyPreflightCoordinator({ statePath });
+      expect(() => restartedAfterReserve.resolveSubmission(receipt)).toThrow(/consumed/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses per-build generations, supersedes active receipts, and cleans consumed entries", async () => {
     const coordinator = createDynamicFamilyPreflightCoordinator();
     const submission = await parseDynamicFamilyPublicationSubmission(await rawSubmission());
