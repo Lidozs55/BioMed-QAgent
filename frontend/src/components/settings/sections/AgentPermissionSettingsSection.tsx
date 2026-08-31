@@ -52,6 +52,26 @@ const PRESET_OPTIONS: Array<{
   },
 ];
 
+const CAPABILITY_ITEMS = [
+  { value: "fs.read", label: "读取" },
+  { value: "fs.write", label: "写入" },
+  { value: "fs.edit", label: "修改" },
+] as const;
+
+const POLICY_ITEMS = [
+  { value: "allow", label: "允许" },
+  { value: "ask", label: "询问" },
+  { value: "deny", label: "拒绝" },
+] as const;
+
+const SCOPE_ITEMS = [
+  { value: "project", label: "项目目录" },
+  { value: "external", label: "外部目录" },
+  { value: "sensitive", label: "敏感文件" },
+  { value: "workspace", label: "工作区" },
+  { value: "task_output", label: "任务输出" },
+] as const;
+
 const CAPABILITY_LABELS: Record<string, string> = {
   "fs.read": "读取",
   "fs.write": "写入",
@@ -167,6 +187,10 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
           <div className="flex flex-col gap-2">
             <Label>权限模式</Label>
             <Select
+              items={PRESET_OPTIONS.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
               value={current.preset}
               onValueChange={(value) => {
                 void apply(() => api.setAgentPermissionsPreset(value as AgentPermissionPreset));
@@ -217,6 +241,7 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
             <div className="flex flex-col gap-1">
               <Label>能力</Label>
               <Select
+                items={CAPABILITY_ITEMS}
                 value={ruleCapability}
                 onValueChange={(value) => setRuleCapability(value as "fs.read" | "fs.write" | "fs.edit")}
               >                <SelectTrigger className="w-full sm:w-28">
@@ -232,6 +257,7 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
             <div className="flex flex-col gap-1">
               <Label>策略</Label>
               <Select
+                items={POLICY_ITEMS}
                 value={rulePolicy}
                 onValueChange={(value) => setRulePolicy(value as "allow" | "ask" | "deny")}
               >                <SelectTrigger className="w-full sm:w-28">
@@ -247,6 +273,7 @@ export function AgentPermissionSettingsSection({ api }: AgentPermissionSettingsS
             <div className="flex flex-col gap-1">
               <Label>作用域</Label>
               <Select
+                items={SCOPE_ITEMS}
                 value={ruleScope}
                 onValueChange={(value) => setRuleScope(value as AgentPermissionRuleInput["resource_scope"])}
               >                <SelectTrigger className="w-full sm:w-28">

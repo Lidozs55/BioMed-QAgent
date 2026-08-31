@@ -158,6 +158,17 @@ describe("settings personalization section", () => {
     });
   });
 
+  it("shows the personality label instead of the raw key in the trigger", async () => {
+    const api = mockApi();
+    render(<SettingsPanel open onOpenChange={() => undefined} api={api} />);
+    await screen.findByText("供应商管理");
+    await openPersonalization();
+
+    const trigger = screen.getByRole("combobox", { name: "回复语气" });
+    expect(trigger).toHaveTextContent("务实");
+    expect(trigger).not.toHaveTextContent("pragmatic");
+  });
+
   it("persists the selected personality immediately", async () => {
     const save = vi.fn().mockResolvedValue({
       ...DEFAULT_PERSONALIZATION,

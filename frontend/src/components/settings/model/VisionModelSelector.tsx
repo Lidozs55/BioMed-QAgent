@@ -19,6 +19,32 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * Build the Base UI `items` prop so `SelectValue` renders the selected
+ * candidate's display name in the closed trigger instead of the raw record id.
+ */
+function buildItems(managedModels: VisionModelSelectorProps["managedModels"], providers: VisionModelSelectorProps["providers"]) {
+  const enabledProviderIds = new Set(
+    providers.filter((provider) => provider.enabled).map((provider) => provider.id),
+  );
+  const candidates = managedModels.filter(
+    (model) =>
+      model.capabilities.image === true && enabledProviderIds.has(model.provider_id),
+  );
+  return {
+    candidates,
+    items: [
+      { value: NONE_VALUE, label: "未选择" },
+      ...candidates.map((model) => ({
+        value: model.id,
+        label: `${model.name}（${model.provider_name} · ${
+          model.provider_api_key_configured ? "密钥已配置" : "未配置密钥"
+        }）`,
+      })),
+    ],
+  };
+}
+
+/**
  * Explicit visual-extraction model role selector.
  *
  * Lists only image-capable models of enabled providers, shows each
@@ -33,13 +59,7 @@ export function VisionModelSelector({
   onSaved,
 }: VisionModelSelectorProps) {
   const [saving, setSaving] = useState(false);
-  const enabledProviderIds = new Set(
-    providers.filter((provider) => provider.enabled).map((provider) => provider.id),
-  );
-  const candidates = managedModels.filter(
-    (model) =>
-      model.capabilities.image === true && enabledProviderIds.has(model.provider_id),
-  );
+  const { candidates, items } = buildItems(managedModels, providers);
 
   const saveRole = useCallback(
     async (value: string) => {
@@ -62,6 +82,7 @@ export function VisionModelSelector({
   return (
     <div className="flex flex-col gap-3 px-5 py-4">
       <Select
+        items={items}
         value={settings.vision_model_id ?? NONE_VALUE}
         onValueChange={(value) => void saveRole(value ?? NONE_VALUE)}
       >
