@@ -102,6 +102,11 @@ timeout/resource limit、I/O、stale generation、execution-lock/fence loss、�
 错配、路径越界、缺失 admitted output、TOCTOU 或 size/hash 漂移均属于控制、资源或完整性
 失败。fallback 自身失败也不能掩盖原始正式拒绝。
 
+跨 Application Host restart 的 `publication_acceptance` continuation 不持久化完整 committed
+`OperationResult` 或 trusted root，因此 restart 后的 reject/skip 只保留同一 typed 正式拒绝及
+reviewer reason，并以 `run_failed` 收束；它不得据 continuation 中的 table 摘要伪造 `ua_*`
+或任何正式 Artifact/Publication。
+
 ## 前端
 
 输入栏旁提供统一的“资源”入口和 Sheet，内部保持独立分组：正式/任务产物、未准入文件、来源与证据资产。未准入分组继续提供：

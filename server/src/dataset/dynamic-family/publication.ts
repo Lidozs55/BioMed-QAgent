@@ -34,7 +34,10 @@ import { computeHILEvidenceDigest } from "../contracts/hil-evidence.js";
 import { packageDigest } from "../publish/manifest.js";
 import { promotePublication, type PublishResult } from "../publish/publisher.js";
 import { validateMultiTableCandidate } from "../validation/multitable.js";
-import { validateLiteratureExperimentChartProfile } from "../families/index.js";
+import {
+  LiteratureExperimentChartSemanticError,
+  validateLiteratureExperimentChartProfile,
+} from "../families/index.js";
 import {
   readPublicationAcceptanceContinuation,
   savePublicationAcceptanceContinuation,
@@ -242,9 +245,9 @@ export async function publishDynamicFamily(
       confidence_refs: [key(confidenceRef)],
     });
   }
-  // The only intentional semantic-profile throw on this path: a typed
-  // rejection (fallback-allowlisted), never a wrapper around unknown I/O or
-  // abort failures surfaced by the validator.
+  // Only the validator's explicit semantic decision is allowlisted. File I/O,
+  // abort, parser resource limits and unknown errors retain their original type
+  // and can never trigger automatic quarantine fallback.
   try {
     await validateLiteratureExperimentChartProfile({
       profileRef: input.productRequirements.profile_ref,
@@ -253,11 +256,8 @@ export async function publishDynamicFamily(
       signal: input.signal,
     });
   } catch (error) {
-    if (error instanceof LiteratureProfileRejectionError) throw error;
-    if (input.signal?.aborted === true) throw error;
-    throw new LiteratureProfileRejectionError(
-      error instanceof Error ? error.message : String(error),
-    );
+    if (!(error instanceof LiteratureExperimentChartSemanticError)) throw error;
+    throw new LiteratureProfileRejectionError(error.message, { cause: error });
   }
   await assertGenerationCurrent();
   await mkdir(input.workspaceRoot, { recursive: true });
@@ -881,8 +881,11 @@ export async function completePublicationAcceptanceContinuation(
     );
   }
   if (input.review.decision.action !== "accept") {
-    throw new Error(
-      rejectReasonMessage("publication continuation review", input.review),
+    throw new PublicationAcceptanceRejectedError(
+      input.review.decision.action === "skip" ? "skip" : "reject",
+      typeof input.review.reason === "string" && input.review.reason.trim() !== ""
+        ? input.review.reason.slice(0, 2000)
+        : null,
     );
   }
 

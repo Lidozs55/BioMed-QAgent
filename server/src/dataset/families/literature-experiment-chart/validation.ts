@@ -6,6 +6,34 @@ import { parseSourceLocator } from "../../contracts/index.js";
 import { assertChartPointReviewClosure } from "../bioactivity-measurement/chart-evidence/validation.js";
 import { LITERATURE_EXPERIMENT_CHART_PROFILE_REF } from "./profile.js";
 
+/**
+ * An intentional literature-profile decision. Only this error may be converted
+ * into the dynamic publication fallback allowlist; file I/O, abort and parser
+ * resource failures retain their original types.
+ */
+export class LiteratureExperimentChartSemanticError extends TypeError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "LiteratureExperimentChartSemanticError";
+  }
+}
+
+function semanticFailure(message: string): never {
+  throw new LiteratureExperimentChartSemanticError(message);
+}
+
+function semanticParse<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof LiteratureExperimentChartSemanticError) throw error;
+    if (error instanceof TypeError) {
+      throw new LiteratureExperimentChartSemanticError(error.message, { cause: error });
+    }
+    throw error;
+  }
+}
+
 async function csvRecords(
   file: string,
   signal?: AbortSignal,
@@ -20,16 +48,16 @@ async function csvRecords(
     if (header === null) {
       header = row.values;
       if (header.length === 0 || new Set(header).size !== header.length) {
-        throw new TypeError(`semantic profile table '${file}' has an invalid header`);
+        semanticFailure(`semantic profile table '${file}' has an invalid header`);
       }
       continue;
     }
     if (row.values.length !== header.length) {
-      throw new TypeError(`semantic profile table '${file}' row ${row.line} has the wrong width`);
+      semanticFailure(`semantic profile table '${file}' row ${row.line} has the wrong width`);
     }
     rows.push(Object.fromEntries(header.map((name, index) => [name, row.values[index] ?? ""])));
   }
-  if (header === null) throw new TypeError(`semantic profile table '${file}' is empty`);
+  if (header === null) semanticFailure(`semantic profile table '${file}' is empty`);
   return rows;
 }
 function jsonRecord(value: string, label: string): Record<string, JsonValue> {
@@ -37,19 +65,19 @@ function jsonRecord(value: string, label: string): Record<string, JsonValue> {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new TypeError(`${label} must be JSON`);
+    semanticFailure(`${label} must be JSON`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new TypeError(`${label} must be a JSON object`);
+    semanticFailure(`${label} must be a JSON object`);
   }
   return parsed as Record<string, JsonValue>;
 }
 
 function jsonArray(value: JsonValue | undefined, label: string): Readonly<Record<string, JsonValue>>[] {
-  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  if (!Array.isArray(value)) semanticFailure(`${label} must be an array`);
   return value.map((item, index) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new TypeError(`${label}[${index}] must be an object`);
+      semanticFailure(`${label}[${index}] must be an object`);
     }
     return item;
   });
@@ -57,7 +85,7 @@ function jsonArray(value: JsonValue | undefined, label: string): Readonly<Record
 
 function evidenceRecord(provenance: CoreDerivedAssetProvenance): Record<string, JsonValue> {
   if (provenance.evidence === null || typeof provenance.evidence !== "object" || Array.isArray(provenance.evidence)) {
-    throw new TypeError("Core derived input evidence must be an object");
+    semanticFailure("Core derived input evidence must be an object");
   }
   return provenance.evidence;
 }
@@ -78,22 +106,22 @@ export async function validateLiteratureExperimentChartProfile(input: {
   const archiveInputs = derived.filter((item) => item.operation_kind === "archive_member_extraction");
   const parserInputs = derived.filter((item) => item.operation_kind === "registered_parser");
   if (vlmInputs.length === 0) {
-    throw new TypeError("literature_experiment_chart requires a Core-owned VLM evidence asset");
+    semanticFailure("literature_experiment_chart requires a Core-owned VLM evidence asset");
   }
   if (archiveInputs.length === 0) {
-    throw new TypeError("literature_experiment_chart requires a Core-owned supplementary member asset");
+    semanticFailure("literature_experiment_chart requires a Core-owned supplementary member asset");
   }
   const chartSeriesPath = input.stagedTablePaths.get("chart_series");
   const chartPointsPath = input.stagedTablePaths.get("chart_points");
   const supplementaryPath = input.stagedTablePaths.get("supplementary_asset_records");
   if (chartSeriesPath === undefined || chartPointsPath === undefined || supplementaryPath === undefined) {
-    throw new TypeError("literature_experiment_chart semantic tables are incomplete");
+    semanticFailure("literature_experiment_chart semantic tables are incomplete");
   }
   const vlmFacts = vlmInputs.map((item) => {
     const evidence = evidenceRecord(item);
     const manifest = evidence.manifest;
     if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
-      throw new TypeError("Core VLM provenance requires an embedded evidence manifest");
+      semanticFailure("Core VLM provenance requires an embedded evidence manifest");
     }
     return {
       assetId: item.asset_id,
@@ -105,12 +133,14 @@ export async function validateLiteratureExperimentChartProfile(input: {
   });
   const seriesFacts = new Map<string, { sourceAssetId: string; figureId: string }>();
   for (const row of await csvRecords(chartSeriesPath, input.signal)) {
-    const locator = parseSourceLocator(jsonRecord(row.source_locator ?? "", "chart_series.source_locator"));
+    const locator = semanticParse(() => parseSourceLocator(
+      jsonRecord(row.source_locator ?? "", "chart_series.source_locator"),
+    ));
     if (!("locator_version" in locator) || locator.locator_type !== "image_bbox") {
-      throw new TypeError("chart_series.source_locator must be an image_bbox locator");
+      semanticFailure("chart_series.source_locator must be an image_bbox locator");
     }
     if (!/^[0-9a-f]{64}$/u.test(row.prompt_digest ?? "")) {
-      throw new TypeError("chart_series.prompt_digest must be SHA-256");
+      semanticFailure("chart_series.prompt_digest must be SHA-256");
     }
     const matching = vlmFacts.find((item) =>
       item.assetId === row.source_asset_id || item.parents.has(row.source_asset_id ?? ""));
@@ -135,7 +165,7 @@ export async function validateLiteratureExperimentChartProfile(input: {
       || matching.evidence.model_version !== row.model_version
       || matching.evidence.prompt_digest !== row.prompt_digest
     ) {
-      throw new TypeError("chart_series rows do not match Core VLM evidence bytes and provenance");
+      semanticFailure("chart_series rows do not match Core VLM evidence bytes and provenance");
     }
     jsonRecord(row.transform_provenance ?? "", "chart_series.transform_provenance");
     seriesFacts.set(row.chart_series_id ?? "", {
@@ -144,12 +174,12 @@ export async function validateLiteratureExperimentChartProfile(input: {
     });
   }
   for (const row of await csvRecords(chartPointsPath, input.signal)) {
-    const locator = parseSourceLocator(jsonRecord(
+    const locator = semanticParse(() => parseSourceLocator(jsonRecord(
       row.pixel_or_coordinate_locator ?? "",
       "chart_points.pixel_or_coordinate_locator",
-    ));
+    )));
     if (!("locator_version" in locator) || locator.locator_type !== "image_bbox") {
-      throw new TypeError("chart_points locator must be an image_bbox locator");
+      semanticFailure("chart_points locator must be an image_bbox locator");
     }
     const matching = vlmFacts.find((item) =>
       item.points.some((point) => point.point_id === row.point_id));
@@ -175,24 +205,24 @@ export async function validateLiteratureExperimentChartProfile(input: {
       || String(point.original_x_value ?? "") !== String(row.original_x_value ?? "")
       || String(point.original_y_value ?? "") !== String(row.original_y_value ?? "")
     ) {
-      throw new TypeError("chart_points rows do not match Core VLM evidence bytes");
+      semanticFailure("chart_points rows do not match Core VLM evidence bytes");
     }
     const transformProvenance = jsonRecord(
       row.transform_provenance ?? "",
       "chart_points.transform_provenance",
     );
-    assertChartPointReviewClosure({
+    semanticParse(() => assertChartPointReviewClosure({
       pointId: row.point_id ?? "",
       estimatedOrExact: row.estimated_or_exact ?? "",
       extractionConfidence: row.extraction_confidence ?? "",
       reviewStatus: row.review_status ?? "",
       reviewId: row.review_id === "" ? null : row.review_id ?? null,
       transformProvenance,
-    });
+    }));
     if (row.review_status === "accepted" || row.review_status === "corrected") {
       const review = transformProvenance.review;
       if (review === null || typeof review !== "object" || Array.isArray(review)) {
-        throw new TypeError("reviewed chart point requires review provenance");
+        semanticFailure("reviewed chart point requires review provenance");
       }
       const reviewRecord = review as Record<string, JsonValue>;
       if (
@@ -201,17 +231,17 @@ export async function validateLiteratureExperimentChartProfile(input: {
         || reviewRecord.reviewed_at !== point.reviewed_at
         || String(reviewRecord.reason ?? "") !== String(point.review_reason ?? "")
       ) {
-        throw new TypeError("chart point review provenance does not match the vlm_extraction HIL record");
+        semanticFailure("chart point review provenance does not match the vlm_extraction HIL record");
       }
     }
   }
   const archiveFacts = new Map(archiveInputs.map((item) => [item.asset_id, evidenceRecord(item)]));
   for (const row of await csvRecords(supplementaryPath, input.signal)) {
     const evidence = archiveFacts.get(row.source_asset_id ?? "");
-    const locator = parseSourceLocator(jsonRecord(
+    const locator = semanticParse(() => parseSourceLocator(jsonRecord(
       row.source_locator ?? "",
       "supplementary_asset_records.source_locator",
-    ));
+    )));
     if (
       evidence === undefined
       || evidence.parent_archive_asset_id !== row.parent_archive_asset_id
@@ -224,7 +254,7 @@ export async function validateLiteratureExperimentChartProfile(input: {
       || locator.logical_file !== evidence.registered_relative_path
       || locator.raw_value !== row.member_sha256
     ) {
-      throw new TypeError("supplementary asset record does not match Core archive-member provenance");
+      semanticFailure("supplementary asset record does not match Core archive-member provenance");
     }
     const parserProvenance = parserInputs.find((item) =>
       item.parent_asset_ids.includes(row.source_asset_id ?? "")
@@ -241,12 +271,12 @@ export async function validateLiteratureExperimentChartProfile(input: {
     if (requiresRegisteredParser) {
       const parserEvidence = parserProvenance === undefined ? null : evidenceRecord(parserProvenance);
       if (parserEvidence?.parser_id !== row.parser_id) {
-        throw new TypeError("supplementary tabular member lacks matching registered parser provenance");
+        semanticFailure("supplementary tabular member lacks matching registered parser provenance");
       }
     } else if (memberMediaType === "application/pdf") {
       const parserEvidence = parserProvenance === undefined ? null : evidenceRecord(parserProvenance);
       if (parserEvidence?.parser_id !== row.parser_id && vlmProvenance?.implementation_id !== row.parser_id) {
-        throw new TypeError("supplementary PDF lacks matching registered parser or VLM provenance");
+        semanticFailure("supplementary PDF lacks matching registered parser or VLM provenance");
       }
     }
   }

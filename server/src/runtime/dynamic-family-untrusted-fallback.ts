@@ -34,10 +34,19 @@
 import { lstat, realpath, open, rm } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  parseOperationResultManifest,
+  parsePublicationCandidate,
+} from "../dataset/contracts/index.js";
 import type { MultiTableValidationCheck } from "../dataset/contracts/validation.js";
+import type {
+  UntrustedFallbackReceiptSummary,
+} from "../dataset/dynamic-family/formal-rejections.js";
 import type { DynamicFamilyExecutionResult } from "../dataset/dynamic-family/submission.js";
 import { sha256Bytes } from "../dataset/adapters/hashing.js";
+import { canonicalDigest } from "../dataset/adapters/identity.js";
 import { storeUntrustedArtifact } from "./untrusted-artifact-store.js";
+import { requireSafeId } from "./safe-id.js";
 import { UNTRUSTED_ARTIFACT_DIRECTORY } from "@biomed/contracts";
 
 const MEDIA_TYPE_BY_DELIMITER: Readonly<Record<string, string>> = {
@@ -90,35 +99,6 @@ export function untrustedFallbackIdentityLine(input: {
   ].join(" ");
 }
 
-/**
- * A typed error carrying the fallback receipts. The formal rejection stays
- * authoritative (this is an ``Error``; callers must not treat it as success),
- * while an integrator can project ``untrusted_artifacts``/``formal_status``
- * through the tool response without re-reading quarantine state.
- */
-export class DynamicPublicationUntrustedFallbackError extends Error {
-  readonly formal_status: "rejected";
-  readonly untrusted_artifacts: UntrustedFallbackReceiptSummary[];
-
-  constructor(options: {
-    readonly message: string;
-    readonly untrustedArtifacts: readonly UntrustedFallbackReceiptSummary[];
-  }) {
-    super(options.message);
-    this.name = "DynamicPublicationUntrustedFallbackError";
-    this.formal_status = "rejected";
-    this.untrusted_artifacts = [...options.untrustedArtifacts];
-  }
-}
-
-export interface UntrustedFallbackReceiptSummary {
-  readonly submission_id: string;
-  readonly table_id: string;
-  readonly name: string;
-  readonly size_bytes: number;
-  readonly sha256: string;
-}
-
 interface RootIdentity {
   realPath: string;
   dev: number;
@@ -154,8 +134,44 @@ export class UntrustedFallbackIntegrityError extends Error {
   }
 }
 
+export class UntrustedFallbackControlError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UntrustedFallbackControlError";
+  }
+}
+
 function integrityRejection(detail: string): never {
   throw new UntrustedFallbackIntegrityError(detail);
+}
+
+async function assertFallbackCurrent(input: {
+  readonly signal?: AbortSignal;
+  readonly isExecutionCurrent?: () => boolean | Promise<boolean>;
+}): Promise<void> {
+  if (input.signal?.aborted === true) {
+    throw new UntrustedFallbackControlError("untrusted fallback was cancelled");
+  }
+  if (input.isExecutionCurrent !== undefined && !(await input.isExecutionCurrent())) {
+    throw new UntrustedFallbackControlError(
+      "untrusted fallback execution lock or generation is stale",
+    );
+  }
+}
+
+function tableSummary(
+  operationResult: DynamicFamilyExecutionResult["operationResult"],
+  tableId: string,
+): Record<string, unknown> {
+  const summaries = operationResult.output_summary.tables;
+  if (summaries === null || typeof summaries !== "object" || Array.isArray(summaries)) {
+    integrityRejection("untrusted fallback requires a closed multi-table operation summary");
+  }
+  const summary = Reflect.get(summaries, tableId) as unknown;
+  if (summary === null || typeof summary !== "object" || Array.isArray(summary)) {
+    integrityRejection(`untrusted fallback operation summary is missing table '${tableId}'`);
+  }
+  return summary as Record<string, unknown>;
 }
 
 interface RootHandle {
@@ -208,6 +224,7 @@ async function verifiedBytesForOutput(
   relativePath: string,
   expectedSize: number,
   expectedSha256: string,
+  assertCurrent: () => Promise<void>,
 ): Promise<Buffer> {
   if (
     relativePath.length === 0
@@ -255,6 +272,7 @@ async function verifiedBytesForOutput(
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let offset = 0;
     while (true) {
+      await assertCurrent();
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
       if (bytesRead === 0) break;
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
@@ -304,17 +322,132 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
   readonly rejectionReason: string;
   /** Failed B3 checks, when the rejection came from validation closure. */
   readonly failedChecks?: readonly MultiTableValidationCheck[];
+  /** Current cancellation fence from the original dynamic submit. */
+  readonly signal?: AbortSignal;
+  /** Re-checks the same execution lock + preflight generation before writes. */
+  readonly isExecutionCurrent?: () => boolean | Promise<boolean>;
 }): Promise<UntrustedFallbackReceiptSummary[]> {
-  const candidate = input.result.materialization.candidate;
-  if (candidate.task_id !== input.taskId || candidate.requirement_id !== input.requirementId) {
+  requireSafeId(input.taskId, "taskId");
+  requireSafeId(input.runId, "runId");
+  requireSafeId(input.requirementId, "requirementId");
+  await assertFallbackCurrent(input);
+  let candidate: ReturnType<typeof parsePublicationCandidate>;
+  let operationResult: ReturnType<typeof parseOperationResultManifest>;
+  try {
+    candidate = parsePublicationCandidate(input.result.materialization.candidate);
+    operationResult = parseOperationResultManifest(
+      input.result.operationResult,
+      input.taskId,
+      input.runId,
+      input.requirementId,
+    );
+  } catch (error) {
     throw new UntrustedFallbackIntegrityError(
-      `untrusted fallback task/requirement identity mismatch: candidate task=${candidate.task_id} requirement=${candidate.requirement_id}, fallback task=${input.taskId} requirement=${input.requirementId}`,
+      `untrusted fallback received an invalid committed candidate/result: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const operationResult = input.result.operationResult;
-  if (operationResult.commit.state !== "committed") {
+  if (
+    candidate.task_id !== input.taskId
+    || candidate.requirement_id !== input.requirementId
+    || operationResult.task_id !== input.taskId
+    || operationResult.run_id !== input.runId
+    || operationResult.requirement_id !== input.requirementId
+  ) {
     throw new UntrustedFallbackIntegrityError(
-      `untrusted fallback requires a committed operation result, received state '${operationResult.commit.state}'`,
+      `untrusted fallback identity mismatch: candidate=${candidate.task_id}/${candidate.requirement_id}, operation=${operationResult.task_id}/${operationResult.run_id}/${operationResult.requirement_id}, fallback=${input.taskId}/${input.runId}/${input.requirementId}`,
+    );
+  }
+  const { candidate_id: candidateId, ...candidateBody } = candidate;
+  if (candidateId !== `candidate_${canonicalDigest(candidateBody).slice(0, 32)}`) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback candidate identity digest does not close over the candidate",
+    );
+  }
+  const expectedResultManifestId = canonicalDigest({
+    task_id: operationResult.task_id,
+    run_id: operationResult.run_id,
+    requirement_id: operationResult.requirement_id,
+    operation_id: operationResult.operation_id,
+    operation_attempt_id: operationResult.operation_attempt_id,
+  });
+  if (operationResult.result_manifest_id !== expectedResultManifestId) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback operation result identity digest is invalid",
+    );
+  }
+  if (operationResult.commit.commit_id !== canonicalDigest({
+    result_manifest_id: operationResult.result_manifest_id,
+    committed_at: operationResult.commit.committed_at,
+  })) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback operation commit identity digest is invalid",
+    );
+  }
+  if (
+    operationResult.status !== "succeeded"
+    || operationResult.operation_kind !== "integrate"
+    || operationResult.output_kind !== "integrated_table"
+    || operationResult.commit.state !== "committed"
+  ) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback requires one committed succeeded integrate/integrated_table result",
+    );
+  }
+  if (candidate.tables.length === 0) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback requires at least one committed candidate table",
+    );
+  }
+  const taskRoot = path.resolve(input.taskRoot);
+  const realTaskRoot = await realpath(taskRoot);
+  const canonicalDynamicRoot = path.resolve(
+    realTaskRoot,
+    "dataset_runs",
+    input.runId,
+    input.requirementId,
+    "dynamic-results",
+  );
+  const trustedRoot = path.resolve(input.result.trustedRoot);
+  const realTrustedRoot = await realpath(trustedRoot);
+  const trustedFromTaskRoot = path.relative(realTaskRoot, realTrustedRoot);
+  const expectedRootPrefix = `transform-quarantine-${operationResult.output_digest!.slice(0, 24)}-`;
+  const rootSuffix = path.basename(realTrustedRoot).slice(expectedRootPrefix.length);
+  if (
+    path.relative(trustedRoot, realTrustedRoot) !== ""
+    || path.dirname(realTrustedRoot) !== canonicalDynamicRoot
+    || !path.basename(realTrustedRoot).startsWith(expectedRootPrefix)
+    || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(rootSuffix)
+    || trustedFromTaskRoot.startsWith(`..${path.sep}`)
+    || trustedFromTaskRoot === ".."
+    || path.isAbsolute(trustedFromTaskRoot)
+  ) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback trusted root is not the canonical Core-committed task/run/requirement output root",
+    );
+  }
+  const summaries = operationResult.output_summary.tables;
+  if (summaries === null || typeof summaries !== "object" || Array.isArray(summaries)) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback requires a closed multi-table operation summary",
+    );
+  }
+  const summaryTableIds = Object.keys(summaries).sort();
+  const candidateTableIds = candidate.tables.map((table) => table.definition.table_id).sort();
+  const candidateAssetIds = [...candidate.registered_asset_ids].sort();
+  const operationAssetIds = [...operationResult.dependency_closure.input_asset_ids].sort();
+  const outputPaths = operationResult.output_files.map((output) => output.relative_path);
+  const outputDigests = operationResult.output_files.map((output) => output.sha256);
+  if (
+    operationResult.output_files.length !== candidate.tables.length
+    || summaryTableIds.length !== candidateTableIds.length
+    || summaryTableIds.some((tableId, index) => tableId !== candidateTableIds[index])
+    || candidateAssetIds.length !== operationAssetIds.length
+    || candidateAssetIds.some((assetId, index) => assetId !== operationAssetIds[index])
+    || new Set(outputPaths).size !== outputPaths.length
+    || new Set(outputDigests).size !== outputDigests.length
+  ) {
+    throw new UntrustedFallbackIntegrityError(
+      "untrusted fallback candidate does not exactly close the committed operation outputs and assets",
     );
   }
   const identityLine = untrustedFallbackIdentityLine({
@@ -324,14 +457,14 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
     resultManifestId: operationResult.result_manifest_id,
   });
   const sourceNote = [
-    `${FALLBACK_SOURCE_PREFIX} (coverage is partial; formal publication, admission, and review closure were not obtained).`,
+    `${FALLBACK_SOURCE_PREFIX} (coverage is partial; no formal Publication or Artifact was created).`,
     `Rejection reason: ${boundedReason({ message: input.rejectionReason, failedChecks: input.failedChecks })}.`,
     identityLine,
   ].join(" ");
 
   // Capture + hold the committed-root handle so the root identity is fenced
   // across the entire verify pass and re-checked after the read loop.
-  const rootHandle = await captureRootHandle(input.result.trustedRoot);
+  const rootHandle = await captureRootHandle(realTrustedRoot);
   try {
     // Phase 1: verify every table's bytes before any quarantine write.
     const verified: {
@@ -340,8 +473,24 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
       fileName: string;
       bytes: Buffer;
     }[] = [];
+    const usedOutputIndexes = new Set<number>();
     for (const table of candidate.tables) {
+      await assertFallbackCurrent(input);
+      if (table.data_ref.result_manifest_id !== operationResult.result_manifest_id) {
+        integrityRejection(
+          `candidate table '${table.definition.table_id}' references a different operation result`,
+        );
+      }
+      if (table.data_ref.output_kind !== operationResult.output_kind) {
+        integrityRejection(
+          `candidate table '${table.definition.table_id}' output kind does not match the operation result`,
+        );
+      }
       const fileIndex = table.data_ref.output_file_index;
+      if (usedOutputIndexes.has(fileIndex)) {
+        integrityRejection("candidate tables must reference unique admitted outputs");
+      }
+      usedOutputIndexes.add(fileIndex);
       const output = operationResult.output_files[fileIndex];
       if (output === undefined) {
         integrityRejection(`candidate table '${table.definition.table_id}' references a missing admitted output at index ${fileIndex}`);
@@ -349,11 +498,26 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
       if (output.sha256 !== table.data_ref.output_file_sha256) {
         integrityRejection(`candidate table '${table.definition.table_id}' data ref hash does not match the admitted output receipt`);
       }
+      const summary = tableSummary(operationResult, table.definition.table_id);
+      if (
+        summary.table_id !== table.definition.table_id
+        || summary.dataset_family !== candidate.dataset_family
+        || summary.row_granularity !== candidate.row_granularity
+        || summary.schema_ref !== table.definition.schema_ref
+        || summary.row_count !== table.row_count
+        || summary.column_count !== table.definition.field_names.length
+        || summary.primary_file_sha256 !== output.sha256
+      ) {
+        integrityRejection(
+          `candidate table '${table.definition.table_id}' does not match its admitted operation summary`,
+        );
+      }
       const bytes = await verifiedBytesForOutput(
         rootHandle,
         output.relative_path,
         output.size_bytes,
         output.sha256,
+        () => assertFallbackCurrent(input),
       );
       verified.push({
         tableId: table.definition.table_id,
@@ -364,6 +528,7 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
     }
     // Post-verify root identity re-check: any root swap during the read loop
     // aborts before any quarantine write.
+    await assertFallbackCurrent(input);
     const afterStat = await lstat(rootHandle.root.realPath);
     if (!afterStat.isDirectory() || afterStat.isSymbolicLink()
       || afterStat.dev !== rootHandle.root.dev || afterStat.ino !== rootHandle.root.ino
@@ -379,6 +544,7 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
     try {
       const receipts: UntrustedFallbackReceiptSummary[] = [];
       for (const table of verified) {
+        await assertFallbackCurrent(input);
         const receipt = await storeUntrustedArtifact(
           input.taskRoot,
           input.taskId,
@@ -395,9 +561,7 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
             ],
             missing_scope: [
               "formal_publication",
-              "product_admission",
-              "human_review_closure",
-              "product_assessment",
+              "formal_artifact",
             ],
           },
           table.bytes,
@@ -407,10 +571,14 @@ export async function archiveCommittedDynamicTablesAsUntrustedArtifacts(input: {
           submission_id: receipt.submission_id,
           table_id: table.tableId,
           name: receipt.name,
+          media_type: receipt.media_type,
           size_bytes: receipt.size_bytes,
           sha256: receipt.sha256,
+          authoritative: false,
+          trust: "untrusted",
         });
       }
+      await assertFallbackCurrent(input);
       return receipts;
     } catch (storageError) {
       await cleanupCreatedSubmissions(input.taskRoot, createdSubmissionIds);

@@ -10,6 +10,7 @@ import type { EventEnvelope } from "@biomed/contracts";
 import { packageDigest } from "../src/dataset/publish/manifest.js";
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import { computeHILEvidenceDigest } from "../src/dataset/contracts/hil-evidence.js";
+import { PublicationAcceptanceRejectedError } from "../src/dataset/dynamic-family/formal-rejections.js";
 import {
   completePublicationAcceptanceContinuation,
 } from "../src/dataset/dynamic-family/publication.js";
@@ -1747,6 +1748,67 @@ describe("publication acceptance restart continuation (Gold6 T6)", () => {
     });
     expect([200, 409]).toContain(replay.status);
     expect((await readdir(publishDir)).filter((name) => !name.startsWith("."))).toHaveLength(1);
+    await runtime.close();
+  });
+
+  test("preserves a typed rejection across restart without fabricating quarantine output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "durable-pub-continuation-reject-"));
+    roots.push(root);
+    const staged = await stagePendingPublication(root);
+    const reviewerReason = "chart-point evidence is incomplete";
+    const store = new DurableHILStore(new DurableTaskRepository(root));
+    const review = await store.resolveRequest(staged.taskId, staged.runId, {
+      request_id: staged.requestId,
+      evidence_digest: staged.evidenceDigest,
+      decision: { action: "reject" },
+      reason: reviewerReason,
+    });
+
+    const directError = await completePublicationAcceptanceContinuation({
+      continuation: staged.continuation,
+      taskRoot: path.join(root, staged.taskId),
+      runId: staged.runId,
+      review,
+    }).catch((error: unknown) => error);
+    expect(directError).toBeInstanceOf(PublicationAcceptanceRejectedError);
+    expect(directError).toMatchObject({
+      action: "reject",
+      reason: reviewerReason,
+      formal_status: "rejected",
+      untrusted_artifacts: [],
+      fallback_failure: null,
+    });
+    expect((directError as Error).message).toContain(`reviewer reason: ${reviewerReason}`);
+
+    // Application Host restart discovers the already-resolved review. The
+    // continuation intentionally has no committed OperationResult/trustedRoot,
+    // so recovery records the same formal reason but cannot manufacture ua_*.
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter: { async createSession(): Promise<never> { throw new Error("unused"); } },
+      workspaceFactory: async () => ({
+        root: path.join(root, "workspace"),
+        tools: [],
+        dispose: async () => undefined,
+      }),
+    });
+    const finalSnapshot = await runtime.repository.getSnapshot(staged.taskId);
+    const events = await runtime.repository.listEvents(staged.taskId, 0);
+    const failures = events.filter(
+      (event) => event.type === "run_failed" && event.payload.type === "run_failed",
+    );
+    expect(finalSnapshot?.runs[0]?.status).toBe("failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.payload).toMatchObject({
+      type: "run_failed",
+      error: expect.stringContaining(`reviewer reason: ${reviewerReason}`),
+    });
+    expect(events.some((event) => event.type === "publication_created")).toBe(false);
+    expect(events.some((event) => event.type === "artifact_produced")).toBe(false);
+    expect(finalSnapshot?.current_publication_id).toBeNull();
+    await expect(readdir(path.join(root, staged.taskId, "quarantine"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await runtime.close();
   });
 

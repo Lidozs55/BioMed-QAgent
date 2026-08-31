@@ -58,7 +58,10 @@ committed candidate bytes
 ```
 
 该旁路不是第二套 Publisher；未知异常以及控制、资源、I/O 或完整性失败（cancel、timeout、
-stale generation、fence loss、身份错配、路径越界、摘要漂移）不得降级归档。
+stale generation、fence loss、身份错配、路径越界、摘要漂移）不得降级归档。跨 Host
+restart 的 publication continuation 未持久化完整 committed OperationResult/trusted root，
+所以 restart 后的 reject/skip 只能保持 typed 正式拒绝并以 `run_failed` 收束，不能生成
+`ua_*`。
 
 receipt-only submit（`submit_dynamic_family_publication` 只回传 `preflight_receipt`）
 依赖 Host 进程内 preflight coordinator 保存的 prepared submission

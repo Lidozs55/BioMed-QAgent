@@ -18,6 +18,9 @@ import { canonicalDigest } from "../../dataset/adapters/identity.js";
 import {
   listCoreProductTopologyRequirements,
 } from "../../dataset/dynamic-family/product-requirement-registry.js";
+import {
+  FormalPublicationRejectionError,
+} from "../../dataset/dynamic-family/formal-rejections.js";
 import { coreProductProfileScaffold } from "../../dataset/dynamic-family/profile-scaffold.js";
 import { DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS } from "../../dataset/acquisition/provider-catalog.js";
 import type {
@@ -204,11 +207,15 @@ export function createDynamicFamilyPublicationTool(
         // non-authoritative ua_* receipts to the typed rejection error
         // without changing its formal status — the tool response stays an
         // explicit error with the receipts exposed for user retrieval.
-        const fallback = error as { formal_status?: unknown; untrusted_artifacts?: unknown };
         const fallbackProjection: Record<string, unknown> = {};
-        if (fallback.formal_status === "rejected" && Array.isArray(fallback.untrusted_artifacts)) {
-          fallbackProjection.formal_status = fallback.formal_status;
-          fallbackProjection.untrusted_artifacts = fallback.untrusted_artifacts;
+        if (error instanceof FormalPublicationRejectionError) {
+          fallbackProjection.formal_status = error.formal_status;
+          if (error.untrusted_artifacts.length > 0) {
+            fallbackProjection.untrusted_artifacts = error.untrusted_artifacts;
+          }
+          if (error.fallback_failure !== null) {
+            fallbackProjection.fallback_failure = error.fallback_failure;
+          }
         }
         return {
           content: JSON.stringify({ ok: false, error: { ...errorBody, ...fallbackProjection } }),

@@ -17,7 +17,6 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   archiveCommittedDynamicTablesAsUntrustedArtifacts,
-  DynamicPublicationUntrustedFallbackError,
   untrustedFallbackIdentityLine,
   untrustedFallbackMediaType,
 } from "../src/runtime/dynamic-family-untrusted-fallback.js";
@@ -27,6 +26,7 @@ import {
   PublicationAcceptanceRejectedError,
 } from "../src/dataset/dynamic-family/formal-rejections.js";
 import { listUntrustedArtifacts, storeUntrustedArtifact } from "../src/runtime/untrusted-artifact-store.js";
+import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import type { DynamicFamilyExecutionResult } from "../src/dataset/dynamic-family/submission.js";
 
 /**
@@ -56,16 +56,36 @@ const DIGEST_B = "b".repeat(64);
 const TABLE_A = "record_id,value\nr1,1\n";
 const TABLE_B = "point_id,note\np1,ok\n";
 
+async function actualStoreUntrustedArtifact(
+  ...args: Parameters<typeof storeUntrustedArtifact>
+): Promise<Awaited<ReturnType<typeof storeUntrustedArtifact>>> {
+  const actual = await vi.importActual<typeof import("../src/runtime/untrusted-artifact-store.js")>(
+    "../src/runtime/untrusted-artifact-store.js",
+  );
+  return actual.storeUntrustedArtifact(...args);
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function refreshCandidateId(candidate: PublicationCandidate): void {
+  const body = structuredClone(candidate) as unknown as Record<string, unknown>;
+  delete body.candidate_id;
+  candidate.candidate_id = `candidate_${canonicalDigest(body).slice(0, 32)}`;
 }
 
 function fileReceipt(content: string): OperationResultFileReceipt {
   return { relative_path: "", size_bytes: Buffer.byteLength(content, "utf8"), sha256: sha256(content) };
 }
 
-function committedReceipt(): OperationResultCommitReceipt {
-  return { state: "committed", commit_id: `commit_${DIGEST_B.slice(0, 16)}`, committed_at: "2026-09-01T00:00:00.000Z" };
+function committedReceipt(resultManifestId: string): OperationResultCommitReceipt {
+  const committedAt = "2026-09-01T00:00:00.000Z";
+  return {
+    state: "committed",
+    commit_id: canonicalDigest({ result_manifest_id: resultManifestId, committed_at: committedAt }),
+    committed_at: committedAt,
+  };
 }
 
 function closure(): OperationResultDependencyClosure {
@@ -78,26 +98,56 @@ function closure(): OperationResultDependencyClosure {
 }
 
 function operationResult(outputFiles: OperationResultFileReceipt[]): OperationResultManifest {
-  return {
-    schema_version: "1.0",
-    result_manifest_id: "result_untrusted_fb",
+  const operationId = "operation_untrusted_fb";
+  const operationAttemptId = "attempt_untrusted_fb";
+  const resultManifestId = canonicalDigest({
     task_id: TASK_ID,
     run_id: RUN_ID,
     requirement_id: REQUIREMENT_ID,
-    operation_id: "operation_untrusted_fb",
+    operation_id: operationId,
+    operation_attempt_id: operationAttemptId,
+  });
+  return {
+    schema_version: "1.0",
+    result_manifest_id: resultManifestId,
+    task_id: TASK_ID,
+    run_id: RUN_ID,
+    requirement_id: REQUIREMENT_ID,
+    operation_id: operationId,
     operation_kind: "integrate",
-    operation_attempt_id: "attempt_untrusted_fb",
+    operation_attempt_id: operationAttemptId,
     attempt: 1,
     status: "succeeded",
     input_digest: DIGEST_A,
     parameter_digest: DIGEST_B,
     implementation_digest: DIGEST_B,
-    output_digest: sha256(JSON.stringify(outputFiles)),
+    output_digest: canonicalDigest(outputFiles),
     output_kind: "integrated_table",
-    output_summary: {},
+    output_summary: {
+      tables: {
+        records: {
+          table_id: "records",
+          dataset_family: "family_fb",
+          row_granularity: "record",
+          schema_ref: "schema_records",
+          row_count: 1,
+          column_count: 2,
+          primary_file_sha256: sha256(TABLE_A),
+        },
+        points: {
+          table_id: "points",
+          dataset_family: "family_fb",
+          row_granularity: "record",
+          schema_ref: "schema_points",
+          row_count: 1,
+          column_count: 2,
+          primary_file_sha256: sha256(TABLE_B),
+        },
+      },
+    },
     output_files: outputFiles,
     dependency_closure: closure(),
-    commit: committedReceipt(),
+    commit: committedReceipt(resultManifestId),
   };
 }
 
@@ -111,14 +161,21 @@ async function fixture(options: { tamperPrimaryBytes?: boolean } = {}): Promise<
   const root = await mkdtemp(path.join(tmpdir(), "untrusted-fallback-"));
   roots.push(root);
   const taskRoot = path.join(root, TASK_ID);
-  const trustedRoot = path.join(taskRoot, "dataset_runs", RUN_ID, REQUIREMENT_ID, "dynamic-results", "committed_x");
+  const primaryReceipt = { ...fileReceipt(TABLE_A), relative_path: "tables/records.csv" };
+  const supportingReceipt = { ...fileReceipt(TABLE_B), relative_path: "tables/points.csv" };
+  const operation = operationResult([primaryReceipt, supportingReceipt]);
+  const trustedRoot = path.join(
+    taskRoot,
+    "dataset_runs",
+    RUN_ID,
+    REQUIREMENT_ID,
+    "dynamic-results",
+    `transform-quarantine-${operation.output_digest!.slice(0, 24)}-00000000-0000-4000-8000-000000000000`,
+  );
   const primary = options.tamperPrimaryBytes === true ? `${TABLE_A}r2,2\n` : TABLE_A;
   await mkdir(path.join(trustedRoot, "tables"), { recursive: true });
   await writeFile(path.join(trustedRoot, "tables", "records.csv"), primary, "utf8");
   await writeFile(path.join(trustedRoot, "tables", "points.csv"), TABLE_B, "utf8");
-  const primaryReceipt = { ...fileReceipt(TABLE_A), relative_path: "tables/records.csv" };
-  const supportingReceipt = { ...fileReceipt(TABLE_B), relative_path: "tables/points.csv" };
-  const operation = operationResult([primaryReceipt, supportingReceipt]);
 
   const projection: Projection = {
     projection_id: "projection_fb",
@@ -195,7 +252,7 @@ async function fixture(options: { tamperPrimaryBytes?: boolean } = {}): Promise<
   };
   const candidate = {
     ...candidateBody,
-    candidate_id: `candidate_${sha256(JSON.stringify(candidateBody)).slice(0, 24)}`,
+    candidate_id: `candidate_${canonicalDigest(candidateBody).slice(0, 32)}`,
   } as unknown as PublicationCandidate;
 
   return {
@@ -251,6 +308,10 @@ describe("dynamic publication untrusted-artifact fallback", () => {
     expect(receipts.map((receipt) => receipt.size_bytes)).toEqual([
       Buffer.byteLength(TABLE_A, "utf8"), Buffer.byteLength(TABLE_B, "utf8"),
     ]);
+    expect(receipts.every((receipt) =>
+      receipt.authoritative === false && receipt.trust === "untrusted"
+      && receipt.media_type === "text/csv"
+    )).toBe(true);
 
     const listing = await listUntrustedArtifacts(fx.taskRoot);
     expect(listing).toHaveLength(2);
@@ -263,7 +324,7 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       `operation_result:${fx.result.operationResult.result_manifest_id}`,
     ]);
     expect(primary?.missing_scope).toEqual([
-      "formal_publication", "product_admission", "human_review_closure", "product_assessment",
+      "formal_publication", "formal_artifact",
     ]);
     expect(primary?.source_note).toContain("Automatic untrusted-artifact fallback");
     expect(primary?.source_note).toContain("formally rejected");
@@ -306,7 +367,157 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       runId: RUN_ID,
       requirementId: REQUIREMENT_ID,
       rejectionReason: "dynamic publication review was not accepted: reject",
-    })).rejects.toThrow(/identity mismatch/);
+    })).rejects.toThrow(/identity mismatch|different task|invalid committed candidate\/result/i);
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("operation and candidate identity, manifest, asset, and summary mismatches are hard failures", async () => {
+    const fx = await fixture();
+    const candidateIdentityMismatch = structuredClone(fx.result) as DynamicFamilyExecutionResult;
+    candidateIdentityMismatch.materialization.candidate.candidate_id = "candidate_forged";
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: candidateIdentityMismatch,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/candidate identity digest/i);
+
+    const resultIdentityMismatch = structuredClone(fx.result) as DynamicFamilyExecutionResult;
+    resultIdentityMismatch.operationResult.result_manifest_id = "result_forged";
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: resultIdentityMismatch,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/operation result identity digest/i);
+
+    const assetMismatch = structuredClone(fx.result) as DynamicFamilyExecutionResult;
+    assetMismatch.materialization.candidate.registered_asset_ids = [`asset_${DIGEST_B}`];
+    refreshCandidateId(assetMismatch.materialization.candidate);
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: assetMismatch,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/outputs and assets/i);
+
+    const runMismatch = {
+      ...fx.result,
+      operationResult: { ...fx.result.operationResult, run_id: "run_other" },
+    } as DynamicFamilyExecutionResult;
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: runMismatch,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/different run|invalid committed candidate\/result|identity mismatch/i);
+
+    const wrongManifest = {
+      ...fx.result,
+      materialization: {
+        ...fx.result.materialization,
+        candidate: {
+          ...fx.result.materialization.candidate,
+          tables: fx.result.materialization.candidate.tables.map((table, index) =>
+            index === 0
+              ? { ...table, data_ref: { ...table.data_ref, result_manifest_id: "result_other" } }
+              : table),
+        },
+      },
+    } as DynamicFamilyExecutionResult;
+    refreshCandidateId(wrongManifest.materialization.candidate);
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: wrongManifest,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/different operation result/i);
+
+    const summaryDrift = structuredClone(fx.result) as DynamicFamilyExecutionResult;
+    const summaries = summaryDrift.operationResult.output_summary.tables as Record<string, Record<string, unknown>>;
+    summaries.records!.row_count = 2;
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: summaryDrift,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/operation summary/i);
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("trusted-root and execution-fence mismatches never leave quarantine output", async () => {
+    const fx = await fixture();
+    const outsideRoot = path.join(fx.taskRoot, "outside-committed");
+    await mkdir(outsideRoot);
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: { ...fx.result, trustedRoot: outsideRoot },
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+    })).rejects.toThrow(/not the canonical Core-committed/i);
+
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+      signal: aborted.signal,
+    })).rejects.toThrow(/cancelled/i);
+
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: fx.result,
+      taskId: TASK_ID,
+      taskRoot: fx.taskRoot,
+      runId: RUN_ID,
+      requirementId: REQUIREMENT_ID,
+      rejectionReason: "semantic closure failed",
+      isExecutionCurrent: () => false,
+    })).rejects.toThrow(/stale/i);
+    await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
+  });
+
+  test("mid-storage fence loss removes only receipts created by this fallback", async () => {
+    const fx = await fixture();
+    let current = true;
+    let stores = 0;
+    storeUntrustedHook = async (taskRoot, taskId, metadata, bytes) => {
+      stores += 1;
+      const receipt = await actualStoreUntrustedArtifact(taskRoot, taskId, metadata, bytes);
+      current = false;
+      return receipt;
+    };
+    try {
+      await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+        result: fx.result,
+        taskId: TASK_ID,
+        taskRoot: fx.taskRoot,
+        runId: RUN_ID,
+        requirementId: REQUIREMENT_ID,
+        rejectionReason: "semantic closure failed",
+        isExecutionCurrent: () => current,
+      })).rejects.toThrow(/stale/i);
+    } finally {
+      storeUntrustedHook = null;
+    }
+    expect(stores).toBe(1);
     await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
   });
 
@@ -318,27 +529,26 @@ describe("dynamic publication untrusted-artifact fallback", () => {
         ...fx.result.operationResult,
         output_files: fx.result.operationResult.output_files.slice(0, 1),
       },
-    } as DynamicFamilyExecutionResult;
-    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
-      result: {
-        ...broken,
-        materialization: {
-          ...broken.materialization,
-          candidate: {
-            ...broken.materialization.candidate,
-            tables: broken.materialization.candidate.tables.map((table, index) =>
-              index === 1
-                ? { ...table, data_ref: { ...table.data_ref, output_file_index: 5 } }
-                : table),
-          },
+      materialization: {
+        ...fx.result.materialization,
+        candidate: {
+          ...fx.result.materialization.candidate,
+          tables: fx.result.materialization.candidate.tables.map((table, index) =>
+            index === 1
+              ? { ...table, data_ref: { ...table.data_ref, output_file_index: 5 } }
+              : table),
         },
-      } as DynamicFamilyExecutionResult,
+      },
+    } as DynamicFamilyExecutionResult;
+    refreshCandidateId(broken.materialization.candidate);
+    await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
+      result: broken,
       taskId: TASK_ID,
       taskRoot: fx.taskRoot,
       runId: RUN_ID,
       requirementId: REQUIREMENT_ID,
       rejectionReason: "dynamic publication review was not accepted: reject",
-    })).rejects.toThrow(/missing admitted output/);
+    })).rejects.toThrow(/missing admitted output|does? not exactly close/i);
     await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
   });
 
@@ -359,30 +569,34 @@ describe("dynamic publication untrusted-artifact fallback", () => {
       runId: RUN_ID,
       requirementId: REQUIREMENT_ID,
       rejectionReason: "dynamic publication review was not accepted: reject",
-    })).rejects.toThrow(/is not a canonical relative path|escapes the committed trusted root/);
+    })).rejects.toThrow(/canonical relative path|escape its root|escapes the committed trusted root/i);
     await expect(listUntrustedArtifacts(fx.taskRoot)).resolves.toEqual([]);
   });
 
-  test("dynamic publication rejection error carries formal rejection and receipts", () => {
-    const error = new DynamicPublicationUntrustedFallbackError({
-      message: "dynamic publication review was not accepted: reject",
-      untrustedArtifacts: [{
-        submission_id: `ua_${"0".repeat(24)}`,
-        table_id: "records",
-        name: "records.csv",
-        size_bytes: 18,
-        sha256: DIGEST_A,
-      }],
-    });
-    expect(error.name).toBe("DynamicPublicationUntrustedFallbackError");
+  test("formal rejection preserves identity while carrying verified untrusted receipts", () => {
+    const error = new PublicationAcceptanceRejectedError("reject", "axis units unverifiable");
+    error.attachUntrustedArtifacts([{
+      submission_id: `ua_${"0".repeat(24)}`,
+      table_id: "records",
+      name: "records.csv",
+      media_type: "text/csv",
+      size_bytes: 18,
+      sha256: DIGEST_A,
+      authoritative: false,
+      trust: "untrusted",
+    }]);
+    expect(error.name).toBe("PublicationAcceptanceRejectedError");
     expect(error.formal_status).toBe("rejected");
-    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain("reviewer reason: axis units unverifiable");
     expect(error.untrusted_artifacts).toEqual([{
       submission_id: `ua_${"0".repeat(24)}`,
       table_id: "records",
       name: "records.csv",
+      media_type: "text/csv",
       size_bytes: 18,
       sha256: DIGEST_A,
+      authoritative: false,
+      trust: "untrusted",
     }]);
   });
 
@@ -423,6 +637,7 @@ describe("dynamic publication untrusted-artifact fallback", () => {
     expect(notPublishable.failedChecks).toHaveLength(1);
     expect(acceptance.action).toBe("reject");
     expect(acceptance.reason).toBe("axis units unverifiable");
+    expect(acceptance.message).toContain("reviewer reason: axis units unverifiable");
     expect(new PublicationAcceptanceRejectedError("skip", null).message).toContain("skip");
   });
 
@@ -498,7 +713,7 @@ describe("dynamic publication untrusted-artifact fallback", () => {
     storeUntrustedHook = async (taskRoot, taskId, metadata, bytes) => {
       storageCalls += 1;
       if (storageCalls === 2) throw new Error("simulated storage failure (ENOSPC)");
-      return storeUntrustedArtifact(taskRoot, taskId, metadata, bytes);
+      return actualStoreUntrustedArtifact(taskRoot, taskId, metadata, bytes);
     };
     try {
       await expect(archiveCommittedDynamicTablesAsUntrustedArtifacts({
@@ -524,17 +739,17 @@ describe("submit_dynamic_family_publication fallback receipt projection", () => 
   test("projects formal_status and untrusted_artifacts while remaining an error", async () => {
     const { createDynamicFamilyPublicationTool } = await import("../src/agent/tools/dynamic-family-publication.js");
     const contracts = await import("@biomed/contracts");
-    const { DynamicPublicationUntrustedFallbackError: FallbackError } = await import("../src/runtime/dynamic-family-untrusted-fallback.js");
-    const typedRejection = new FallbackError({
-      message: "dynamic publication review was not accepted: reject",
-      untrustedArtifacts: [{
-        submission_id: `ua_${"1".repeat(24)}`,
-        table_id: "records",
-        name: "records.csv",
-        size_bytes: 18,
-        sha256: DIGEST_A,
-      }],
-    });
+    const typedRejection = new PublicationAcceptanceRejectedError("reject", null);
+    typedRejection.attachUntrustedArtifacts([{
+      submission_id: `ua_${"1".repeat(24)}`,
+      table_id: "records",
+      name: "records.csv",
+      media_type: "text/csv",
+      size_bytes: 18,
+      sha256: DIGEST_A,
+      authoritative: false,
+      trust: "untrusted",
+    }]);
     const unsignedReceipt = {
       schema_version: "1.0",
       task_id: "task_projection",
@@ -584,16 +799,66 @@ describe("submit_dynamic_family_publication fallback receipt projection", () => 
       submission_id: `ua_${"1".repeat(24)}`,
       table_id: "records",
       name: "records.csv",
+      media_type: "text/csv",
       size_bytes: 18,
       sha256: DIGEST_A,
+      authoritative: false,
+      trust: "untrusted",
     }]);
   });
 
-  test("plain publication rejections project without fallback properties", async () => {
+  test("projects fallback failure on the original formal rejection without receipts", async () => {
+    const { createDynamicFamilyPublicationTool } = await import("../src/agent/tools/dynamic-family-publication.js");
+    const contracts = await import("@biomed/contracts");
+    const rejection = new LiteratureProfileRejectionError("semantic closure failed");
+    rejection.recordFallbackFailure("untrusted artifact fallback failed: integrity drift");
+    const unsignedReceipt = {
+      schema_version: "1.0",
+      task_id: "task_projection_failure",
+      requirement_id: "build_projection_failure",
+      generation: 0,
+      family_spec_digest: DIGEST_A,
+      projection_digest: DIGEST_B,
+      product_requirement_digest: DIGEST_A,
+      host_descriptor_digest: DIGEST_B,
+      submission_digest: DIGEST_A,
+      required_input_roles: ["source"],
+      output_closure: ["records"],
+      topology_diagnostics: [],
+      acquisition_plan: [],
+      receipt_digest: "0".repeat(64),
+    } as unknown as Parameters<typeof contracts.computeDynamicFamilyPreflightReceiptDigest>[0];
+    const preflightReceipt = {
+      ...unsignedReceipt,
+      receipt_digest: await contracts.computeDynamicFamilyPreflightReceiptDigest(unsignedReceipt),
+    };
+    const tool = createDynamicFamilyPublicationTool({
+      resolveSubmission: async () => {
+        throw rejection;
+      },
+      submit: async () => {
+        throw rejection;
+      },
+    });
+    const result = await tool.execute({ schema_version: "1.0", preflight_receipt: preflightReceipt });
+    const body = JSON.parse(result.content) as { error: Record<string, unknown> };
+    expect(result.isError).toBe(true);
+    expect(body.error).toMatchObject({
+      message: "semantic closure failed",
+      formal_status: "rejected",
+      fallback_failure: "untrusted artifact fallback failed: integrity drift",
+    });
+    expect(body.error).not.toHaveProperty("untrusted_artifacts");
+  });
+
+  test("plain publication rejections and shape-spoofed errors project without fallback properties", async () => {
     const { createDynamicFamilyPublicationTool } = await import("../src/agent/tools/dynamic-family-publication.js");
     const tool = createDynamicFamilyPublicationTool({
       submit: async () => {
-        throw new Error("dynamic family preflight generation is stale");
+        const spoofed = new Error("dynamic family preflight generation is stale") as Error & Record<string, unknown>;
+        spoofed.formal_status = "rejected";
+        spoofed.untrusted_artifacts = [{ submission_id: `ua_${"f".repeat(24)}` }];
+        throw spoofed;
       },
     });
     const result = await tool.execute({ schema_version: "1.0", preflight_receipt: { receipt_digest: DIGEST_A } as unknown });

@@ -85,6 +85,7 @@ async function fixture(overrides: {
         binding_id: "asset_binding",
         source: "geo_gse",
         input_requirement_ref: "input_geo",
+        binding_kind: "transform_input",
         parameters: { accession: "GSE1" },
       },
       {

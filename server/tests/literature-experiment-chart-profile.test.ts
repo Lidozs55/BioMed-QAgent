@@ -5,7 +5,11 @@ import path from "node:path";
 import type { CoreDerivedAssetProvenance } from "@biomed/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { validateLiteratureExperimentChartProfile } from "../src/dataset/families/index.js";
+import { DelimitedBoundsError } from "../src/dataset/adapters/text.js";
+import {
+  LiteratureExperimentChartSemanticError,
+  validateLiteratureExperimentChartProfile,
+} from "../src/dataset/families/index.js";
 
 const roots: string[] = [];
 const ARCHIVE_ID = `asset_${"a".repeat(64)}`;
@@ -270,6 +274,61 @@ describe("literature experiment chart semantic profile", () => {
       ]),
       sourceInputProvenance: value.sourceInputProvenance,
     })).resolves.toBeUndefined();
+  });
+
+  it("types semantic mismatches without wrapping file I/O failures", async () => {
+    const semantic = await fixture({ supplementary: { media_type: "application/octet-stream" } });
+    await expect(validateLiteratureExperimentChartProfile({
+      profileRef: "literature_experiment_chart.release.v1",
+      stagedTablePaths: new Map([
+        ["chart_series", semantic.files.series],
+        ["chart_points", semantic.files.points],
+        ["supplementary_asset_records", semantic.files.supplementary],
+      ]),
+      sourceInputProvenance: semantic.sourceInputProvenance,
+    })).rejects.toBeInstanceOf(LiteratureExperimentChartSemanticError);
+
+    const bounded = await fixture();
+    await writeFile(
+      bounded.files.series,
+      `chart_series_id,source_locator\n${"x".repeat(1024 * 1024 + 1)},{}\n`,
+      "utf8",
+    );
+    let resourceFailure: unknown;
+    try {
+      await validateLiteratureExperimentChartProfile({
+        profileRef: "literature_experiment_chart.release.v1",
+        stagedTablePaths: new Map([
+          ["chart_series", bounded.files.series],
+          ["chart_points", bounded.files.points],
+          ["supplementary_asset_records", bounded.files.supplementary],
+        ]),
+        sourceInputProvenance: bounded.sourceInputProvenance,
+      });
+    } catch (error) {
+      resourceFailure = error;
+    }
+    expect(resourceFailure).toBeInstanceOf(DelimitedBoundsError);
+    expect(resourceFailure).not.toBeInstanceOf(LiteratureExperimentChartSemanticError);
+
+    const missing = await fixture();
+    await rm(missing.files.series);
+    let ioFailure: unknown;
+    try {
+      await validateLiteratureExperimentChartProfile({
+        profileRef: "literature_experiment_chart.release.v1",
+        stagedTablePaths: new Map([
+          ["chart_series", missing.files.series],
+          ["chart_points", missing.files.points],
+          ["supplementary_asset_records", missing.files.supplementary],
+        ]),
+        sourceInputProvenance: missing.sourceInputProvenance,
+      });
+    } catch (error) {
+      ioFailure = error;
+    }
+    expect(ioFailure).toMatchObject({ code: "ENOENT" });
+    expect(ioFailure).not.toBeInstanceOf(LiteratureExperimentChartSemanticError);
   });
 
   it("rejects exact-label review bypass, locator drift, and media-type parser bypass", async () => {

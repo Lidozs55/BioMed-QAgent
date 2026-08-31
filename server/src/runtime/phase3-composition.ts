@@ -89,7 +89,6 @@ import {
 } from "../dataset/dynamic-family/formal-rejections.js";
 import {
   archiveCommittedDynamicTablesAsUntrustedArtifacts,
-  DynamicPublicationUntrustedFallbackError as UntrustedFallbackError,
 } from "./dynamic-family-untrusted-fallback.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
@@ -800,23 +799,33 @@ export async function createPhase3Runtime(
                   failedChecks: publicationError instanceof DynamicProductNotPublishableError
                     ? publicationError.failedChecks
                     : undefined,
+                  signal,
+                  isExecutionCurrent: async () =>
+                    reservation !== null
+                    && await assertExecutionLockOwned()
+                    && dynamicFamilyPreflight.isCurrent(reservation),
                 });
-                throw new UntrustedFallbackError({
-                  message,
-                  untrustedArtifacts: receipts,
-                });
+                publicationError.attachUntrustedArtifacts(receipts);
               } catch (fallbackError) {
-                if (fallbackError instanceof UntrustedFallbackError) throw fallbackError;
                 // A failed archive (including the helper's own no-TOCTOU
                 // integrity re-verification) stays a hard reject without
-                // ua_* output; the original publication error remains
-                // authoritative.
+                // ua_* output; the original typed publication error remains
+                // authoritative and carries only a bounded diagnostic.
                 const fallbackNote = `untrusted artifact fallback failed: ${fallbackError instanceof Error ? fallbackError.message.slice(0, 300) : String(fallbackError)}`;
                 console.warn("runtime.dynamic_publication_untrusted_fallback", {
                   detail: fallbackNote,
                 });
-                throw new Error(`${message}; ${fallbackNote}`, { cause: fallbackError });
+                // Diagnostic attachment is best-effort only. Never replace
+                // the original typed rejection if an outcome was already
+                // attached to its carrier.
+                if (
+                  publicationError.untrusted_artifacts.length === 0
+                  && publicationError.fallback_failure === null
+                ) {
+                  publicationError.recordFallbackFailure(fallbackNote);
+                }
               }
+              throw publicationError;
             }
             throw publicationError;
           }
