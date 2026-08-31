@@ -1,0 +1,347 @@
+[
+  {
+    "schema_version": "2.0",
+    "schema_id": "target_evidence.target.v1",
+    "dataset_family": "target_evidence",
+    "row_granularity": "one target identity",
+    "primary_key": [
+      "entity_id",
+      "entity_namespace"
+    ],
+    "fields": [
+      {
+        "schema_version": "2.0",
+        "name": "entity_id",
+        "data_type": "string",
+        "semantic_role": "entity_identifier",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Identifier assigned by the declared entity namespace.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "entity_namespace",
+        "data_type": "string",
+        "semantic_role": "identifier_namespace",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": "biomed:id_namespace.v1",
+        "description": "Controlled namespace that determines the authority and syntax of entity_id.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "entity_type",
+        "data_type": "string",
+        "semantic_role": "entity_type",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Biomedical entity class such as gene, protein, variant, disease, or target.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "preferred_name",
+        "data_type": "string",
+        "semantic_role": "entity_label",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Preferred display name supplied by the declared authority.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "organism",
+        "data_type": "string",
+        "semantic_role": "organism",
+        "required": false,
+        "nullable": true,
+        "unit_policy": null,
+        "ontology": "NCBI Taxonomy",
+        "description": "Organism name or taxonomy identifier when the entity is organism-specific.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_id",
+        "data_type": "string",
+        "semantic_role": "foreign_key",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Identifier of the source record carrying this assertion.",
+        "derivation_policy": null
+      }
+    ]
+  },
+  {
+    "schema_version": "2.0",
+    "schema_id": "target_evidence.evidence.v1",
+    "dataset_family": "target_evidence",
+    "row_granularity": "one target evidence assertion",
+    "primary_key": [
+      "evidence_id"
+    ],
+    "fields": [
+      {
+        "schema_version": "2.0",
+        "name": "evidence_id",
+        "data_type": "string",
+        "semantic_role": "row_identifier",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Stable identifier for one evidence assertion.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "target_id",
+        "data_type": "string",
+        "semantic_role": "foreign_key",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Identifier of the asserted target.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "target_namespace",
+        "data_type": "string",
+        "semantic_role": "identifier_namespace",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": "biomed:id_namespace.v1",
+        "description": "Controlled namespace for target_id.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "evidence_type",
+        "data_type": "string",
+        "semantic_role": "evidence_type",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Type of target evidence, such as disease association or mechanism.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "assertion",
+        "data_type": "string",
+        "semantic_role": "evidence_assertion",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Normalized assertion made about the target.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "evidence_value",
+        "data_type": "json",
+        "semantic_role": "evidence_measurement",
+        "required": false,
+        "nullable": true,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Structured value supporting the assertion when present.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_id",
+        "data_type": "string",
+        "semantic_role": "foreign_key",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Source carrier record supporting the assertion.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_locator",
+        "data_type": "json",
+        "semantic_role": "source_locator",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Locator for the exact source record or field.",
+        "derivation_policy": null
+      }
+    ]
+  },
+  {
+    "schema_version": "2.0",
+    "schema_id": "target_evidence.source.v1",
+    "dataset_family": "target_evidence",
+    "row_granularity": "one target evidence source carrier",
+    "primary_key": [
+      "source_id"
+    ],
+    "fields": [
+      {
+        "schema_version": "2.0",
+        "name": "source_id",
+        "data_type": "string",
+        "semantic_role": "row_identifier",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Stable identifier for this source carrier record.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_database",
+        "data_type": "string",
+        "semantic_role": "source_authority",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Database, repository, journal, or provider that supplied the source.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_asset_id",
+        "data_type": "string",
+        "semantic_role": "source_asset_reference",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Core-registered immutable SourceAsset identifier.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_locator",
+        "data_type": "json",
+        "semantic_role": "source_locator",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Serialized SourceLocator 2.0 locating the supporting record or cell.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "retrieved_at",
+        "data_type": "datetime",
+        "semantic_role": "provenance",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "ISO 8601 retrieval timestamp.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "carrier_type",
+        "data_type": "string",
+        "semantic_role": "source_carrier_type",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Carrier form such as api_record, paper_table, supplementary_file, or figure.",
+        "derivation_policy": null
+      }
+    ]
+  },
+  {
+    "schema_version": "2.0",
+    "schema_id": "target_evidence.supporting.v1",
+    "dataset_family": "target_evidence",
+    "row_granularity": "one supporting target evidence assertion",
+    "primary_key": [
+      "supporting_id"
+    ],
+    "fields": [
+      {
+        "schema_version": "2.0",
+        "name": "supporting_id",
+        "data_type": "string",
+        "semantic_role": "row_identifier",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Stable identifier for a supporting assertion.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "evidence_id",
+        "data_type": "string",
+        "semantic_role": "foreign_key",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Evidence assertion supported by this record.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "supporting_type",
+        "data_type": "string",
+        "semantic_role": "supporting_evidence_type",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Supporting record type, such as target annotation or trial result.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "supporting_value",
+        "data_type": "json",
+        "semantic_role": "supporting_evidence",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Structured supporting value; source-specific payload remains normalized JSON.",
+        "derivation_policy": null
+      },
+      {
+        "schema_version": "2.0",
+        "name": "source_id",
+        "data_type": "string",
+        "semantic_role": "foreign_key",
+        "required": true,
+        "nullable": false,
+        "unit_policy": null,
+        "ontology": null,
+        "description": "Source carrier record for the supporting assertion.",
+        "derivation_policy": null
+      }
+    ]
+  }
+]

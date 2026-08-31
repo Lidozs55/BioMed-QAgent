@@ -201,6 +201,22 @@
 
 - **正样本（本四案最强）**：载体甄别——search_pdb 假命中 5 件（7AN4 弯曲菌差向异构酶、6VN2 USP7、7NX3 ALK…）**全部剔除且给出物种/蛋白理由**；保留结构逐条带分辨率+PMID；"载体获取失败 ≠ 文献不存在"的区分；拒绝臆造变异行；Dynamic 变异构建给出完整方案后请求范围确认（对比 gold3-E4 的"要清单但工具在手不用"，这次的确认请求附了具体 provider/位点方案，属合理边界）。
 
+## gold4-r2 @ qwen3.8-flash（2026-08-31，main@d3375f88ca70，**规范版复测**，task_ts_ca7f8e47-06df-43e5-8d49-ef532afef3f3）
+
+> supervisor 全程无 500（journal 767 全量+自动 closure）。**36 calls / 303s / 2.13M token / 峰值 59k**——对比上案（79 calls/1864s/4.49M/148k）：**墙钟 -84%、token -53%**。终态 **succeeded_publication ×2**（与上案同档）：structures（RBD/ACE2+链+配体+实验条件）+ target identity（ACE2）。0 压缩/0 停审/0 HIL。
+
+**G1 黑洞销案确认（活体）**：上案"发布后 58 calls/81% token 找回执通道"→ 本次 post-pub 仅 20 calls/151s 且**全部有效**（inspect_source_coverage 验证+终稿），`navigate_page` 从 23 次降到 **0**（载体直接 acquire_core_carrier）。回执读取通道打开后自检行为回归正常——G1/G4 两条在 gold4 上关闭。
+
+| # | 卡点（r2 新增/再证） | 归类 | 证据 | 建议 |
+| - | ---- | ---- | ---- | ---- |
+| O1 | **序列类数据无正式来源可达**：题面"病毒株 Spike 序列"三途全封——UniProt P0DTC2/P0DTD1 被工具面**明确 research-only 禁为 build 源**（政策正确但无替代）；NCBI Virus/GISAID 无 Core provider 也无发现工具 | 框架（覆盖面） | 终答交付表行 1 原文 | 序列域立项：NCBI Virus provider 或允许"已注册参考序列 accession"类绑定 |
+| G3-再证 | **Europe PMC fullTextXML `http_client_error` 第 2 案非重试性复现**：模型准确归因"host-side, not input-side"并建议 retry window——队友标注的"半修（NoFullTextError 已分型）"未覆盖 http_client_error 本体 | 框架（G3 保持开放） | 终答求助 3；execute@604/626 两次文献 build 失败 | 按 G3 立项复现 headers 对照 |
+| O2 | **`scaffold_dataset_profile` 新工具目的不可知**：模型两次调用均错（@291/@497）——cleaning proposal 套件无 guidance/skill 覆盖，工具描述不足以推断用法（D4 同族，新实例） | 框架（工具描述）+ prompt | errs 列表；终答未提及此工具 | cleaning 套件补 SKILL.md + get_research_data_guidance 主题；或工具 description 补最小示例 |
+| O3 | `lookup_dbsnp`/`lookup_gwas_catalog` 参数错误各 1 次（SARS 题面甚至试了 GWAS 目录——跨域检索式试探）| 提示词（轻，已自愈） | seq186/207 | briefing 已管住循环（一次即改），仅记行为面 |
+
+- **诚实面保持高水准**：三未达类全部给"确切阻塞原因+可达性判定"；拒绝 dbSNP placement 冒充 variant-assertion；无 provisional CSV（每条理由具体）；终答求助含可执行选项（GISAID 授权/retry window）。
+- 十案首个"发布后无失控"的动态+静态混合案，验证了链 1 修复的**行为转化**价值（不只是 token 省，是模型终于能做完它想做的验证）。
+
 ## gold5 @ qwen3.8-flash（2026-08-30，main@1a9c070dfb1b）
 
 ### r1（task_ts_9046f9e7，已取消）＝ stale-build 灾难样本（H3）
