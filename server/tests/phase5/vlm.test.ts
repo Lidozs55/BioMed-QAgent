@@ -27,6 +27,7 @@ import {
   ChartExtractionError,
   MAX_PDF_IMAGES_PER_FILE,
   MAX_PDF_PAGES_PER_FILE,
+  MAX_PDF_RENDER_PIXELS,
   RENDER_DPI,
   renderPdfPages,
 } from "../../src/processing/vlm/index.js";
@@ -128,7 +129,10 @@ const DOSE_RESPONSE_VLM_JSON = JSON.stringify({
  * "response") for the page-render cap test — same hand-assembled byte layout
  * as the committed vector fixture.
  */
-function buildTextOnlyPdf(pageCount: number): Buffer {
+function buildTextOnlyPdf(
+  pageCount: number,
+  mediaBox: readonly [width: number, height: number] = [612, 792],
+): Buffer {
   const objects: string[] = [];
   objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   const pageIds = Array.from({ length: pageCount }, (_, index) => 5 + index * 2);
@@ -140,7 +144,7 @@ function buildTextOnlyPdf(pageCount: number): Buffer {
     const text = `BT /F1 11 Tf 72 700 Td (Cohort ${index + 1} observations were recorded.) Tj ET`;
     objects[contentsId] = `<< /Length ${Buffer.byteLength(text, "latin1")} >>\nstream\n${text}\nendstream`;
     objects[contentsId + 1] =
-      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${mediaBox[0]} ${mediaBox[1]}] ` +
       `/Resources << /Font << /F1 3 0 R >> >> /Contents ${contentsId} 0 R >>`;
   }
   const bytes: Buffer[] = [Buffer.from("%PDF-1.4\n", "latin1")];
@@ -881,6 +885,29 @@ describe("vector PDF page rendering tier", () => {
     expect(y1).toBeLessThanOrEqual(png.height);
     expect(x1).toBeGreaterThan(x0);
     expect(y1).toBeGreaterThan(y0);
+  }, 60_000);
+
+  it("renders an admitted custom DPI and rejects unsafe DPI or oversized pages", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const custom = await renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "custom_dpi"), {
+      dpi: 216,
+    });
+    const customPage = custom.pages[0];
+    if (customPage === undefined) throw new Error("custom-DPI page was not rendered");
+    const png = PNG.sync.read(await readFile(customPage.path));
+    expect(png.width).toBe(Math.round((612 * 216) / 72));
+    expect(png.height).toBe(Math.round((792 * 216) / 72));
+
+    await expect(renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "unsafe_dpi"), {
+      dpi: 301,
+    })).rejects.toThrow(/DPI must be an integer between 72 and 300/);
+
+    const oversized = path.join(taskRoot, "oversized_page.pdf");
+    await writeFile(oversized, buildTextOnlyPdf(1, [5000, 5000]));
+    await expect(renderPdfPages(oversized, path.join(taskRoot, "oversized"), {
+      dpi: 144,
+    })).rejects.toThrow(new RegExp(`exceeded the ${MAX_PDF_RENDER_PIXELS} pixel rendering limit`));
   }, 60_000);
 
   it("caps page rendering at 12 pages and falls back to the first pages without caption candidates", async () => {

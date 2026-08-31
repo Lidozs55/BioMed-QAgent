@@ -1,12 +1,14 @@
 /**
- * Caption-guided full-page rendering for vector PDFs (Gold6 vision repair,
- * task 7). The embedded-raster tier (``pdf-images.ts``) stays the FIRST tier;
- * this module is the fallback for PDFs whose figures are pure vector drawing
- * (no image XObject), where the first tier finds nothing usable.
+ * Caption-guided full-page rendering for vector and composite PDFs (Gold6
+ * vision repair, task 7). The exploratory chart tool uses this module after
+ * its embedded-raster tier; the governed registered-paper route uses complete
+ * page rasters directly so axes, legends, labels, and vector marks stay in one
+ * image.
  *
  * pdfjs renders each candidate page through ``@napi-rs/canvas`` (the pdfjs
- * Node canvas backend, a direct dependency of ``@biomed/server``) at
- * ``RENDER_DPI``. Page candidates are bounded by ``MAX_PDF_PAGES_PER_FILE``:
+ * Node canvas backend, a direct dependency of ``@biomed/server``) at the
+ * requested bounded DPI. Page candidates are bounded by
+ * ``MAX_PDF_PAGES_PER_FILE``:
  * the text layer is scanned first and pages matching ``Fig``/``Figure``,
  * ``dose``, ``response``, or the extraction hint rank as caption candidates;
  * only when no candidate exists do the first pages render — never the
@@ -31,10 +33,14 @@ import { ChartExtractionError } from "./chart-json.js";
 /** Maximum pages rendered from a single PDF (VLM cost cap). */
 export const MAX_PDF_PAGES_PER_FILE = 12;
 
-/** Page rendering resolution (2x the 72dpi PDF unit space). */
+/** Default page rendering resolution (2x the 72dpi PDF unit space). */
 export const RENDER_DPI = 144;
 
-const RENDER_SCALE = RENDER_DPI / 72;
+/** Bounded DPI range accepted by the in-process renderer. */
+const MIN_RENDER_DPI = 72;
+const MAX_RENDER_DPI = 300;
+/** Per-page allocation/scan cap; checked before canvas creation. */
+export const MAX_PDF_RENDER_PIXELS = 25_000_000;
 /** Padding added around the detected drawing bbox (rendered pixels). */
 const INK_PADDING_PX = 4;
 /** Fewer drawn pixels than this counts as a blank page (full-page bbox). */
@@ -60,6 +66,8 @@ export interface PdfPageRendering {
 export interface RenderPdfPagesOptions {
   /** Extraction hint; pages containing it rank as caption candidates. */
   hint?: string;
+  /** Raster resolution. Defaults to RENDER_DPI and is bounded to protect memory. */
+  dpi?: number;
   signal?: AbortSignal;
 }
 
@@ -133,24 +141,45 @@ function detectInkBbox(ctx: SKRSContext2D, width: number, height: number): strin
 }
 
 /**
- * Render the bounded caption-guided candidate pages of a PDF into PNG rasters
- * under ``destDir``. Throws ``ChartExtractionError`` when the PDF cannot be
- * opened, a page render fails, or ``signal`` reports cancellation.
+ * Read a PDF path, then render its bounded caption-guided candidate pages.
+ * Governed registered-asset callers use ``renderPdfPagesFromBytes`` instead so
+ * the rasterizer consumes the exact bytes that passed digest verification.
  */
 export async function renderPdfPages(
   pdfPath: string,
   destDir: string,
   options: RenderPdfPagesOptions = {},
 ): Promise<PdfPageRendering> {
-  const { signal, hint = "" } = options;
-  throwIfCancelled(pdfPath, signal);
-
+  throwIfCancelled(pdfPath, options.signal);
   let bytes: Uint8Array;
   try {
     bytes = await readPdfBytes(pdfPath);
   } catch (error) {
     throw extractionError(`could not read ${pdfPath} for page rendering: ${errorMessage(error)}`);
   }
+  return renderPdfPagesFromBytes(bytes, pdfPath, destDir, options);
+}
+
+/**
+ * Render already verified PDF bytes into bounded full-page PNG rasters. The
+ * input is copied before pdfjs receives it because pdfjs may transfer/detach
+ * its Uint8Array while loading the document.
+ */
+export async function renderPdfPagesFromBytes(
+  verifiedBytes: Uint8Array,
+  sourceLabel: string,
+  destDir: string,
+  options: RenderPdfPagesOptions = {},
+): Promise<PdfPageRendering> {
+  const { signal, hint = "", dpi = RENDER_DPI } = options;
+  throwIfCancelled(sourceLabel, signal);
+  if (!Number.isInteger(dpi) || dpi < MIN_RENDER_DPI || dpi > MAX_RENDER_DPI) {
+    throw extractionError(
+      `page rendering DPI must be an integer between ${MIN_RENDER_DPI} and ${MAX_RENDER_DPI}`,
+    );
+  }
+  const renderScale = dpi / 72;
+  const bytes = Uint8Array.from(verifiedBytes);
   let doc: pdfjs.PDFDocumentProxy;
   const loadingTask = pdfjs.getDocument({
     data: bytes,
@@ -161,13 +190,13 @@ export async function renderPdfPages(
     try {
       doc = await loadingTask.promise;
     } catch (error) {
-      throw extractionError(`pdfjs could not open ${pdfPath} for page rendering: ${errorMessage(error)}`);
+      throw extractionError(`pdfjs could not open ${sourceLabel} for page rendering: ${errorMessage(error)}`);
     }
 
     // -- 1. Scan the text layer and rank caption candidates.
     const candidates: PageCandidate[] = [];
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-      throwIfCancelled(pdfPath, signal);
+      throwIfCancelled(sourceLabel, signal);
       const page = await doc.getPage(pageNumber);
       const textContent = await page.getTextContent();
       const text = textContent.items
@@ -190,21 +219,34 @@ export async function renderPdfPages(
         ? candidates.length - chosen.length
         : Math.max(0, doc.numPages - chosen.length);
 
-    // -- 2. Render the bounded candidate set at RENDER_DPI.
+    // -- 2. Render the bounded candidate set at the admitted DPI.
     await mkdir(destDir, { recursive: true });
-    const stem = path.basename(pdfPath, path.extname(pdfPath));
+    const stem = path.basename(sourceLabel, path.extname(sourceLabel));
     const pages: RenderedPdfPage[] = [];
     for (const candidate of chosen) {
-      throwIfCancelled(pdfPath, signal);
+      throwIfCancelled(sourceLabel, signal);
       const page = await doc.getPage(candidate.pageNumber);
-      const viewport = page.getViewport({ scale: RENDER_SCALE });
-      const canvas = createCanvas(viewport.width, viewport.height);
+      const viewport = page.getViewport({ scale: renderScale });
+      const width = Math.ceil(viewport.width);
+      const height = Math.ceil(viewport.height);
+      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+        throw extractionError(
+          `pdfjs produced invalid page dimensions for page ${candidate.pageNumber} of ${sourceLabel}`,
+        );
+      }
+      if (width * height > MAX_PDF_RENDER_PIXELS) {
+        throw extractionError(
+          `page ${candidate.pageNumber} of ${sourceLabel} exceeded the ${MAX_PDF_RENDER_PIXELS} pixel rendering limit ` +
+            `at ${dpi} DPI (${width}x${height})`,
+        );
+      }
+      const canvas = createCanvas(width, height);
       const ctx = canvas.getContext("2d");
       try {
         await page.render({ canvas: null, canvasContext: ctx, viewport }).promise;
       } catch (error) {
         throw extractionError(
-          `pdfjs failed to render page ${candidate.pageNumber} of ${pdfPath}: ${errorMessage(error)}`,
+          `pdfjs failed to render page ${candidate.pageNumber} of ${sourceLabel}: ${errorMessage(error)}`,
         );
       }
       const bbox = detectInkBbox(ctx, canvas.width, canvas.height);
