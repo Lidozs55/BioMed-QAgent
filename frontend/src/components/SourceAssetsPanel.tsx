@@ -22,18 +22,6 @@ const ROLE_LABELS: Record<SourceAssetRegistrationReceipt["asset_ref"]["role"], s
 
 export const SOURCE_ASSET_ROLE_LABELS = ROLE_LABELS;
 
-/** 证据登记（Core-derived evidence）由 receipt 的 role 字段显式声明，不得按 media type/ID 推断。 */
-function isCoreDerivedEvidence(item: SourceAssetRegistrationReceipt): boolean {
-  return item.asset_ref.role === "mapping" || item.asset_ref.role === "metadata";
-}
-
-function EvidenceKindBadge({ item }: { item: SourceAssetRegistrationReceipt }) {
-  if (isCoreDerivedEvidence(item)) {
-    return <Badge variant="secondary">Core 衍生证据</Badge>;
-  }
-  return <Badge variant="outline">已采集 载体/来源</Badge>;
-}
-
 interface SourceAssetsPanelProps {
   taskId: string;
 }
@@ -79,25 +67,23 @@ export default function SourceAssetsPanel({ taskId }: SourceAssetsPanelProps) {
   }, [loadItems]);
 
   return (
-    <Card className="shrink-0">
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <CardTitle className="flex items-center gap-2">
-              <FilesIcon aria-hidden="true" />
-              来源 / 证据登记
-            </CardTitle>
-            <CardDescription>
-              任务已登记的数据来源与 Core 衍生证据（只读清单）。
-            </CardDescription>
-          </div>
-          <Badge variant="outline">
-            <ShieldCheckIcon aria-hidden="true" />
-            已登记 / 只读
-          </Badge>
+    <section className="flex min-w-0 flex-col gap-3" aria-labelledby="source-assets-title">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h3 id="source-assets-title" className="flex items-center gap-2 text-sm font-medium">
+            <FilesIcon aria-hidden="true" />
+            来源 / 证据登记
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            任务来源与证据资产的 Core 登记信息（只读清单）。
+          </p>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+        <Badge variant="outline">
+          <ShieldCheckIcon aria-hidden="true" />
+          已登记 / 只读
+        </Badge>
+      </div>
+      <div className="flex flex-col gap-3">
         {loading ? (
           <p className="text-sm text-muted-foreground">正在加载来源/证据登记…</p>
         ) : error !== null ? (
@@ -113,7 +99,7 @@ export default function SourceAssetsPanel({ taskId }: SourceAssetsPanelProps) {
               </EmptyMedia>
               <EmptyTitle>暂无来源/证据登记</EmptyTitle>
               <EmptyDescription>
-                任务登记的来源文件与 Core 衍生证据会显示在这里；此处为只读清单。
+                任务登记的来源与证据资产会显示在这里；此处为只读清单。
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -132,12 +118,13 @@ export default function SourceAssetsPanel({ taskId }: SourceAssetsPanelProps) {
                         {new Date(item.registered_at).toLocaleString()}
                       </CardDescription>
                     </div>
-                    <EvidenceKindBadge item={item} />
+                    <Badge variant="secondary">
+                      {ROLE_LABELS[item.asset_ref.role]}
+                    </Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-2 text-xs">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="secondary">{ROLE_LABELS[item.asset_ref.role]}</Badge>
                     <span className="font-mono break-all text-muted-foreground">
                       来源 ID：{item.source_id}
                     </span>
@@ -157,7 +144,7 @@ export default function SourceAssetsPanel({ taskId }: SourceAssetsPanelProps) {
             ))}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

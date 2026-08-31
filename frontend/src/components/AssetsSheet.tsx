@@ -57,9 +57,9 @@ interface AssetsSheetProps {
 }
 
 /**
- * 统一的“资源”入口：正式任务产物与未准入（ua_*）隔离文件分栏展示。
+ * 统一的“资源”入口：正式任务产物、未准入（ua_*）隔离文件和来源/证据登记分栏展示。
  * 未准入文件永远保持“非权威 / 未经准入”标注，不计入正式产物数量，
- * 也不作为 Publication 结果呈现；只要存在活动任务即可打开。
+ * 也不作为 Publication 结果呈现；来源/证据登记保持只读。只要存在活动任务即可打开。
  */
 export function AssetsSheet({
   open,
@@ -98,20 +98,24 @@ export function AssetsSheet({
           onValueChange={setTab}
           className="min-h-0 px-4 pb-4"
         >
-          <TabsList>
-            <TabsTrigger value={ASSETS_FORMAL_TAB}>
+          <TabsList className="grid h-auto w-full grid-cols-3">
+            <TabsTrigger className="min-w-0" value={ASSETS_FORMAL_TAB}>
               <FilesIcon data-icon="inline-start" aria-hidden="true" />
               正式产物
               {formalCount > 0 && (
-                <Badge variant="secondary">{formalCount}</Badge>
+                <Badge className="hidden sm:inline-flex" variant="secondary">
+                  {formalCount}
+                </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value={ASSETS_UNTRUSTED_TAB}>
+            <TabsTrigger className="min-w-0" value={ASSETS_UNTRUSTED_TAB}>
               <ShieldWarningIcon data-icon="inline-start" aria-hidden="true" />
               未准入
-              <Badge variant="destructive">非权威</Badge>
+              <Badge className="hidden sm:inline-flex" variant="destructive">
+                非权威
+              </Badge>
             </TabsTrigger>
-            <TabsTrigger value={ASSETS_SOURCE_TAB}>
+            <TabsTrigger className="min-w-0" value={ASSETS_SOURCE_TAB}>
               <TreeStructureIcon data-icon="inline-start" aria-hidden="true" />
               来源/证据
             </TabsTrigger>
@@ -164,7 +168,7 @@ export function AssetsSheet({
   );
 }
 
-/** Composer 工具栏的统一“资源”按钮，等价于原产物 + 未准入两个入口。 */
+/** Composer 工具栏的统一“资源”按钮，聚合正式、未准入和来源/证据三类资产。 */
 export function AssetsEntry() {
   const [open, setOpen] = useState(false);
   const activeTask = useAgentStore(selectActiveTask);
@@ -186,7 +190,7 @@ export function AssetsEntry() {
         >
           <FilesIcon aria-hidden="true" />
         </TooltipTrigger>
-        <TooltipContent>资源：正式产物与未准入文件</TooltipContent>
+        <TooltipContent>资源：正式、未准入与来源/证据资产</TooltipContent>
       </Tooltip>
       <AssetsSheet open={open} onOpenChange={setOpen} />
     </>

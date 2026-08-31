@@ -191,11 +191,10 @@ describe("AssetsSheet source/evidence tab", () => {
     expect(screen.getByText("来源 ID：source_fixture")).toBeInTheDocument();
     expect(screen.getByText("来源 ID：source_mapping")).toBeInTheDocument();
 
-    // 载体/来源 vs Core 衍生证据：仅按 receipt 的 role 字段区分。
-    expect(screen.getByText("已采集 载体/来源")).toBeInTheDocument();
-    expect(screen.getByText("Core 衍生证据")).toBeInTheDocument();
+    // Receipt 只证明显式 role；列表不得推断资产是 provider acquisition 还是 Core-derived。
     expect(screen.getByText("载体")).toBeInTheDocument();
     expect(screen.getByText("映射")).toBeInTheDocument();
+    expect(screen.queryByText(/已采集|Core 衍生/)).not.toBeInTheDocument();
     // formatSize: 12 B / 2.0 KB
     expect(screen.getByText(/text\/csv · 12 B/)).toBeInTheDocument();
     expect(screen.getByText(/application\/json · 2.0 KB/)).toBeInTheDocument();
