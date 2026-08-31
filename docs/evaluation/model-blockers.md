@@ -62,7 +62,31 @@
 
 - **行为正样本（值得保留进 prompt 教学）**：单平台同粒度设计优先（43T+43N/GPL96）、拒绝跨 GSE 拼行、发现"probe-mapping 行数未独立验证"后主动修订而非宣称、Benford/末位数偏差如实保留并解释为 MAS5 log2 平台特征、pairing 推导规则交人确认——r1 的 B2/B3（动态路由零调用、时限幻觉）在 r3 未复现。
 
+## gold1-r4 @ qwen3.8-flash（2026-08-31，main@07962047，post-fix 复测，task_ts_393e5b8b-2640-43c0-a03f-2ddc9367f782）
+
+> **修复后回归样本**：与 r3 同 TOPIC、同模型、同 Host 姿势（重建→双层配置断言→`model_change` 铁证）。36 calls / 2193s / **3.73M token（r3 的 65%）** / 峰值 142k / **工具错误仅 2**（r3 为 7+，且十案普遍两位数起步）。
+>
+> | 阶段 | 调用 | token | 墙钟 | 对比 r3 |
+> | --- | --- | --- | --- | --- |
+> | 发布前 | 21 | 1,838,570 | 1536s | 大降（r3 发布前已烧一半） |
+> | 发布后 | 15 | 1,893,629 | 361s | **自检有效完成而非漫游**（r3：41 调用/4.51M/592s 撞墙） |
+>
+> 终态 `pub_breast_tumor_normal_gse15852_d6614644a0eb07e5`（GSE15852/GPL96，9 artifacts 含新 `source_coverage_report.json`），86 样本 43T+43N **逐行回读确认**，5.06% 探针无映射/Benford 平台特征/单系列局限全部如实申报。
+
+**已修项的活体复验（本次跑中直接目击）**：
+1. **链 1 视检**：workspace_exec(bash zcat) 被 deny 后模型**一次即转向** `preview_core_asset` → **gz 预览一次通过 ×2（err=false）**。r3/D1/L2 的死墙实测消失。
+2. **G1/E5 回执读取**：发布后 `inspect_source_coverage`×2 + `workspace_list/read` ×11 全部成功——模型第一次真正读回并逐行验证了自己发布的表（十案里从未有过），发布后开销从"撞墙"变成"验证"。
+3. **wire `$projection`**：本 run 无动态路线，未覆盖（**该修复仍需一个动态案复验**，如 gold7/9/10 重跑）。
+4. **B7 配置双轨**：run 前 settings/registry 双层断言一次通过（PUT 语义修复的行为面未深测）。
+5. 队友新工具 `inspect_source_coverage`（a98a151a）已被模型自发采用——发现性良好。
+
+**残留观察**：execute 第一次把发现阶段的 workspace asset 路径塞 `source_files` → `formal dynamic carrier lacks exact Core acquisition provenance`（retryable），模型自我诊断正确（"交付数据不依赖那次字节"）且一次修正成功——D2 类"Core acquisition provenance"门槛仍会对模型产生一次可预期的困惑税，guidance 未变。bash 冲动（第 2 次跨案复现）仍在，被政策正确接住。
+
+**新退化风险记录（供组员测其余 case 时留意）**：`merged/primary.csv` 报告为 **870–909 MB** 主表——gene_expression.long.v2 全展开后体量巨大，`basic_statistics` 的 V8 单串上限（C3）在这种表上必炸；r4 模型未尝试跑它（进步），但该尺寸对下游下载/预览链是新压力点。
+
 ## gold2 @ qwen3.8-flash（2026-08-30，main@74b81a19c1ff，task_ts_183292cd-0e9d-439d-a5ae-2786fa9eba34）
+
+
 
 > 身份断言通过（`model_change`=dashscope/qwen3.8-flash）。终态 **succeeded_publication（部分交付）**：`pub_luad_egfr_gse31852_probe_v1_8c9cb8a834cae23b`，probe-level 长表 4,128,828 行（33,297 探针×124 样本），validation 10/10 passed，coverage 1.0，7 artifacts。
 > **但 gold2 题面三要求只闭合 1/3**：probe-level ✔；样本临床/EGFR 分组 ✘（NO_DATA）；gene-level 映射表 ✘（blocked）。模型对后两项给出了逐项尝试日志与请求清单，零虚构、零临时 CSV 冒充。
