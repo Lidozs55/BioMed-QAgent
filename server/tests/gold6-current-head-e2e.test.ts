@@ -304,15 +304,24 @@ function createFixtureAcquisitionRuntime(options: {
     const requestIdentityDigest = acquisitionRequestIdentity(rawRequest, handler.implementationDigest);
     const accession = String(rawRequest.parameters.accession);
     const isPdf = plan.filename.endsWith(".pdf");
-    const bytes = isPdf ? fixturePdf(accession) : fixtureSupplementArchive(accession);
-    const relativePath = `source_assets/fixture_carrier_${accession}.${isPdf ? "pdf" : "zip"}`;
+    const isXml = plan.filename.endsWith(".xml");
+    const paper = PAPERS.find((candidate) => candidate.pmcid === accession);
+    if (isXml && paper === undefined) throw new Error(`fixture paper ${accession} was not found`);
+    const bytes = isPdf
+      ? fixturePdf(accession)
+      : isXml
+        ? fixtureFullTextXml(accession, paper!)
+        : fixtureSupplementArchive(accession);
+    const extension = isPdf ? "pdf" : isXml ? "xml" : "zip";
+    const mediaType = isPdf ? "application/pdf" : isXml ? "application/xml" : "application/zip";
+    const relativePath = `source_assets/fixture_carrier_${accession}.${extension}`;
     await mkdir(path.dirname(path.join(options.taskRoot, ...relativePath.split("/"))), { recursive: true });
     await writeFile(path.join(options.taskRoot, ...relativePath.split("/")), bytes);
     const receipt = await options.sourceAssetRegistry.register({
       sourceId: `fixture_${handler.providerId.replaceAll(".", "_")}_${accession}`,
       relativePath,
       role: "carrier",
-      mediaType: isPdf ? "application/pdf" : "application/zip",
+      mediaType,
     });
     await options.sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
       provider_id: handler.providerId,
@@ -357,33 +366,6 @@ async function executeTool(
     throw new Error(`${name} failed: ${result.content.slice(0, 500)}`);
   }
   return parsed;
-}
-
-async function seedXmlAssets(options: {
-  taskId: string;
-  taskRoot: string;
-}): Promise<Record<(typeof PMCIDS)[number], string>> {
-  // The full-text XML carrier has no pre-submit acquisition tool yet (the
-  // `pubmed.files.v1` provider is only bindable inside a dynamic submission),
-  // so the fixture seeds the task-owned registry with the XML receipts the
-  // Core acquisition path would have produced. Recorded as a gap in
-  // docs/ISSUES.md; every other carrier flows through the real tool surface.
-  const registry = new SourceAssetRegistry(options.taskId, options.taskRoot);
-  const ids = {} as Record<(typeof PMCIDS)[number], string>;
-  for (const paper of PAPERS) {
-    const bytes = fixtureFullTextXml(paper.pmcid, paper);
-    const relativePath = `source_assets/fixture_fulltext_${paper.pmcid}.xml`;
-    await mkdir(path.dirname(path.join(options.taskRoot, ...relativePath.split("/"))), { recursive: true });
-    await writeFile(path.join(options.taskRoot, ...relativePath.split("/")), bytes);
-    const receipt = await registry.register({
-      sourceId: `fixture_fulltext_${paper.pmcid}`,
-      relativePath,
-      role: "source",
-      mediaType: "application/xml",
-    });
-    ids[paper.pmcid] = receipt.asset_ref.asset_id;
-  }
-  return ids;
 }
 
 const TABLE_FIELDS: Record<string, string[]> = {
@@ -841,7 +823,7 @@ describe("Gold6 current-HEAD closure (fake providers, fake VLM, real HIL)", () =
         const tools = config.tools ?? [];
         const taskRoot = path.join(tasksRoot, config.taskId);
         bridge.systemContext = config.systemContext ?? null;
-        const xmlAssetIds = await seedXmlAssets({ taskId: config.taskId, taskRoot });
+        const xmlAssetIds: Record<string, string> = {};
         const pdfAssetIds: Record<string, string> = {};
         const supplementAssetIds: Record<string, string> = {};
         const reviewedCarrierIds: string[] = [];
@@ -851,15 +833,22 @@ describe("Gold6 current-HEAD closure (fake providers, fake VLM, real HIL)", () =
           try {
             yield { type: "turn_started" };
 
-            // 1. Acquire the frozen PMCIDs as registered Core carriers through
-            // the real acquisition-only tool (provider downloads are faked).
+            // 1. Acquire the frozen PMCIDs as registered Core XML/PDF/ZIP
+            // carriers through the real acquisition-only tool (provider
+            // downloads are faked, but receipts and provenance are real).
             for (const paper of PAPERS) {
-              const parsed = await executeTool(tools, "acquire_core_carrier", {
+              const xml = await executeTool(tools, "acquire_core_carrier", {
+                provider_id: "europepmc.fulltext_xml.v1",
+                source: "europepmc_fulltext_xml",
+                accession: paper.pmcid,
+              }, callIndex++);
+              xmlAssetIds[paper.pmcid] = xml.carrier_asset_id as string;
+              const pdf = await executeTool(tools, "acquire_core_carrier", {
                 provider_id: "europepmc.pdf.v1",
                 source: "europepmc_pdf",
                 accession: paper.pmcid,
               }, callIndex++);
-              pdfAssetIds[paper.pmcid] = parsed.carrier_asset_id as string;
+              pdfAssetIds[paper.pmcid] = pdf.carrier_asset_id as string;
             }
             for (const pmcid of SUPPLEMENT_PMCIDS) {
               const parsed = await executeTool(tools, "acquire_core_carrier", {
