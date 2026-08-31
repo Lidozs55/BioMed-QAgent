@@ -38,6 +38,7 @@ const TERMINAL_RUN_SET = new Set(TERMINAL_RUN_STATUSES);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const DEFAULT_TIMEOUT_MS = 3_600_000;
+const DEFAULT_HIL_GRACE_MS = 1_000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PROMPT_BYTES = 64 * 1024;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
@@ -710,6 +711,15 @@ function permissionAlreadyHandled(records, permissionRecords, requestId) {
   );
 }
 
+function resumedEventMatchesHil(event, hil) {
+  const payload = eventPayload(event);
+  const resumedDigest = isRecord(payload?.detail) ? payload.detail.evidence_digest : null;
+  return eventType(event) === "user_input_resumed" &&
+    typeof hil?.request_id === "string" &&
+    payload?.request_id === hil.request_id &&
+    (hil.evidence_digest === null || resumedDigest === hil.evidence_digest);
+}
+
 function pendingHilFromEvents(records, runId) {
   const pending = new Map();
   for (const event of records) {
@@ -717,9 +727,13 @@ function pendingHilFromEvents(records, runId) {
     const hil = classifyHIL(event);
     if (hil?.request_id !== null && hil?.request_id !== undefined) pending.set(hil.request_id, hil);
     const payload = eventPayload(event);
-    if (eventType(event) === "user_input_resumed" && typeof payload?.request_id === "string") pending.delete(payload.request_id);
+    if (typeof payload?.request_id === "string" && resumedEventMatchesHil(event, pending.get(payload.request_id))) pending.delete(payload.request_id);
   }
   return [...pending.values()].at(-1) ?? null;
+}
+
+function hilWasDurablyResumed(records, taskId, runId, hil) {
+  return records.some((event) => event?.task_id === taskId && event?.run_id === runId && resumedEventMatchesHil(event, hil));
 }
 
 function observedCommit(...values) {
@@ -828,8 +842,12 @@ export async function supervise(input, dependencies = {}) {
         : null);
     if (typeof adoptId !== "string") throw new SupervisorError("protocol", "--adopt requires at least one run on the task");
     if (state.run_id !== null && state.run_id !== adoptId) throw new SupervisorError("protocol", "evidence state belongs to another run");
+    const adoptedRequestId = runFrom(snapshot, adoptId)?.request_id;
+    if (typeof adoptedRequestId !== "string" || adoptedRequestId.length === 0) throw new SupervisorError("protocol", "adopted run request id is missing");
+    if (options.requestId !== null && options.requestId !== adoptedRequestId) throw new SupervisorError("protocol", "--adopt request id does not match the run");
     runId = adoptId;
-    state.request_id = runFrom(snapshot, adoptId)?.request_id ?? state.request_id;
+    state.run_id = runId;
+    state.request_id = adoptedRequestId;
     state.stopped = false;
     state.pending_hil = null;
     await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel, expected_commit: options.expectedCommit ?? null, observed_commit: healthCommit });
@@ -845,17 +863,27 @@ export async function supervise(input, dependencies = {}) {
     throw new SupervisorError("protocol", "--resume requires supervisor state with run_id");
   }
   const workspaceRoot = options.workspaceRoot ?? dependencies.workspaceRoot ?? path.resolve("data", "workspaces", options.taskId);
-  const deadline = Date.now() + options.timeoutMs;
+  const now = dependencies.now ?? Date.now;
+  const sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const hilGraceMs = dependencies.hilGraceMs ?? DEFAULT_HIL_GRACE_MS;
+  if (typeof now !== "function" || typeof sleep !== "function" || !Number.isSafeInteger(hilGraceMs) || hilGraceMs < 0) throw new SupervisorError("usage", "HIL grace dependencies are invalid");
+  const deadline = now() + options.timeoutMs;
   let records = await journalRecords(options.evidenceDir);
   let permissionRecords = await readJsonl(path.join(options.evidenceDir, "permissions.jsonl"));
   const journalAfterSequence = journalCursor(records);
   if (journalAfterSequence > state.after_sequence) state.after_sequence = journalAfterSequence;
   if (journalAfterSequence < state.after_sequence) throw new SupervisorError("protocol", "event journal is behind the persisted cursor");
   let pendingHil = state.pending_hil ?? pendingHilFromEvents(records, runId);
+  if (pendingHil !== null && hilWasDurablyResumed(records, options.taskId, runId, pendingHil)) {
+    pendingHil = null;
+    state.pending_hil = null;
+    state.stopped = false;
+  }
   let humanResumeSubmitted = false;
+  let hilGraceDeadline = null;
 
   for (;;) {
-    if (Date.now() > deadline) throw new SupervisorError("timeout", "supervisor timeout exceeded");
+    if (now() > deadline) throw new SupervisorError("timeout", "supervisor timeout exceeded");
     const page = await api.request("GET", `/api/v1/tasks/${encodeURIComponent(options.taskId)}/events?after_sequence=${state.after_sequence}&limit=${options.pageSize}`);
     const validated = validateEventPage(page, state.after_sequence, options.taskId);
     for (const event of validated.events) {
@@ -897,6 +925,7 @@ export async function supervise(input, dependencies = {}) {
         const classifiedHil = classifyHIL(event);
         if (classifiedHil !== null) {
           pendingHil = classifiedHil;
+          hilGraceDeadline = null;
           state.pending_hil = {
             request_id: classifiedHil.request_id,
             evidence_digest: classifiedHil.evidence_digest,
@@ -910,12 +939,12 @@ export async function supervise(input, dependencies = {}) {
           await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
           if (!options.resume) throw new SupervisorError("data_review", "human review required");
         }
-        const payload = eventPayload(event);
-        if (eventType(event) === "user_input_resumed" && typeof payload?.request_id === "string" && pendingHil?.request_id === payload.request_id) {
+        if (resumedEventMatchesHil(event, pendingHil)) {
           pendingHil = null;
           state.pending_hil = null;
           state.stopped = false;
           humanResumeSubmitted = false;
+          hilGraceDeadline = null;
         }
         const type = eventType(event);
         if (type === "run_completed" || type === "run_failed" || type === "run_cancelled" || type === "run_interrupted") state.terminal_sequence = event.sequence;
@@ -929,10 +958,15 @@ export async function supervise(input, dependencies = {}) {
       if (isRecord(human)) {
         await resumeHuman(api, options.taskId, runId, pendingHil, options.evidenceDir);
         humanResumeSubmitted = true;
+        hilGraceDeadline = null;
       } else if (state.pending_hil !== null) {
-        state.stopped = true;
-        await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
-        throw new SupervisorError("data_review", "human review has not been resolved; --resume will not auto-resolve HIL");
+        const observedAt = now();
+        hilGraceDeadline ??= Math.min(deadline, observedAt + hilGraceMs);
+        if (observedAt >= hilGraceDeadline) {
+          state.stopped = true;
+          await writeState(options.evidenceDir, { ...state, task_id: options.taskId, case_label: options.caseLabel });
+          throw new SupervisorError("data_review", "human review has not been resolved; --resume will not auto-resolve HIL");
+        }
       }
     }
 
@@ -941,9 +975,14 @@ export async function supervise(input, dependencies = {}) {
     requireTask(snapshot, options.taskId);
     const run = runFrom(snapshot, runId);
     if (run === null) throw new SupervisorError("protocol", "supervised run is absent from task snapshot");
-    if (!TERMINAL_RUN_SET.has(run.status)) {
-      if (Date.now() >= deadline) throw new SupervisorError("timeout", "supervisor timeout exceeded");
-      await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))));
+    const waitingForHilResolution = options.resume && pendingHil !== null && !humanResumeSubmitted;
+    if (!TERMINAL_RUN_SET.has(run.status) || waitingForHilResolution) {
+      const observedAt = now();
+      if (observedAt >= deadline) throw new SupervisorError("timeout", "supervisor timeout exceeded");
+      const nextBoundary = waitingForHilResolution && hilGraceDeadline !== null
+        ? Math.min(deadline, hilGraceDeadline)
+        : deadline;
+      await sleep(Math.min(250, Math.max(1, nextBoundary - observedAt)));
       continue;
     }
 
