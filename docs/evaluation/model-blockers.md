@@ -62,6 +62,19 @@
 
 - **行为正样本（值得保留进 prompt 教学）**：单平台同粒度设计优先（43T+43N/GPL96）、拒绝跨 GSE 拼行、发现"probe-mapping 行数未独立验证"后主动修订而非宣称、Benford/末位数偏差如实保留并解释为 MAS5 log2 平台特征、pairing 推导规则交人确认——r1 的 B2/B3（动态路由零调用、时限幻觉）在 r3 未复现。
 
+### gold1 卡点状态刷新（2026-08-31，依据 r4 post-fix 复测；对齐评测规范 `data/gold/README.md`）
+
+| 卡点 | 最新状态（r4 活体复验） |
+|---|---|
+| C1 gzip 视检→shell 绕路 | **已修+复验通过**：`core-asset-tools` gunzip 落地（triage「2026-08-31 框架修复落点」链 1 子集）；r4 中 bash 被 deny 后 `preview_core_asset` **一次通过 ×2**，无绕路无循环 |
+| C2 发布后无界复核 | **大幅缓解**：回执读回通道打开（链 1 修复③+deny 附 hint）后 r4 post-pub 仅 15 calls/361s 且全为有效逐行验证（r3：41 calls/4.51M token 撞墙）；「预算上限」硬收敛仍开放；通用行为面已沉淀 `[System briefing]` |
+| C3 basic_statistics 溢出 | 未复现（模型没再试）；**风险仍在**：r4 主表 870–909 MB，同工具再试必炸，条目保持开放 |
+| C4 无 SOFT 平台不可闭合 | **仍存在（r4 再确认）**：GPL27630 无注释表（源侧事实），D2/C4 表达能力立项不变 |
+| C5 检索变体空转 | 未复现：r4 仅 `search_geo`×1 即锁定候选（同路止损已沉淀 briefing） |
+| （关联）B7 配置双轨 | r4 前双层断言（settings=registry=执行层）一次通过；activate→settings 反向同步已落地，legacy PUT 一致性仍开放 |
+
+**r4 与评测规范的合规偏差（如实记录，正式对照实验前须修正）**：① 规范上下文**统一 1M**，r4 实际 256k（峰值 142k 未触发压缩，方向结论有效，但 gold1–10 全部历史 run 均为 256k，不满足新规范，后续重测须先改配置）；② 规范输入=各案例 `TOPIC.txt` 原文，`data/gold/gold1_*/` 目录尚未建立，r3/r4 用 `docs/evaluation/gold-v1/prompts/gold1.txt`（r3 另附加过交付描述，不合规）；③ 规范 run 记录入 `data/gold/<case>/runs-log.md`——待 case 目录建立后把 r3/r4 记录补入（本文两节即素材，避免与队友建目录的命名冲突暂不代建）；④ r4 未挂 supervisor（其 events-500 脆性未修），采用人工监控+durable 归档，证据链完整。
+
 ## gold1-r4 @ qwen3.8-flash（2026-08-31，main@07962047，post-fix 复测，task_ts_393e5b8b-2640-43c0-a03f-2ddc9367f782）
 
 > **修复后回归样本**：与 r3 同 TOPIC、同模型、同 Host 姿势（重建→双层配置断言→`model_change` 铁证）。36 calls / 2193s / **3.73M token（r3 的 65%）** / 峰值 142k / **工具错误仅 2**（r3 为 7+，且十案普遍两位数起步）。
