@@ -222,7 +222,12 @@ function validateRegistration(
   if (receipt.asset_ref.role !== allowedRole) throw new Error(`registered-table adapter requires a ${allowedRole}-role asset`);
   if (receipt.path_compatibility.mode !== "asset_id") throw new Error("legacy task paths are not trusted registered-table inputs");
   if (!parser.media_types.includes(receipt.media_type.toLowerCase())) {
-    throw new Error(`registered asset media type is not allowed by parser: ${receipt.media_type}`);
+    throw new Error(
+      `registered asset media type is not allowed by parser: '${receipt.media_type}'; ` +
+        `parser '${parser.adapter_id}' accepts only [${parser.media_types.join(", ")}]. ` +
+        "This is a capability gap for this binding, not a format mistake; use a carrier whose " +
+        "media type matches or a different source.",
+    );
   }
 }
 

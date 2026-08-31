@@ -522,6 +522,28 @@ describe("TypeScript model settings", () => {
     expect(service.getSettings()).toMatchObject({ model_name: "other-model", max_tokens: 200000 });
   });
 
+  test("B7: PUT settings model_name conflicts with the active registry model", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir });
+    const provider = await service.createProvider({
+      name: "B7 provider",
+      base_url: "https://models.example/v1",
+      api_key: "sk-b7",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "active-chat",
+      source: "api",
+    });
+    // The first model is auto-activated; a legacy model_name PUT that names a
+    // different model must be rejected (B7 display/execution drift guard).
+    await expect(service.updateSettings({ model_name: "some-other-model" }))
+      .rejects.toThrow(/conflicts with the active registry model/);
+    // The same model_name still resolves (no conflict).
+    await expect(service.updateSettings({ model_name: "active-chat" })).resolves.toBeUndefined();
+    expect(service.getSettings()).toMatchObject({ model_name: "active-chat" });
+  });
+
   test("persists, validates, and resets runtime limits", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir });

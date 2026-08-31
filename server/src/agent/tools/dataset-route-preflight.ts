@@ -229,7 +229,7 @@ export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
     name: "scaffold_dataset_profile",
     label: "Scaffold Dataset Profile",
     description:
-      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. Literature products requiring paper_records + experiment_records + activity_value_records + chart_series/points + supplementary_asset_records must select literature_experiment_chart.release.v1, never the legacy normalized bioactivity chart profile. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free.",
+      "Generate the complete Core-owned FamilySpec, Projection, table definitions, relations, and transform output closure for one profile returned by inspect_dataset_execution_routes. Literature products requiring paper_records + experiment_records + activity_value_records + chart_series/points + supplementary_asset_records must select literature_experiment_chart.release.v1, never the legacy normalized bioactivity chart profile. With requirement/source/extraction facts, also returns the complete prepare submission; the Agent never authors profile topology, policy refs, or proposal refs. Read-only and side-effect-free. profile_ref is REQUIRED and must be one of the profile_ref values listed by inspect_dataset_execution_routes; an empty or omitted argument fails.",
     parameters: {
       type: "object",
       properties: {

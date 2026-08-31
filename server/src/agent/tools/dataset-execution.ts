@@ -29,6 +29,11 @@ import type { DatasetFamilyRegistry } from "../../dataset/families/index.js";
 
 const MAX_ID = 128;
 const MAX_CONTENT = 4_096;
+
+/** Minimal registry surface used to resolve `source_assets/...` relative paths. */
+export interface SourceAssetRegistryLike {
+  resolveByRelativePath(relativePath: string): Promise<string | null>;
+}
 const STATIC_ROUTE_CONTEXT = Object.freeze({
   route_scope: "static_registered_family",
   dynamic_provider_availability_evaluated: false,
@@ -53,6 +58,12 @@ export interface DatasetExecutionToolOptions {
     Partial<Pick<DatasetCoreService, "acquire">>;
   /** Live family registry powering the read-only spec scaffolding tool. */
   familyRegistry: DatasetFamilyRegistry;
+  /**
+   * Task-owned asset registry. Used to normalize `source_files` values that
+   * arrive as `source_assets/...` relative paths into their registered asset
+   * IDs (P2 source_files deadlock fix).
+   */
+  sourceAssetRegistry?: SourceAssetRegistryLike;
   taskId: string;
   /** Task root on disk; the tool persists its invocation here so a
    * cross-restart resume can replay the exact same build deterministically
@@ -120,6 +131,43 @@ function assertKnownBindings(
   if (unknown.length > 0) {
     throw new TypeError(`${field} contains unknown binding IDs: ${unknown.sort().join(", ")}`);
   }
+}
+
+const RELATIVE_SOURCE_PATH = /^(\.\/)?source_assets\/.+/;
+
+/**
+ * Normalize `source_files`/`mapping_files` references so both accepted forms
+ * resolve to the same registered asset id (P2 source_files deadlock fix):
+ *   - a bare `asset_<64hex>` id is kept as-is,
+ *   - a `source_assets/...` relative path is resolved through the registry.
+ * Unresolvable references throw an actionable error instead of the legacy
+ * "no registered asset ID" so the model is not forced to guess the shape.
+ */
+export async function resolveAssetReferences(
+  references: Record<string, string>,
+  field: "source_files" | "mapping_files" | "metadata_files",
+  registry: SourceAssetRegistryLike | undefined,
+): Promise<Record<string, string>> {
+  if (registry === undefined) return references;
+  const resolved: Record<string, string> = { ...references };
+  for (const [bindingId, reference] of Object.entries(references)) {
+    if (REGISTERED_ASSET_ID.test(reference)) continue;
+    if (!RELATIVE_SOURCE_PATH.test(reference)) {
+      throw new TypeError(
+        `${field}["${bindingId}"] must be either a task-owned asset id (asset_<64hex>, ` +
+          "from acquire_core_carrier) or a registered 'source_assets/...' relative path",
+      );
+    }
+    const assetId = await registry.resolveByRelativePath(reference);
+    if (assetId === null) {
+      throw new TypeError(
+        `${field}["${bindingId}"] references unregistered path '${reference}'; ` +
+          "only registered source_assets are accepted (run acquire_core_carrier first)",
+      );
+    }
+    resolved[bindingId] = assetId;
+  }
+  return resolved;
 }
 
 function acquisitionRequest(
@@ -535,11 +583,23 @@ export function createDatasetExecutionTools(
             diagnostic(options, "execute_dataset_execution", context, started, response, validation.error.code, requirementId);
             return resultFor(validation);
           }
-          const sourceFiles = mappingArgument(args, "source_files", true);
+          const sourceFiles = await resolveAssetReferences(
+            mappingArgument(args, "source_files", true),
+            "source_files",
+            options.sourceAssetRegistry,
+          );
           assertKnownBindings(spec, sourceFiles, "source_files");
-          const mappingFiles = mappingArgument(args, "mapping_files", true);
+          const mappingFiles = await resolveAssetReferences(
+            mappingArgument(args, "mapping_files", true),
+            "mapping_files",
+            options.sourceAssetRegistry,
+          );
           assertKnownBindings(spec, mappingFiles, "mapping_files");
-          const metadataFiles = mappingArgument(args, "metadata_files", true);
+          const metadataFiles = await resolveAssetReferences(
+            mappingArgument(args, "metadata_files", true),
+            "metadata_files",
+            options.sourceAssetRegistry,
+          );
           assertKnownBindings(spec, metadataFiles, "metadata_files");
           for (const binding of spec.source_bindings) {
             if (sourceFiles[binding.binding_id] !== undefined) continue;

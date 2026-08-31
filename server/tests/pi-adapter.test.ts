@@ -296,6 +296,10 @@ describe("Pi system prompt", () => {
     expect(SYSTEM_BRIEFING).toMatch(/consecutive identical failure signatures/i);
     expect(SYSTEM_BRIEFING).toMatch(/minimal single-variable debugging or a genuinely independent route or source/i);
     expect(SYSTEM_BRIEFING).toMatch(/bind each stated next step to the tool call that executes it/i);
+    // Exhaust before handoff (E3/J4/I1 model-half) and converge after publish
+    // (C2/G4 post-publication verification bound).
+    expect(SYSTEM_BRIEFING).toMatch(/exhaust before handoff/i);
+    expect(SYSTEM_BRIEFING).toMatch(/converge after publish/i);
     // The briefing defers mechanics to the sections below instead of
     // duplicating them: their exact wording must not appear here.
     expect(SYSTEM_BRIEFING).not.toMatch(/never repeat an unchanged failing call/i);

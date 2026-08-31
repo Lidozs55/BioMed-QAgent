@@ -14,6 +14,7 @@ const {
   classifyHIL,
   classifyPermission,
   classifyTerminal,
+  createApiClient,
   currentPublicationIdFrom,
   digestManifestFile,
   digestPackage,
@@ -640,5 +641,35 @@ describe("Gold formal rerun supervisor", () => {
       await readFile(path.join(fixture.evidenceDir, "artifacts", DATA_ARTIFACT.artifact_id));
       await readFile(path.join(fixture.evidenceDir, "artifacts", "dataset_manifest"));
     } finally { await close(host.server); }
+  });
+});
+
+describe("supervisor API client resilience", () => {
+  test("retries transient GET 500 errors before surfacing", async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (_url: unknown, init?: { method?: string }) => {
+      const method = init?.method ?? "GET";
+      calls.push(method);
+      if (method === "GET" && calls.filter((m) => m === "GET").length <= 2) {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const api = createApiClient("http://127.0.0.1:1", 1000, fetchImpl);
+    const body = await api.request("GET", "/api/v1/health");
+    expect((body as JsonRecord).status).toBe("ok");
+    // Two failed GETs + one success.
+    expect(calls.filter((m) => m === "GET")).toHaveLength(3);
+  });
+
+  test("never retries POST requests", async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (_url: unknown, init?: { method?: string }) => {
+      calls.push(init?.method ?? "GET");
+      return new Response("boom", { status: 500 });
+    };
+    const api = createApiClient("http://127.0.0.1:1", 1000, fetchImpl);
+    await expect(api.request("POST", "/api/v1/tasks/x/runs", { a: 1 })).rejects.toThrow(/HTTP 500/);
+    expect(calls).toHaveLength(1);
   });
 });

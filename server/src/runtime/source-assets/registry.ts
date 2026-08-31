@@ -607,6 +607,21 @@ export class SourceAssetRegistry {
     return null;
   }
 
+  /**
+   * Reverse lookup: resolve a task-owned ``source_assets/...`` relative path to
+   * its registered asset id (P2 source_files deadlock). The asset must already
+   * be registered; unregistered paths resolve to null so callers can surface an
+   * actionable error instead of a cryptic "no registered asset ID".
+   */
+  async resolveByRelativePath(relativePath: string): Promise<string | null> {
+    await this.load();
+    const normalized = relativePath.replaceAll("\\", "/").replace(/^\.\/+/, "");
+    for (const receipt of this.registrations.values()) {
+      if (receipt.relative_path === normalized) return receipt.asset_ref.asset_id;
+    }
+    return null;
+  }
+
   async resolveAny(assetId: string): Promise<CoreResolvedRegisteredAsset> {
     await this.load();
     const receipt = this.registrations.get(registrationKey(assetId, "carrier")) ??

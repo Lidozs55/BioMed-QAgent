@@ -24,7 +24,7 @@ import {
   expectedOutputLocatorClosure,
   runtimeOutputLocatorClosure,
 } from "../src/dataset/dynamic-family/execution.js";
-import { publishDynamicFamily, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
+import { publishDynamicFamily, rejectReasonMessage, type PublishDynamicFamilyInput } from "../src/dataset/dynamic-family/publication.js";
 import {
   PRODUCTION_B3_CONFIGURED_HEAP_BYTES,
   PRODUCTION_B3_CONFIGURED_TEMP_BYTES,
@@ -1088,5 +1088,28 @@ describe("production B3 resource/disk lane", () => {
         await rm(root, { recursive: true, force: true });
       }
     }
+  });
+});
+
+describe("publication review rejection message (P1)", () => {
+  const review = (reason: string | null) => ({
+    review_id: "review_1",
+    request_id: "hil_1",
+    decision: { action: "reject" as const },
+    reviewer: "user" as const,
+    reviewed_at: "2026-08-31T00:00:00.000Z",
+    evidence_digest: "0".repeat(64),
+    reason,
+  });
+
+  test("includes the reviewer reason when present", () => {
+    const message = rejectReasonMessage("dynamic publication review", review("chart_points table is empty"));
+    expect(message).toContain("was not accepted: reject");
+    expect(message).toContain("reviewer reason: chart_points table is empty");
+  });
+
+  test("falls back to the bare verdict when no reason", () => {
+    expect(rejectReasonMessage("dynamic publication review", review(null)))
+      .toBe("dynamic publication review was not accepted: reject");
   });
 });

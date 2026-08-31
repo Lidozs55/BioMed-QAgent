@@ -270,7 +270,27 @@ export class ModelSettingsService {
         settings.base_url = requiredString(body.base_url, "base_url");
         assertHttpBaseUrl(settings.base_url);
       }
-      if (body.model_name !== undefined) settings.model_name = requiredString(body.model_name, "model_name");
+      if (body.model_name !== undefined) {
+        const requested = requiredString(body.model_name, "model_name");
+        // B7: a PUT on the legacy model_name must never diverge from the
+        // active registry model, or execution would silently run the active
+        // record while the stored field claims another model (the
+        // display/execution drift that mis-ran gold1 r1). Reject conflicts and
+        // direct the caller to the registry route; with no active record the
+        // legacy field remains authoritative.
+        const activeId = settings.active_model_id;
+        if (activeId !== null) {
+          const activeModel = this.registry.models.find((candidate) => candidate.id === activeId) ?? null;
+          if (activeModel !== null && activeModel.model_id !== requested) {
+            throw new HttpError(
+              422,
+              `model_name "${requested}" conflicts with the active registry model "${activeModel.model_id}"; ` +
+                "switch the active model through POST /api/v1/model-registry/models/<id>/activate instead",
+            );
+          }
+        }
+        settings.model_name = requested;
+      }
       if (body.max_tokens !== undefined) settings.max_tokens = boundedNumber(body.max_tokens, "max_tokens", 1);
       if (body.context_window === null) settings.context_window = null;
       else if (body.context_window !== undefined) settings.context_window = boundedNumber(body.context_window, "context_window", 1);

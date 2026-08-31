@@ -37,7 +37,19 @@ export const TERMINAL_RUN_STATUSES = Object.freeze([
 const TERMINAL_RUN_SET = new Set(TERMINAL_RUN_STATUSES);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
-const DEFAULT_TIMEOUT_MS = 3_600_000;
+const DEFAULT_TIMEOUT_MS = 10_800_000;
+/**
+ * Transient Host errors (observed: instantaneous HTTP 500 during
+ * operation_progress event storms) must not kill the supervisor. GETs are
+ * idempotent, so they are retried with bounded exponential backoff. POSTs are
+ * never auto-retried (run creation must not be duplicated).
+ */
+const GET_RETRY_ATTEMPTS = 3;
+const GET_RETRY_BASE_MS = 500;
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 const DEFAULT_HIL_GRACE_MS = 1_000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PROMPT_BYTES = 64 * 1024;
@@ -321,25 +333,34 @@ export function createApiClient(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, fetchIm
   const root = normalizedBaseUrl(baseUrl);
   if (typeof fetchImpl !== "function") throw new SupervisorError("protocol", "fetch is unavailable");
   async function request(method, pathname, body = undefined) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetchImpl(route(root, pathname), {
-        method,
-        headers: body === undefined
-          ? { accept: "application/json" }
-          : { accept: "application/json", "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const parsed = await responseJson(response);
-      if (!response.ok) throw new SupervisorError("http", `Host returned HTTP ${response.status}`, { status: response.status });
-      return parsed;
-    } catch (error) {
-      if (error?.name === "AbortError") throw new SupervisorError("timeout", `HTTP request timed out after ${timeoutMs}ms`);
-      throw error;
-    } finally {
-      clearTimeout(timer);
+    const isGet = method === "GET";
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetchImpl(route(root, pathname), {
+          method,
+          headers: body === undefined
+            ? { accept: "application/json" }
+            : { accept: "application/json", "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const err = new SupervisorError("http", `Host returned HTTP ${response.status}`, { status: response.status });
+          if (isGet && response.status >= 500 && attempt < GET_RETRY_ATTEMPTS) {
+            await sleepMs(GET_RETRY_BASE_MS * 2 ** attempt);
+            continue;
+          }
+          throw err;
+        }
+        return await responseJson(response);
+      } catch (error) {
+        if (error?.name === "AbortError") throw new SupervisorError("timeout", `HTTP request timed out after ${timeoutMs}ms`);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
     }
   }
   async function download(pathname) {
