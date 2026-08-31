@@ -72,31 +72,45 @@ function selectedOutputClosure(submission: ParsedDynamicFamilyPublicationSubmiss
   ];
 }
 
-function requiredInputRoles(submission: ParsedDynamicFamilyPublicationSubmission): string[] {
+function inputRoleClosure(submission: ParsedDynamicFamilyPublicationSubmission): string[] {
   const bindings = submission.execution_proposal.source_bindings;
   const declared = submission.transform_metadata.declared_input_roles;
   if (bindings.length === 0) throw new TypeError("dynamic preflight requires at least one input binding");
-  if (bindings.length !== declared.length) {
-    throw new TypeError("dynamic preflight input roles do not close build source bindings");
+  if (!bindings.some((binding) => binding.binding_kind === "transform_input")) {
+    throw new TypeError(
+      "dynamic preflight requires at least one transform_input binding; provenance_only bindings cannot feed the transform runtime",
+    );
   }
-  const roles = bindings.map((binding, index) => {
-    const role = declared[index]?.role;
+  // declared_input_roles closes ONLY the transform_input subset, preserving
+  // their source-binding order; provenance-only bindings carry no declared role.
+  const transformBindings = bindings.filter((binding) => binding.binding_kind === "transform_input");
+  if (transformBindings.length !== declared.length) {
+    throw new TypeError(
+      `dynamic preflight declared input roles (${declared.length}) do not close the transform_input bindings (${transformBindings.length})`,
+    );
+  }
+  const roles: string[] = [];
+  let declaredIndex = 0;
+  for (const binding of bindings) {
+    if (binding.binding_kind !== "transform_input") continue;
+    const role = declared[declaredIndex]?.role;
     if (role !== binding.input_requirement_ref) {
       throw new TypeError(
         `dynamic preflight input role mismatch for binding '${binding.binding_id}': expected '${binding.input_requirement_ref}', received '${role ?? "missing"}'`,
       );
     }
-    return binding.input_requirement_ref;
-  });
+    roles.push(binding.input_requirement_ref);
+    declaredIndex += 1;
+  }
   if (new Set(roles).size !== roles.length) {
     throw new TypeError("dynamic preflight input roles must be unique");
   }
   // Aligns with the Core authority input cap (MAX_AUTHORIZED_INPUTS = 64);
   // per-record binding floods pass prepare but can never be authorized or
   // echoed back through the submit tool's 128-item receipt schema.
-  if (roles.length > 64) {
+  if (bindings.length > 64) {
     throw new TypeError(
-      `dynamic preflight declares ${roles.length} source bindings, above the Core maximum of 64; ` +
+      `dynamic preflight declares ${bindings.length} source bindings, above the Core maximum of 64; ` +
       "model one binding per data source, never per record — rows belong to transform outputs",
     );
   }
@@ -201,6 +215,7 @@ function planRequestDigest(input: {
     binding_id: input.binding.binding_id,
     source: input.binding.source,
     input_requirement_ref: input.binding.input_requirement_ref,
+    binding_kind: input.binding.binding_kind,
     parameters: input.binding.parameters,
     mode: input.mode,
     asset_id: input.assetId,
@@ -259,6 +274,7 @@ async function acquisitionPlan(
         input_requirement_ref: binding.input_requirement_ref,
         source: binding.source,
         mode: "registered",
+        binding_kind: binding.binding_kind,
         asset_id: registeredAsset,
         provider_id: null,
         request_digest: planRequestDigest({
@@ -287,6 +303,7 @@ async function acquisitionPlan(
       input_requirement_ref: binding.input_requirement_ref,
       source: binding.source,
       mode: "builtin",
+      binding_kind: binding.binding_kind,
       asset_id: null,
       provider_id: request.provider_id,
       request_digest: planned.requestIdentityDigest,
@@ -329,7 +346,7 @@ export async function prepareDynamicFamilyPublication(
     input.submission,
     input.productRequirements,
   );
-  const roles = requiredInputRoles(input.submission);
+  const roles = inputRoleClosure(input.submission);
   assertDeclaredOutputClosure(input.submission);
   const descriptor = await prepareDynamicFamilyHostDescriptor({
     submission: input.submission,

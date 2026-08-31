@@ -244,6 +244,11 @@ export function createDatasetProfileScaffoldTool(): BioMedAgentTool {
               binding_id: { type: "string" },
               source: { type: "string" },
               input_requirement_ref: { type: "string" },
+              binding_kind: {
+                type: "string",
+                enum: ["transform_input", "provenance_only"],
+                description: "transform_input (default when omitted) bytes are decoded into transform runtime inputs; provenance_only bytes are formally verified and published as provenance but never decoded. Every binding still needs registered_sources or acquisition_requests and at least one transform_input binding is required. Never infer from media_type.",
+              },
               parameters: { type: "object" },
             },
             required: ["binding_id", "source", "input_requirement_ref", "parameters"],

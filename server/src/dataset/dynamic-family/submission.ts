@@ -230,62 +230,101 @@ export async function submitDynamicFamilyPublication(
   const projection = input.submission.projection;
   const bindings = proposal.source_bindings;
   if (bindings.length === 0) throw new TypeError("dynamic transform requires at least one registered input");
-  if (bindings.length !== input.submission.transform_metadata.declared_input_roles.length) {
-    throw new TypeError("transform declared input roles do not close execution source bindings");
+  if (!bindings.some((binding) => binding.binding_kind === "transform_input")) {
+    throw new TypeError("dynamic transform requires at least one transform_input binding");
+  }
+  // declared_input_roles close ONLY the transform_input bindings, preserving
+  // their source-binding order; provenance-only bindings carry no declared role.
+  const transformBindings = bindings.filter((binding) => binding.binding_kind === "transform_input");
+  if (transformBindings.length !== input.submission.transform_metadata.declared_input_roles.length) {
+    throw new TypeError(
+      `transform declared input roles (${input.submission.transform_metadata.declared_input_roles.length}) do not close the transform_input bindings (${transformBindings.length})`,
+    );
   }
 
   const assetReceipts: InputAssetReceipt[] = [];
   const sourceAcquisitionProvenance: CoreAcquisitionProvenance[] = [];
   const sourceInputProvenance: (CoreAcquisitionProvenance | CoreDerivedAssetProvenance)[] = [];
+  const verifiedSourceAssetIds = new Set<string>();
+  const provenanceFactSeen = new Set<string>();
+  const pushProvenanceFact = (
+    fact: CoreAcquisitionProvenance | CoreDerivedAssetProvenance,
+  ): void => {
+    const identity = "operation_result_id" in fact ? `derived:${fact.asset_id}` : `acquired:${fact.asset_id}`;
+    if (provenanceFactSeen.has(identity)) return;
+    provenanceFactSeen.add(identity);
+    sourceInputProvenance.push(fact);
+  };
   const sourceLocators: SourceLocatorV2[] = [];
   const runtimeInputs: Readonly<InProcessUnisolatedInputBytes>[] = [];
-  for (const [index, binding] of bindings.entries()) {
-    const declared = input.submission.transform_metadata.declared_input_roles[index]!;
-    if (declared.role !== binding.input_requirement_ref) {
+  let transformRoleIndex = 0;
+  for (const binding of bindings) {
+    const isTransformInput = binding.binding_kind === "transform_input";
+    const declared = isTransformInput
+      ? input.submission.transform_metadata.declared_input_roles[transformRoleIndex]!
+      : null;
+    if (declared !== null && declared.role !== binding.input_requirement_ref) {
       throw new TypeError(
         `transform input role does not match binding '${binding.binding_id}': expected '${binding.input_requirement_ref}', received '${declared.role}'`,
       );
     }
+    // Every binding is byte/hash verified; provenance-only binary bytes are
+    // consumed only by the registry's verified stream and never decoded or
+    // exposed to transform code.
     const assetId = input.submission.registered_sources[binding.binding_id]!;
     const resolved = await input.sourceAssetRegistry.resolveFormalInput(
       assetId,
       input.sourceAcquisitionRequestDigests?.[binding.binding_id],
     );
-    const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
     const registration = resolved.registration_receipt;
-    assertDeclaredInputKind(declared.media_type, registration.media_type, bytes, binding.binding_id);
+    verifiedSourceAssetIds.add(registration.asset_ref.asset_id);
+    if (!isTransformInput) {
+      // Consume the registry's verified stream so byte/hash drift on the
+      // provenance-only carrier fails closed, without buffering or decoding
+      // the binary bytes anywhere transform code can observe them.
+      for await (const chunk of resolved.content) void chunk;
+    }
     if (resolved.acquisition_provenance !== null) {
       sourceAcquisitionProvenance.push(resolved.acquisition_provenance);
-      sourceInputProvenance.push(resolved.acquisition_provenance);
+      pushProvenanceFact(resolved.acquisition_provenance);
     } else if (resolved.derived_provenance !== null) {
-      sourceInputProvenance.push(
-        ...await input.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId),
-      );
+      for (const fact of await input.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId)) {
+        pushProvenanceFact(fact);
+      }
     } else {
       throw new Error("formal dynamic input lacks Core provenance");
     }
-    const receipt = Object.freeze({
-      asset_id: registration.asset_ref.asset_id,
-      role: binding.input_requirement_ref,
-      sha256: registration.sha256,
-      size_bytes: registration.size_bytes,
-      locator_ref: registration.asset_ref.asset_id,
-    });
-    const handle = Object.freeze({
-      handle: `in_${index}`,
-      receiptKind: "asset" as const,
-      receiptId: receipt.asset_id,
-    });
-    assetReceipts.push(receipt);
-    sourceLocators.push({
-      locator_version: "2.0",
-      locator_type: "json_pointer",
-      asset_id: receipt.asset_id,
-      logical_file: registration.relative_path,
-      raw_value: receipt.sha256,
-      json_pointer: "",
-    });
-    runtimeInputs.push(Object.freeze({ ...handle, bytes }));
+    if (isTransformInput && declared !== null) {
+      // Only transform inputs are decoded and kind-checked.
+      const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
+      assertDeclaredInputKind(declared.media_type, registration.media_type, bytes, binding.binding_id);
+      const receipt = Object.freeze({
+        asset_id: registration.asset_ref.asset_id,
+        role: declared.role,
+        sha256: registration.sha256,
+        size_bytes: registration.size_bytes,
+        locator_ref: registration.asset_ref.asset_id,
+      });
+      const handle = Object.freeze({
+        handle: `in_${runtimeInputs.length}`,
+        receiptKind: "asset" as const,
+        receiptId: receipt.asset_id,
+      });
+      assetReceipts.push(receipt);
+      sourceLocators.push({
+        locator_version: "2.0",
+        locator_type: "json_pointer",
+        asset_id: receipt.asset_id,
+        logical_file: registration.relative_path,
+        raw_value: receipt.sha256,
+        json_pointer: "",
+      });
+      runtimeInputs.push(Object.freeze({ ...handle, bytes }));
+      transformRoleIndex += 1;
+    }
+  }
+  if (transformRoleIndex === 0) {
+    throw new TypeError("dynamic transform requires at least one transform_input binding");
   }
 
   const descriptor = await prepareDynamicFamilyHostDescriptor({
@@ -340,6 +379,13 @@ export async function submitDynamicFamilyPublication(
   });
   const requestDigest = canonicalDigest({ proposal, registered_sources: input.submission.registered_sources });
   const parametersDigest = canonicalDigest(bindings.map((binding) => binding.parameters));
+  // The explicit Core expected-operation formal dependency input: every
+  // formally verified source asset (transform inputs plus provenance-only
+  // bindings) enters the committed OperationResult dependency closure, so
+  // PublicationCandidate.registered_asset_ids and the Core evidence provenance
+  // cover all formal sources while ExpectedTransformInvocation and the runtime
+  // inputs keep seeing exactly the declared UTF-8 transform inputs.
+  const formalInputAssetIds = [...verifiedSourceAssetIds].sort();
   const deadline = new Date(now().getTime() + resourceLimits.wall_ms).toISOString();
   const executionConfigDigest = sha256(JSON.stringify({
     backend: "in_process_unisolated",
@@ -423,6 +469,7 @@ export async function submitDynamicFamilyPublication(
     expectedInvocation,
     authorityContext: context,
     inputs: Object.freeze(runtimeInputs),
+    formalInputAssetIds,
     bundleRoot: path.join(input.taskRoot, "state", "dynamic-transform-bundles"),
     coreCommitParent,
     readCurrentCancelFence: () => expectedInvocation.cancel_fence,
@@ -451,13 +498,13 @@ export async function submitDynamicFamilyPublication(
       root: evidenceRoot, kind: "provenance", tableId, taskId: input.taskId,
       runId: input.runId,
       requirementId: proposal.requirement_id, operation: result.operationResult,
-      implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
+      implementationDigest, inputAssetIds: formalInputAssetIds, now,
     });
     const confidence = await coreEvidenceResult({
       root: evidenceRoot, kind: "confidence", tableId, taskId: input.taskId,
       runId: input.runId,
       requirementId: proposal.requirement_id, operation: result.operationResult,
-      implementationDigest, inputAssetIds: assetReceipts.map((receipt) => receipt.asset_id), now,
+      implementationDigest, inputAssetIds: formalInputAssetIds, now,
     });
     return [tableId, { data: result.operationResult, provenance: [provenance], confidence: [confidence], audit: [] }];
   })));

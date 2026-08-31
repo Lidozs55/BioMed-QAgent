@@ -44,6 +44,15 @@ export interface ExecuteDynamicFamilyTransformInput {
   readonly expectedInvocation: ExpectedTransformInvocation;
   readonly authorityContext: CoreAuthoritativeTransformContext;
   readonly inputs: readonly Readonly<InProcessUnisolatedInputBytes>[];
+  /**
+   * ALL formally verified source asset IDs (transform inputs plus
+   * provenance-only bindings). This is the explicit Core expected-operation
+   * formal dependency input: the admitted OperationResult's
+   * ``dependency_closure.input_asset_ids`` closes over exactly this list,
+   * while ``expectedInvocation.input_asset_receipts`` and the runtime inputs
+   * stay transform_input-only. Output locators must remain a subset.
+   */
+  readonly formalInputAssetIds: readonly string[];
   readonly bundleRoot: string;
   readonly coreCommitParent: string;
   readonly readCurrentCancelFence: () => ExpectedTransformCancelFence | Promise<ExpectedTransformCancelFence>;
@@ -254,6 +263,12 @@ function operationExpectation(
   if (Object.keys(tables).length !== receipts.length) {
     throw new TypeError("Runtime emitted duplicate table identifiers");
   }
+  // The operation admission closure is the formal source dependency closure:
+  // ALL verified source assets (transform inputs plus provenance-only
+  // bindings), independent of the transform runtime's exact input receipts.
+  // Admission validates that output locators stay a subset of this closure,
+  // and the runtime locators are transform-input-only by construction.
+  const formalInputAssetIds = [...input.formalInputAssetIds].sort();
   const operationIdentity = sha256(`${context.invocationId}\0${context.attempt}`).slice(0, 24);
   return {
     task_id: context.taskId,
@@ -270,7 +285,7 @@ function operationExpectation(
     input_digest: context.requestDigest,
     parameter_digest: context.parametersDigest,
     implementation_digest: context.implementationDigest,
-    input_asset_ids: expected.input_asset_receipts.map((receipt) => receipt.asset_id),
+    input_asset_ids: formalInputAssetIds,
     upstream_result_manifest_ids: expected.input_result_receipts.map((receipt) => receipt.result_manifest_id),
     declared_schemas: expected.expected_outputs.map((output) => output.schema_ref),
     declared_locators: runtimeOutputLocatorClosure(receipts),

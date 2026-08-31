@@ -217,7 +217,7 @@ export function createPrepareDynamicFamilyPublicationTool(
     name: "prepare_dynamic_family_publication",
     label: "Prepare Dynamic Family Publication",
     description:
-      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, without derived digest properties. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal. The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. For a runtime-retained submission, send schema_version plus only that receipt to submit_dynamic_family_publication; never reconstruct the large submission. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
+      "Call inspect_dataset_execution_routes, then use scaffold_dataset_profile when no registered static family expresses the required topology and every input is dynamic-bindable or a task-owned Core-derived asset. Do not prevalidate a dynamic FamilySpec with validate_dataset_execution. Pass generated profile topology and proposal refs unchanged; only source/extraction facts are caller-owned, without derived digest properties. Top-level keys, exactly: schema_version, execution_backend, family_spec, projection_id, transform_source, transform_metadata, registered_sources, acquisition_requests, execution_proposal. source_bindings entries may set binding_kind: provenance_only (binary evidence bound into formal provenance and publication closure, never decoded into runtime inputs) or omit it for transform_input (decoded UTF-8 runtime input, default); at least one transform_input binding is required, every binding still needs registered_sources or acquisition_requests, and the transform runtime sees only the transform_input subset in source-binding order as in_0, in_1, .... The FamilySpec assessment_policy_ref and exact selected table/relation closure must match the Core profile. This deterministic, side-effect-free preflight derives digest bindings, validates topology, product closure, and acquisition planning, and returns preflight_receipt first followed by prepared_submission. For a runtime-retained submission, send schema_version plus only that receipt to submit_dynamic_family_publication; never reconstruct the large submission. On rejection, use error.recovery.expected_family, expected_tables, and scaffold, modify facts, and prepare again; unchanged retry is forbidden.",
     parameters: dynamicFamilyPublicationParameters("prepare"),
     async execute(value, signal, context): Promise<BioMedToolResult> {
       try {
@@ -425,6 +425,11 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
     type: "object",
     properties: {
       binding_id: safeId, source: safeId, input_requirement_ref: safeId,
+      binding_kind: {
+        type: "string",
+        enum: ["transform_input", "provenance_only"],
+        description: "transform_input (default when omitted; legacy wires) bytes are decoded and passed to the transform runtime; provenance_only bytes are formally verified and published as provenance but never decoded or exposed to transform code. declared_input_roles must close ONLY the transform_input bindings (one role each, in source-binding order); provenance_only bindings carry no declared role. Every binding still needs registered_sources or acquisition_requests and at least one transform_input binding is required. Never infer from media_type.",
+      },
       parameters: { type: "object" },
     },
     required: ["binding_id", "source", "input_requirement_ref", "parameters"],
@@ -528,7 +533,10 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       product_requirement_digest: digest,
       host_descriptor_digest: digest,
       submission_digest: digest,
-      required_input_roles: ids,
+      required_input_roles: {
+        ...ids,
+        description: "Runtime transform-input roles only (the transform_input binding subset, in source-binding order); provenance_only bindings are excluded.",
+      },
       output_closure: ids,
       topology_diagnostics: {
         type: "array",
@@ -553,11 +561,12 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
             input_requirement_ref: safeId,
             source: safeId,
             mode: { type: "string", enum: ["registered", "builtin"] },
+            binding_kind: { type: "string", enum: ["transform_input", "provenance_only"] },
             asset_id: { anyOf: [{ type: "string", pattern: "^asset_[0-9a-f]{64}$" }, { type: "null" }] },
             provider_id: { anyOf: [safeId, { type: "null" }] },
             request_digest: digest,
           },
-          required: ["binding_id", "input_requirement_ref", "source", "mode", "asset_id", "provider_id", "request_digest"],
+          required: ["binding_id", "input_requirement_ref", "source", "mode", "binding_kind", "asset_id", "provider_id", "request_digest"],
           additionalProperties: false,
         },
       },
@@ -583,7 +592,7 @@ function dynamicFamilyPublicationParameters(mode: "prepare" | "submit"): Record<
       projection_id: safeId,
       transform_source: {
         type: "string", minLength: 1, maxLength: MAX_SOURCE_BYTES,
-        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Inputs are ordered exactly like execution_proposal.source_bindings and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. EVERY CSV field must be double-quoted and embedded double quotes doubled, including IDs and JSON source locators; never concatenate raw unquoted fields. locator_ref must be non-empty and must cite one admitted input receipt. For literature_experiment_chart, chart_series.source_locator must be a JSON string with exactly {locator_version:'2.0',locator_type:'image_bbox',asset_id,logical_file,raw_value,page_number,figure_id,bbox}; chart_points.pixel_or_coordinate_locator uses the same exact shape and both must byte-match Core VLM evidence. supplementary_asset_records.source_locator should use exactly {locator_version:'2.0',locator_type:'json_pointer',asset_id,logical_file,raw_value,json_pointer:'/'} with archive evidence values. Never use {locator:...}, source_logical_file, source_raw_value, or other invented locator keys.",
+        description: "Synchronous TypeScript only (not Python, not async/Promise). Export const transform={run({inputs}){...}}. Runtime inputs are ordered exactly like the transform_input entries of execution_proposal.source_bindings (provenance_only bindings are never runtime inputs) and are named in_0, in_1, ... (not binding IDs); each frozen input is {handle,receipt_kind,receipt_id,text}. Use array destructuring (const [first,...rest]=inputs), forEach/map/find/shift, dot properties, and named regex groups. EVERY bracket element access is forbidden, including inputs[0], lines[i], match[1], object['key'], and dynamic keys. Do not import or use process/require/globalThis/eval, input.text(), filesystem, or network. Return exactly {outputs:[...]} and no other top-level keys. Every outputs entry is a wire envelope, NOT a rows object: exactly {content:'complete CSV text including header',handle:'out_0',locator_ref:first.receipt_id,row_count:<data rows>,schema_ref:'<declared schema>',table_id:'<declared table>'}. Use out_0, out_1, ... in primary+supporting+derived projection order. EVERY CSV field must be double-quoted and embedded double quotes doubled, including IDs and JSON source locators; never concatenate raw unquoted fields. locator_ref must be non-empty and must cite one admitted transform-input receipt. For literature_experiment_chart, chart_series.source_locator must be a JSON string with exactly {locator_version:'2.0',locator_type:'image_bbox',asset_id,logical_file,raw_value,page_number,figure_id,bbox}; chart_points.pixel_or_coordinate_locator uses the same exact shape and both must byte-match Core VLM evidence. supplementary_asset_records.source_locator should use exactly {locator_version:'2.0',locator_type:'json_pointer',asset_id,logical_file,raw_value,json_pointer:'/'} with archive evidence values. Never use {locator:...}, source_logical_file, source_raw_value, or other invented locator keys. Archive/PDF evidence stays behind provenance-only bindings or Core-extracted members; transform code never receives raw binary carriers.",
       },
       transform_metadata: transformMetadata,
       execution_proposal: buildProposal,
