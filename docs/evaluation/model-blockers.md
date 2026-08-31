@@ -125,6 +125,26 @@
 - **正样本（保留进教学素材）**：execute 一次失败后自纠参数重试成功；124 样本组标签拒绝用模型知识填充（宁 NO_DATA）；拒绝 provisional CSV；请求清单可直接执行（含安装命令与授权选项）；发布后收敛比 gold1 快 2.2 倍（267s vs 592s）。
 - 基础设施观察：supervisor 第 3 次死于 `operation_progress` 事件风暴时段的 Host 瞬时 HTTP 500（journal 停在 seq≤200）；本 run 起改用"人工监控+durable 归档"，证据完整性不再依赖 supervisor 存活。
 
+## gold2-r2 @ qwen3.8-flash（2026-08-31，main@236e3c8f8a2a，**规范版复测**，task_ts_f696876d-f559-40e6-a074-fd348b1028c6）
+
+> 首案按 `data/gold/README.md` 全流程执行：TOPIC=prompts 原文、上下文调至规范 1M、supervisor --adopt 挂账（2 次停审人工 deny 后续挂成功，journal 全程无断档）。62 calls / 45.9min / **6.96M token** / 峰值 158,674（1M 下压缩路径未触发）/ **工具错误仅 6**（上案 10+）。
+> 终态 **succeeded_publication（1/3）**：`pub_gse31852_probe_93b14dd03566dacf`（4,128,828 行 probe 长表，validation 10/10，provenance 1.0，8 artifacts 含 source_coverage_report，**发布回执逐行回读验证**——抽样 raw_value 对上 GSM）。
+
+**复验结果——已修项确认（+3 项新活体证据）**：
+1. **D1/gzip 视检 → 已修生效**：`preview_core_asset` gz 解码一次通过 ×2（上案"五路全封"的最初一环）；模型仍先后两次伸手 `bash -c` / 纯 `zcat`（seq77/134 停审 deny）——**能力修好了，行为冲动残留**（briefing 止损条款管住了循环：两次被拒即弃，未再第三次）。
+2. **D3/下载即登记 → 已修生效**：本 run preview 未再出现"registered asset was not found"（上案 seq799 死点）。
+3. **G1/发布回执 → 活体打开通道**：post-pub 22×`workspace_read`+4×`inspect_source_coverage` 全成功，上案 4 种 ID 命名空间混乱一次未现；发布后 942s 全部用于**有效**审计对账（对照上案同款时间做无头漫游）。
+4. **D2 gene-level 形态刷新（仍未闭合，但阻塞点后移了）**：mapping_files 注册通道这次**被接受**（validate 双绿灯+执行），死在基因级覆盖率闸门 `probe_coverage_required_gene_level`：GPL6244 是基因级 ST 阵列、ID_REF 本身是 Entrez ID，Core 折叠不进 symbol/ENSG，coverage 0.6666 < 0.80 → 判不发布。**新框架条目**：gene-required 闸门对"原生基因型探针平台"无折叠路径（K-编号 2 见下）。
+5. **EGFR per-sample 状态 → 从"不可知"变"已证不可达"**（质变）：gz preview 已能开卷，但 SOFT 解码 153MB 的 `!Sample_characteristics` 区块在 ~21MB 之后，**preview 固定 head window 无随机寻址** → 模型判三条路（exec 被拒/preview 窗口/PDF 抓取无工具）全封，**明确拒绝引用记忆中的 BATTLE 名单造替换行**。新框架条目：大文件中段读取缺口（链 1 最后一段）。
+
+| # | 卡点 | 归类 | 证据 | 建议 |
+| - | ---- | ---- | ---- | ---- |
+| M1 | gene-level 覆盖率闸门不认"Entrez-ID 即探针"平台（GPL6244 类），0.6666<0.80 连坐拒发 | 框架 | `probe_coverage_required_gene_level` failed 详情（终答原文） | 折叠规则加 Entrez→symbol 通道或此类平台 floor 特判 |
+| M2 | preview head 固定窗口，无 offset/分块——大 SOFT/matrix 中段字段（正是题面所需）读不到 | 框架（链 1 尾段） | 终答"三条读取途径均被封死"②；153,415,533 B 载体 | preview_core_asset 支持 offset/length 分块读（workspace_read 已有，移植即可） |
+
+**行为面记功**：`search_xena`×4 含控制查询（TCGA LUAD）全 0 → 判"本环境 provider 无响应"且**不再重试**（对上案 I4"单点判死"的完全反向修正）；样本分组宁缺不造。
+**与上案对照**：46min/6.96M ≈ 40min/7.67M（耗时持平、错误减半、交付同档但验证深度质变——上案 probe 表发出去没读回，本案逐行抽样）。规范偏差记录：本次 supervisor 挂账成功（无 500 事件），但两次停审仍需人工；`data/gold/gold2_*/` 目录未建，本段即 runs-log 素材。
+
 ## gold3 @ qwen3.8-flash（2026-08-30，main@2c511efc5080，task_ts_307966b1-4398-4600-94c8-6c6886290b39）
 
 > 身份断言通过。终态 **succeeded_publication（1/5 交付）**：`pub_egfr_uniprot_target_cefd96a001558066`（target_evidence 族，UniProt P00533 蛋白身份 + 3 supporting 表，7 artifacts）。题面五类数据：UniProt ✔ 正式；ClinVar 变异 ✘；COSMIC ✘（源边界，合理）；临床试验 ✘；PDB 结构 ✘；药物信息 ✘。

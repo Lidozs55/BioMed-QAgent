@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_f696876d-f559-40e6-a074-fd348b1028c6",
+  "requirement_id": "gse31852_probe",
+  "universe_scope": "spec_source_bindings",
+  "scope_note": "Coverage is computed only within the task's declared source bindings (spec_source_bindings); this report is not a claim of exhaustive web coverage.",
+  "query_plan": [
+    {
+      "binding_id": "gse31852_matrix",
+      "source": "geo",
+      "mode": "builtin",
+      "provider_id": "geo.files.v1",
+      "recipe_ref": null,
+      "adapter_id": "geo.expression.v1",
+      "accession": "GSE31852",
+      "parameters": {
+        "expression_unit": "log2_expression",
+        "format": "series_matrix",
+        "platform_ids": [
+          "GPL6244"
+        ],
+        "value_scale": "log2",
+        "value_semantics": "normalized_expression"
+      }
+    }
+  ],
+  "acquisition_coverage": [
+    {
+      "binding_id": "gse31852_matrix",
+      "source": "geo",
+      "status": "acquired",
+      "asset": {
+        "asset_id": "asset_24ef363c6213f37a0b2fc57c7a16c0f5d73a8beaf0c0894b6425bfac8633cae1",
+        "sha256": "24ef363c6213f37a0b2fc57c7a16c0f5d73a8beaf0c0894b6425bfac8633cae1",
+        "size_bytes": 6507701,
+        "media_type": "application/x-gzip",
+        "registered_at": "2026-08-31T06:37:24.942Z"
+      },
+      "rows": {
+        "parsed": 4128828,
+        "canonical_kept": 4128828,
+        "canonical_rejected": 0
+      },
+      "exclusion_reasons": []
+    }
+  ],
+  "discovery_queries": [
+    {
+      "operation_id": "tool:geo:query:1",
+      "source": "geo",
+      "query": "lung adenocarcinoma EGFR mutation expression profiling",
+      "status": "success",
+      "result_count": 18,
+      "requested_limit": null,
+      "retrieved_at": "2026-08-31T06:36:36.449Z"
+    },
+    {
+      "operation_id": "tool:geo:query:2",
+      "source": "geo",
+      "query": "EGFR mutation status lung adenocarcinoma tumor samples mRNA expression microarray wild type mutant patients",
+      "status": "success",
+      "result_count": 1,
+      "requested_limit": null,
+      "retrieved_at": "2026-08-31T06:36:44.321Z"
+    }
+  ],
+  "summary": {
+    "universe_total": 1,
+    "acquired": 1,
+    "failed": 0,
+    "not_attempted": 0,
+    "integrated_rows": 4128828,
+    "discovery_total": 2,
+    "discovery_failed": 0
+  }
+}
