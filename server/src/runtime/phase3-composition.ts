@@ -430,7 +430,6 @@ export async function createPhase3Runtime(
       options.resolveModel ?? null,
     ),
     adapter: options.adapter ?? new PiAgentAdapter({
-      environment: process.env,
       resolveModel: options.resolveModel,
     }),
     workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent, mode }) => {

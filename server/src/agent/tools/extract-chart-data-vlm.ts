@@ -4,8 +4,7 @@
  *
  * Wraps the TS three-tier chart extraction (``server/src/processing/vlm/``):
  * L1 Qwen-VL → L2 PDF tables → L3 captions; all-tiers-failed is an error,
- * never an empty success. VLM credentials come from injected config with
- * ``DASHSCOPE_API_KEY`` / ``DASHSCOPE_BASE_URL`` env fallbacks.
+ * never an empty success. VLM credentials come from injected config.
  */
 
 import { createHash } from "node:crypto";

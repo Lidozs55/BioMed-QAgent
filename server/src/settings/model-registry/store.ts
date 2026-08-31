@@ -14,9 +14,6 @@ import { optionalRecord } from "../../http/validation.js";
 import { readJsonFile, writeJsonAtomic } from "../../persistence/atomic-json.js";
 import {
   ADVANCED_DEFAULTS,
-  catalogCapacity,
-  catalogContextWindow,
-  lookupModelCatalog,
   RUNTIME_DEFAULTS,
 } from "./catalog.js";
 
@@ -90,8 +87,6 @@ export interface RegistryState {
   providers: ProviderRecord[];
   models: ModelRecord[];
   legacy_registry_migrated_at?: string;
-  /** 环境变量引导（bootstrapEnvironmentDefaults）已执行过并注入过默认服务商。 */
-  env_bootstrapped?: boolean;
 }
 
 export interface AuthState {
@@ -192,16 +187,18 @@ export function clampBoolean(value: unknown, fallback: boolean, label: string): 
   return fallback;
 }
 
-export function defaultRegistry(environment: Record<string, string | undefined>): RegistryState {
+export function defaultRegistry(): RegistryState {
   return {
     version: 1,
     settings: {
       provider_id: null,
       active_model_id: null,
       vision_model_id: null,
-      base_url: environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL ??
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model_name: environment.PI_MODEL ?? environment.MODEL_NAME ?? "",
+      // DashScope OpenAI-compatible endpoint is the catalog default base URL
+      // (a vendor fact, see VENDORS in catalog.ts); model params come only via
+      // the settings API, never from environment variables.
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model_name: "",
       max_tokens: 8192,
       context_window: null,
       safety_reserve_ratio: 0.05,
@@ -216,88 +213,12 @@ export function defaultRegistry(environment: Record<string, string | undefined>)
   };
 }
 
-export function defaultAuth(environment: Record<string, string | undefined>): AuthState {
+export function defaultAuth(): AuthState {
   return {
     version: 1,
-    direct_api_key: environment.PI_API_KEY ?? environment.DASHSCOPE_API_KEY ?? "",
+    direct_api_key: "",
     provider_api_keys: {},
   };
-}
-
-/** 环境变量引导注入的默认 DashScope 服务商/模型（固定 id，保证幂等）。 */
-export const ENV_BOOTSTRAP_PROVIDER_ID = "provider_dashscope_env";
-export const ENV_BOOTSTRAP_MODEL_ID = "model_dashscope_env_default";
-
-/**
- * 一次性环境引导：当环境变量提供了 API key 且当前没有任何已配置服务商时，
- * 自动注册 DashScope 服务商并注入密钥，使凭据进入设置系统。**绝不臆造默认
- * 模型**：只有 env 显式提供 PI_MODEL/MODEL_NAME 时才创建并激活模型记录；
- * 否则 active_model_id 保持 null，`resolveActiveConfig` fail-closed，用户必须
- * 在设置里选择模型后才会真正计费运行。已有用户配置时绝不覆盖。
- */
-export function bootstrapEnvironmentDefaults(
-  registry: RegistryState,
-  auth: AuthState,
-  environment: Record<string, string | undefined>,
-): void {
-  if (registry.env_bootstrapped === true) return;
-  if (registry.providers.length > 0) return;
-  const apiKey = environment.PI_API_KEY ?? environment.DASHSCOPE_API_KEY;
-  if (apiKey === undefined || apiKey.trim() === "") return;
-  registry.env_bootstrapped = true;
-
-  const now = timestamp();
-  const baseUrl = environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL ??
-    "https://dashscope.aliyuncs.com/compatible-mode/v1";
-  registry.providers.push({
-    id: ENV_BOOTSTRAP_PROVIDER_ID,
-    name: "DashScope",
-    base_url: baseUrl,
-    preset_id: "dashscope",
-    description: "阿里云 DashScope（由环境变量自动引导）",
-    enabled: true,
-    created_at: now,
-    updated_at: now,
-  });
-  auth.provider_api_keys[ENV_BOOTSTRAP_PROVIDER_ID] = apiKey;
-  const settings = registry.settings;
-  settings.provider_id = ENV_BOOTSTRAP_PROVIDER_ID;
-  settings.base_url = baseUrl;
-
-  const modelId = (environment.PI_MODEL ?? environment.MODEL_NAME ?? "").trim();
-  if (modelId === "") return;
-  // Catalog facts win when the env model is verified locally (a 1M-window
-  // model must not be under-reported); the 131072/8192 pair is only the
-  // fallback for models missing from the catalog.
-  const entry = lookupModelCatalog(modelId);
-  const contextWindow = entry === undefined ? 131_072 : catalogContextWindow(entry);
-  const maxOutputTokens = entry === undefined ? 8192 : catalogCapacity(entry.max_output_tokens);
-  const suggestedMaxTokens = entry === undefined ? 8192 : catalogCapacity(entry.suggested_max_tokens);
-  registry.models.push({
-    id: ENV_BOOTSTRAP_MODEL_ID,
-    provider_id: ENV_BOOTSTRAP_PROVIDER_ID,
-    model_id: modelId,
-    name: modelId,
-    description: "环境变量默认模型",
-    context_window: contextWindow,
-    max_output_tokens: maxOutputTokens,
-    suggested_max_tokens: suggestedMaxTokens,
-    capabilities: entry === undefined
-      ? { text: true, image: false, video: false, audio: false }
-      : { ...entry.capabilities },
-    params: {},
-    source: "catalog",
-    metadata_source: "catalog",
-    active: true,
-    created_at: now,
-    updated_at: now,
-  });
-  settings.active_model_id = ENV_BOOTSTRAP_MODEL_ID;
-  settings.model_name = modelId;
-  settings.context_window = contextWindow;
-  // Same derivation order as the active-model path: suggested, then max
-  // output, then the 8192 default.
-  settings.max_tokens = suggestedMaxTokens ?? maxOutputTokens ?? 8192;
 }
 
 /**
@@ -306,7 +227,7 @@ export function bootstrapEnvironmentDefaults(
  * one ``console.warn`` line each — nothing from disk is trusted blindly.
  */
 function normalizeLoadedSettings(settings: SettingsRecord): void {
-  const defaults = defaultRegistry({}).settings;
+  const defaults = defaultRegistry().settings;
   const bounds = SETTING_NUMBER_BOUNDS;
   // vision_model_id: absent (pre-vision registries) and null both mean "no
   // explicit role"; only a non-empty string is kept, anything else is corrupt.
@@ -399,17 +320,16 @@ function normalizeLoadedSettings(settings: SettingsRecord): void {
 
 export async function loadRegistryState(
   settingsDir: string,
-  environment: Record<string, string | undefined>,
 ): Promise<RegistryState> {
   const loaded = await readJsonFile<RegistryState>(path.join(settingsDir, REGISTRY_FILE));
-  if (loaded === null || loaded === undefined) return defaultRegistry(environment);
+  if (loaded === null || loaded === undefined) return defaultRegistry();
   const rawSettings: unknown = loaded.settings;
   if (typeof rawSettings !== "object" || rawSettings === null) {
     console.warn(
       `[model-registry] ${REGISTRY_FILE}: settings object missing or corrupt, ` +
         "rebuilding defaults",
     );
-    return defaultRegistry(environment);
+    return defaultRegistry();
   }
   normalizeLoadedSettings(loaded.settings);
   if (loaded.settings.runtime_limits_version !== 1) {
@@ -438,10 +358,9 @@ export function normalizeRuntimeLimits(value: unknown): RuntimeLimits {
 
 export async function loadAuthState(
   settingsDir: string,
-  environment: Record<string, string | undefined>,
 ): Promise<AuthState> {
   return await readJsonFile<AuthState>(path.join(settingsDir, AUTH_FILE))
-    ?? defaultAuth(environment);
+    ?? defaultAuth();
 }
 
 export async function persistState(

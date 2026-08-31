@@ -86,7 +86,6 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
     settingsDir,
     legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
-    environment: process.env,
   });
   const productApi = input.productApi ?? await createProductApi({
     tasksRoot,

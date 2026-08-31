@@ -4,8 +4,8 @@
  * base64 image_url content part through the P5-D1 ``PublicHttpClient`` (URL
  * policy + pinned DNS + redirect revalidation).
  *
- * Credentials come from injected config with ``DASHSCOPE_API_KEY`` /
- * ``DASHSCOPE_BASE_URL`` env fallbacks; the default model is
+ * Credentials and endpoint are supplied entirely through the injected config;
+ * the default model is
  * ``qwen-vl-max`` (Python ``VL_MODEL_NAME``).
  */
 
@@ -77,9 +77,9 @@ interface ChatCompletionResponse {
 }
 
 /**
- * Build a VLM client. ``resolveVlmConfig`` fills env fallbacks; the caller
- * may inject a pre-configured ``PublicHttpClient`` (fixture servers use the
- * fake-resolver + local-executor pattern, see tests/phase5/helpers.ts).
+ * Build a VLM client from a fully injected config. The caller may inject a
+ * pre-configured ``PublicHttpClient`` (fixture servers use the fake-resolver +
+ * local-executor pattern, see tests/phase5/helpers.ts).
  */
 export function createVlmClient(
   config: VlmConfig,
