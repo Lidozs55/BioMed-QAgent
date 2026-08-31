@@ -52,6 +52,7 @@
 | H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
 | I1 | **Dynamic 单 projection 全表耦合**：一张空表（variant_genes）拖死同 build 内数据已全部核实的 studies 表，gold7 因此 2/3 交付 | per-table partial publish，或拒绝信息直接指路"拆独立 build"；另：模型给出拆建方案后停手等确认——穷尽界提示词一并覆盖 |
 | I2 | `dbsnp.files.v1` Core provider 返回空载荷（工具面 lookup_dbsnp 正常）→ GRCh38 坐标核验进不了正式链 | 复现 provider egress/解析；并入链 2 变异发现立项 |
+| P2 | **`source_files` 绑定契约三向死锁**（gold7-r2）：bare asset-id→"须相对路径"，相对路径→"无已注册资产 id"，text/csv 成员→"media type not allowed"——三条校验互斥，无任何输入形态可同时满足；D3（登记原子化）与 a5a6003d（真实 media-type）两修复未对齐的夹缝，GWAS/衍生表静态闭合结构性不可能（模型 13 连败后转动态） | 三校验对齐为一个自洽契约（相对路径⇄注册 id 双轨解析 + 按适配器声明允许介质）；与 H1/I2/D2 链 2 合并立项 |
 | I3 / J3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"；**gold8 把该链的发布回执端放大到极限——为读回 1 个发布回执烧 29 调用/71% 墙钟，preview×17 全拒、4 次 `/publications/*` 外部锚定停审 deny**（链 1 断点最全形态） | 链 1 修复时覆盖 download_supplementary 登记原子性 + permission deny 响应附"无此读取通道"语义 |
 | J1 | **名册类外部源零 provider + 官方站全灭 + 无"用户上传→Core 权威资产"通道**：DILIrank 六通道逐 URL 实证不可达（DNS/404/401/ETIMEDOUT），题面 2/4 表 NO_DATA；quarantine 旁路明确非权威、进不了正式链 | 定义"用户上传→task-owned Core 资产→绑定"受治理正式通道（区别于 quarantine 非权威旁路）；DILIrank 镜像准入 |
 | J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
@@ -62,7 +63,7 @@
 | L5 | **spec-as-string 4096 字符 transport 限制**（与 K2 同族）：多绑定四表 spec 逼近上限，压缩 transform 表达 | 与 K2 信封提升合并立项 |
 | K2 | **transform_source 尺寸天花板**：完整四表 integrator 装不进一次 prepare/submit 信封，多次截断失败后模型被迫发 383 字节"通路探针"代替产品 | prepare 分步传模块 / 提上限 / receipt 端存代码、submit 只传引用 |
 | K3（方言半） | **transform 沙箱方言陷阱**：禁 bracket access + JSON 内 `\n` 到 Core 变字面 backslash-n，同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮，是 20M token 主要来源 | admission 报错附最小可复现样例 + 官方 workaround 清单（换行用 String.fromCharCode(10) 等）写进 transform 工具描述 |
-| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身。**gold5-r2 新案：`--adopt` 不持久化 run_id → HIL 后 `--resume` 拒绝续挂，需手工补 state**（首踩；任何走到 HIL 的 case 都会必经此路） | 运维面：supervisor 加重试；adopt 分支同步 writeState(run_id)；查 server events 端点 500 根因 |
+| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身。**gold5-r2 新案：`--adopt` 不持久化 run_id → HIL 后 `--resume` 拒绝续挂，需手工补 state**（首踩；任何走到 HIL 的 case 都会必经此路）。**gold7-r2（1M 规范）：默认 --timeout 1h 不够，本案 95min 触发超时，1M 下至少 3h（10800000）** | 运维面：supervisor 加重试；adopt 分支同步 writeState(run_id)；默认 timeout 提至 3h；查 server events 端点 500 根因 |
 | H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
 
 ### 不属于两类（外部源边界，合理阻断）

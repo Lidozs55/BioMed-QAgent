@@ -286,6 +286,27 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
 - 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
 
+## gold7-r2 @ qwen3.8-flash（2026-08-31，main@4be9e3d51ab3，**规范版复测·进行中**，task_ts_a19e74b7-097f-4e88-ab48-68d7c8c9330a）
+
+> 状态：running（截至 seq 2002，已跑 ~95 分钟，**十案最长**——1M 上下文放大了探索/试错时长；pubs 暂 0，模型已建 `output/ad_gwas_study.csv`、`output/ad_gwas_risk_loci.csv` staging 表并逐行回读自审，正在补 UniProt/TREM2 佐证，尚未进动态发布）。本节先记已坐实的观察，终态数字（usage/phase/发布数）待 run 结束补录。
+
+### 运行中断事件复盘（"记分员"死亡，run 无恙——与操作员重启框架无关）
+- **run 全程未断**：跑在 detached `node dist/index.js --static`（pid 42824），操作员重启的是工具会话、非该 server 进程；seq 单调 1512→1721→2002，事件流零 `run_interrupted`/`task_recovered`，active_run 从未丢。
+- **supervisor 死于自身 1h 墙钟超时**：我设 `--timeout 3600000`（=1h），本案 1M 下探索超 1h（十案首次），`supervisor timeout exceeded`。已改 3h `--adopt` 重挂，journal 1669→2002 追平，数据零损。**运维铁律更新：1M 规范下 supervisor `--timeout` 至少 3h（10800000）**。
+- 附带再踩并现场确认 **O2/adopt-run_id 缺陷**（triage 运维行已记：`--adopt` 不持久化 run_id → HIL/超时后 `--resume` 需手工补 state；本案未 HIL，adopt 重挂即续）。
+
+### 已坐实的新卡点
+| # | 卡点 | 归类 | 证据 | 状态 |
+| - | ---- | ---- | ---- | ---- |
+| P2 | **`source_files` 绑定契约三向死锁**（GWAS/variant_evidence 静态路彻底不通）：bare `asset_<64hex>` → 报"must be a relative source_assets path"；改相对路径 → 报"has no registered asset ID"；MOESM4 解出成员已是 `text/csv` → 报"media type not allowed: text/csv"。**没有任何单一取值能同时满足"相对路径 + 已注册资产 id + 非 csv 介质"三条**。这是 D3（下载即登记）与 a5a6003d（成员真实 media-type）**两处修复未对齐**的夹缝：登记修好了 id、media-type 修好了标签，但 static variant_evidence 适配器仍拒 text/csv → 静态闭合对 GWAS 衍生表结构性不可能。模型 13× 撞墙后自行判"两形态穷尽→转动态"（正确逃生） | 框架（契约死锁，链 2/D2 的静态侧新实例） | execute@1064-1205 同签名 13 连败（`bridge_unavailable`）；终答前自述"两形态穷尽"；seq1902 再证 mapping_files 路同拒 | 开放，高优先（与 H1/I2/D2 同族合并立项） |
+
+### 行为观察（相对 r1 的正向）
+- **`inspect_source_coverage` 空参连败 ~19 次**——一度疑似 L1 式 tic，但模型**自行完成因果诊断**："coverage artifact 只有在 Publication 之后才存在，构建前调用必然 `no_source_coverage_artifact`，它 gate 不了自己"→ 主动弃用转独立源。**结论：这是 O2（新工具 description 无用法引导）诱发的可避免烧钱，不是模型退化**；模型最终跳出=正样本（对比 gold10-L1 真退化未跳出）。
+- `scaffold_dataset_profile` 又误用（O2 第 N 次，cleaning 套件持续无引导）。
+- 载体甄别/纠错保持水准：workspace_search 发现自写 study 行误引 "Supplementary Table 3"，主动核对字节改为 "Table 5"（stage-wise OR/p 真实所在表），拒绝沿用错误 provenance。
+
+> 待 run 终态补录：usage 全量+phase 拆分、是否动态发布/几表、HIL 是否触发、P2 最终是否逼停发布。
+
 ## gold8 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_304c82c8-7dfe-4372-8479-d99efa121e0a）
 
 > 题面依 §5.3 重建（无 prompts 文件）。终态 **succeeded_publication（1/4 表，且仅 1 药）**：`pub_dili_faers_counts_15070cb556142758`（动态 Family，acetaminophen 的 FAERS PT 计数，4 artifacts，载体经 `openfda.files.v1` Core 采集）。历史对照：e2e-rerun3 同题发过 9 药 68 行——本次回退到 1 药（J4）。
