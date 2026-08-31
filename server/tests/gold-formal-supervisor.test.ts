@@ -28,6 +28,8 @@ const TASK_ID = "task_ts_fixture";
 const RUN_ID = "run_ts_fixture";
 const REQUEST_ID = "request_fixture";
 const PUBLICATION_ID = "publication_fixture";
+const HIL_REQUEST_ID = "hil_fixture";
+const HIL_DIGEST = "a".repeat(64);
 const WORKSPACE_ROOT = path.join(tmpdir(), "gold-formal-workspace", TASK_ID);
 
 function sha256Hex(bytes: Buffer): string {
@@ -156,7 +158,7 @@ async function setup(): Promise<{ root: string; promptFile: string; evidenceDir:
   return { root, promptFile, evidenceDir };
 }
 
-function options(values: { baseUrl: string; promptFile: string; evidenceDir: string; resume?: boolean }): JsonRecord {
+function options(values: { baseUrl: string; promptFile: string; evidenceDir: string; resume?: boolean; adopt?: boolean }): JsonRecord {
   return {
     baseUrl: values.baseUrl,
     taskId: TASK_ID,
@@ -168,30 +170,90 @@ function options(values: { baseUrl: string; promptFile: string; evidenceDir: str
     expectedCommit: "f".repeat(40),
     pageSize: 2,
     resume: values.resume ?? false,
+    adopt: values.adopt ?? false,
   };
+}
+
+function hilRequiredEvent(sequence = 1): JsonRecord {
+  return event(sequence, {
+    type: "user_input_required",
+    request_id: HIL_REQUEST_ID,
+    prompt_kind: "data_correction",
+    summary: "Review the publication candidate",
+    expires_at: null,
+    fixture_exempt: false,
+    detail: {},
+    hil_request: {
+      request_id: HIL_REQUEST_ID,
+      task_id: TASK_ID,
+      run_id: RUN_ID,
+      kind: "data_review",
+      review_type: "publication_acceptance",
+      evidence_digest: HIL_DIGEST,
+    },
+  }, "user_input_required");
+}
+
+function hilResumedEvent(sequence = 2, evidenceDigest = HIL_DIGEST): JsonRecord {
+  return event(sequence, {
+    type: "user_input_resumed",
+    request_id: HIL_REQUEST_ID,
+    decision: { action: "accept" },
+    detail: { evidence_digest: evidenceDigest, review_id: "review_fixture" },
+  }, "user_input_resumed");
+}
+
+async function seedPendingHil(evidenceDir: string, records: JsonRecord[] = [hilRequiredEvent()]): Promise<void> {
+  await mkdir(evidenceDir, { recursive: true });
+  await writeFile(path.join(evidenceDir, "events.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+  await writeFile(path.join(evidenceDir, "supervisor-state.json"), `${JSON.stringify({
+    version: 1,
+    after_sequence: records.length,
+    task_id: TASK_ID,
+    case_label: "fixture",
+    request_id: REQUEST_ID,
+    run_id: RUN_ID,
+    stopped: true,
+    pending_hil: {
+      request_id: HIL_REQUEST_ID,
+      evidence_digest: HIL_DIGEST,
+      kind: "data_review",
+      review_type: "publication_acceptance",
+      request: {
+        request_id: HIL_REQUEST_ID,
+        task_id: TASK_ID,
+        run_id: RUN_ID,
+        kind: "data_review",
+        review_type: "publication_acceptance",
+        evidence_digest: HIL_DIGEST,
+      },
+    },
+  })}\n`, "utf8");
 }
 
 function healthy(): JsonRecord {
   return { status: "ok", app_host: "ts", agent_runtime: "pi", dataset_core: "ts" };
 }
 
-function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onPermission?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
-  let snapshot = config.snapshot;
+function apiServer(config: { events: JsonRecord[] | (() => JsonRecord[]); snapshot: JsonRecord | (() => JsonRecord); completeOnRun?: boolean; onRun?: (body: JsonRecord) => void; onPermission?: (body: JsonRecord) => void; onResume?: (body: JsonRecord) => void }): Promise<{ server: Server; baseUrl: string }> {
+  let snapshotOverride: JsonRecord | null = null;
+  const currentEvents = (): JsonRecord[] => typeof config.events === "function" ? config.events() : config.events;
+  const currentSnapshot = (): JsonRecord => snapshotOverride ?? (typeof config.snapshot === "function" ? config.snapshot() : config.snapshot);
   return listen((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://fixture");
       if (url.pathname === "/api/v1/health") { json(response, 200, healthy()); return; }
-      if (url.pathname === `/api/v1/tasks/${TASK_ID}` && request.method === "GET") { json(response, 200, snapshot); return; }
+      if (url.pathname === `/api/v1/tasks/${TASK_ID}` && request.method === "GET") { json(response, 200, currentSnapshot()); return; }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/events` && request.method === "GET") {
         const after = Number(url.searchParams.get("after_sequence") ?? "0");
         const limit = Number(url.searchParams.get("limit") ?? "100");
-        json(response, 200, { events: config.events.filter((item) => Number(item.sequence) > after).slice(0, limit) });
+        json(response, 200, { events: currentEvents().filter((item) => Number(item.sequence) > after).slice(0, limit) });
         return;
       }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/runs` && request.method === "POST") {
         config.onRun?.(JSON.parse(await readBody(request)) as JsonRecord);
         const currentPublicationId = config.completeOnRun === true ? PUBLICATION_ID : null;
-        snapshot = taskSnapshot(config.completeOnRun ? "completed" : "running", config.completeOnRun ? null : RUN_ID, currentPublicationId);
+        snapshotOverride = taskSnapshot(config.completeOnRun ? "completed" : "running", config.completeOnRun ? null : RUN_ID, currentPublicationId);
         json(response, 202, { schema_version: "1.0", request_id: REQUEST_ID, task_id: TASK_ID, run_id: RUN_ID, status: "queued" });
         return;
       }
@@ -202,8 +264,8 @@ function apiServer(config: { events: JsonRecord[]; snapshot: JsonRecord; complet
       }
       if (url.pathname === `/api/v1/tasks/${TASK_ID}/runs/${RUN_ID}/resume` && request.method === "POST") {
         config.onResume?.(JSON.parse(await readBody(request)) as JsonRecord);
-        snapshot = taskSnapshot("completed", null, PUBLICATION_ID);
-        json(response, 200, snapshot);
+        snapshotOverride = taskSnapshot("completed", null, PUBLICATION_ID);
+        json(response, 200, currentSnapshot());
         return;
       }
       if (url.pathname === `/api/v1/publications/${PUBLICATION_ID}` && request.method === "GET") { json(response, 200, PUBLICATION_DETAIL); return; }
@@ -367,6 +429,106 @@ describe("Gold formal rerun supervisor", () => {
     const fileDigest = digestManifestFile(bytes);
     const packageDigest = digestPackage([{ relative_path: "merged/data.csv", sha256: fileDigest }]);
     expect(fileDigest).not.toBe(packageDigest);
+  });
+
+  test("persists the adopted run and request identity without creating a second run", async () => {
+    const fixture = await setup();
+    const runBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [event(1, { type: "run_completed" }, "run_completed")],
+      snapshot: taskSnapshot("completed", null, PUBLICATION_ID),
+      onRun: (body) => runBodies.push(body),
+    });
+    try {
+      const result = await supervise(options({ ...fixture, baseUrl: host.baseUrl, adopt: true }));
+      const state = JSON.parse(await readFile(path.join(fixture.evidenceDir, "supervisor-state.json"), "utf8")) as JsonRecord;
+      expect(result.run_id).toBe(RUN_ID);
+      expect(state).toMatchObject({ run_id: RUN_ID, request_id: REQUEST_ID });
+      expect(runBodies).toEqual([]);
+    } finally { await close(host.server); }
+  });
+
+  test("replays an exact external HIL resolution during the bounded resume grace interval", async () => {
+    const fixture = await setup();
+    await seedPendingHil(fixture.evidenceDir);
+    const runBodies: JsonRecord[] = [];
+    const resumeBodies: JsonRecord[] = [];
+    const waits: number[] = [];
+    let now = 1_000;
+    let externallyResolved = false;
+    const host = await apiServer({
+      events: () => externallyResolved
+        ? [hilRequiredEvent(), hilResumedEvent(), event(3, { type: "run_completed" }, "run_completed")]
+        : [hilRequiredEvent()],
+      snapshot: () => externallyResolved
+        ? taskSnapshot("completed", null, PUBLICATION_ID)
+        : taskSnapshot("awaiting_user_input", RUN_ID),
+      onRun: (body) => runBodies.push(body),
+      onResume: (body) => resumeBodies.push(body),
+    });
+    try {
+      const result = await supervise(
+        options({ ...fixture, baseUrl: host.baseUrl, resume: true }),
+        {
+          hilGraceMs: 50,
+          now: () => now,
+          sleep: async (milliseconds: number) => {
+            waits.push(milliseconds);
+            now += milliseconds;
+            externallyResolved = true;
+          },
+        },
+      );
+      expect(result.run_id).toBe(RUN_ID);
+      expect(waits).toEqual([50]);
+      expect(runBodies).toEqual([]);
+      expect(resumeBodies).toEqual([]);
+    } finally { await close(host.server); }
+  });
+
+  test("clears stale pending HIL state when the durable journal already contains its exact resume", async () => {
+    const fixture = await setup();
+    await seedPendingHil(fixture.evidenceDir, [hilRequiredEvent(), hilResumedEvent()]);
+    const host = await apiServer({
+      events: [hilRequiredEvent(), hilResumedEvent(), event(3, { type: "run_completed" }, "run_completed")],
+      snapshot: taskSnapshot("completed", null, PUBLICATION_ID),
+    });
+    try {
+      const result = await supervise(
+        options({ ...fixture, baseUrl: host.baseUrl, resume: true }),
+        { sleep: async () => { throw new Error("stale durable resume must not wait"); } },
+      );
+      const state = JSON.parse(await readFile(path.join(fixture.evidenceDir, "supervisor-state.json"), "utf8")) as JsonRecord;
+      expect(result.run_id).toBe(RUN_ID);
+      expect(state).toMatchObject({ stopped: false, pending_hil: null });
+    } finally { await close(host.server); }
+  });
+
+  test("rejects and does not consume a human review with mismatched evidence", async () => {
+    const fixture = await setup();
+    await seedPendingHil(fixture.evidenceDir, [hilRequiredEvent(), hilResumedEvent(2, "b".repeat(64))]);
+    await writeFile(path.join(fixture.evidenceDir, "human-review.jsonl"), `${JSON.stringify({
+      request_id: HIL_REQUEST_ID,
+      evidence_digest: "b".repeat(64),
+      decision: { action: "accept" },
+      reason: "Stale review",
+    })}\n`, "utf8");
+    const runBodies: JsonRecord[] = [];
+    const resumeBodies: JsonRecord[] = [];
+    const host = await apiServer({
+      events: [hilRequiredEvent(), hilResumedEvent(2, "b".repeat(64))],
+      snapshot: taskSnapshot("awaiting_user_input", RUN_ID),
+      onRun: (body) => runBodies.push(body),
+      onResume: (body) => resumeBodies.push(body),
+    });
+    try {
+      await expect(supervise(
+        options({ ...fixture, baseUrl: host.baseUrl, resume: true }),
+        { hilGraceMs: 50, now: () => 1_000, sleep: async () => { throw new Error("mismatched review must fail closed"); } },
+      )).rejects.toMatchObject({ code: "data_review" });
+      expect(runBodies).toEqual([]);
+      expect(resumeBodies).toEqual([]);
+    } finally { await close(host.server); }
   });
 
   test("runs the success closure through paged events and artifact downloads", async () => {
