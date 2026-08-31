@@ -856,7 +856,16 @@ export async function supervise(input, dependencies = {}) {
 
   for (;;) {
     if (Date.now() > deadline) throw new SupervisorError("timeout", "supervisor timeout exceeded");
-    const page = await api.request("GET", `/api/v1/tasks/${encodeURIComponent(options.taskId)}/events?after_sequence=${state.after_sequence}&limit=${options.pageSize}`);
+    let page;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        page = await api.request("GET", `/api/v1/tasks/${encodeURIComponent(options.taskId)}/events?after_sequence=${state.after_sequence}&limit=${options.pageSize}`);
+        break;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1_000 * 2 ** attempt));
+      }
+    }
     const validated = validateEventPage(page, state.after_sequence, options.taskId);
     for (const event of validated.events) {
       if (!journalHasEvent(records, event)) {

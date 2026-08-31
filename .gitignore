@@ -88,10 +88,11 @@ coverage.xml
 *.skill
 
 # ===== 其他 =====
-.cache
+.cache/
 .trae/
 .pi-subagents/
-.zcode
+.zcode/
+.claude/
 
 # Local MCP server builds (configure-glm-vision skill)
 outputs/
