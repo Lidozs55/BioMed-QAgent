@@ -570,6 +570,49 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("deduplicates the same experiment repeated on another rendered page", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const responses = [
+        makeVlmResponse({ paper: null }),
+        makeVlmResponse({ paper: null, activities: [], series: [], points: [] }),
+      ];
+      let callIndex = 0;
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        vlmClientFactory: () => ({
+          call: async () => { throw new Error("legacy call must not be used"); },
+          callWithMeta: async () => ({
+            content: responses[callIndex++]!,
+            model: PROVIDER_MODEL_VERSION,
+          }),
+        }),
+        extractPageImages: async (_pdfBytes, _sourceLabel, destDir) => {
+          await mkdir(destDir, { recursive: true });
+          const first = path.join(destDir, "paper_p2.png");
+          const second = path.join(destDir, "paper_p3.png");
+          await Promise.all([writeFile(first, "page 2"), writeFile(second, "page 3")]);
+          return {
+            images: [
+              { path: first, pageIndex: 2, bbox: "0,0,612,792" },
+              { path: second, pageIndex: 3, bbox: "0,0,612,792" },
+            ],
+            skippedPages: 0,
+          };
+        },
+      });
+
+      expect(result.rows.experiment_records).toBe(1);
+      expect(result.warnings).toContain(
+        "experiment exp_fig2 repeated on page 3 with matching semantics; kept page 2 locator",
+      );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("batches all pending carrier estimates into one data_review request", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {

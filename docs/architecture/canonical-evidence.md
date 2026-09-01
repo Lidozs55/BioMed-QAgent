@@ -91,7 +91,10 @@ Core trust boundary as every other family:
   and never convert a failed page into fabricated evidence. A per-paper carrier
   may omit supplementary rows when that paper has no acquired supplement; only
   the combined publication gate may satisfy the six-table non-empty contract,
-  so partial carriers cannot weaken the final profile.
+  so partial carriers cannot weaken the final profile. Repeated experiment IDs
+  across rendered pages are deduplicated only when their biomedical semantics
+  match exactly; conflicting duplicates remain a hard rejection, while the
+  first page locator is retained deterministically.
 - **Provenance retention.** The formal publication keeps, per series and per
   point: source asset, page/bbox locator, extraction model name and pinned
   version, every transform step (`vlm_extract`, `coordinate_transform`,

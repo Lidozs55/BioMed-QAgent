@@ -60,7 +60,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.3.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.4.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -796,6 +796,20 @@ function extractionReliability(confidence: ChartConfidenceLevel): ChartReliabili
   return confidence === "low" ? "low" : "medium";
 }
 
+function experimentSemanticDigest(candidate: ParsedExperimentCandidate): string {
+  return canonicalDigest({
+    protein: candidate.protein,
+    variant: candidate.variant,
+    construct: candidate.construct,
+    ligand: candidate.ligand,
+    assay_type: candidate.assay_type,
+    cell_line_or_system: candidate.cell_line_or_system,
+    temperature: candidate.temperature,
+    buffer: candidate.buffer,
+    incubation_time: candidate.incubation_time,
+  });
+}
+
 /**
  * Run the governed extraction and register the evidence carrier atomically.
  * All registered-asset, media-type, and identity gates run BEFORE any model
@@ -909,6 +923,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   const experimentCandidates: Array<{ page: PageExtraction; candidate: ParsedExperimentCandidate }> = [];
   const experimentIds = new Set<string>();
+  const experimentById = new Map<string, { page: PageExtraction; candidate: ParsedExperimentCandidate }>();
   const activityCandidates: Array<{ page: PageExtraction; candidate: ParsedActivityCandidate }> = [];
   const activityKeys = new Set<string>();
   const seriesCandidates: Array<{ page: PageExtraction; candidate: ParsedSeriesCandidate }> = [];
@@ -916,11 +931,21 @@ export async function extractRegisteredPaperChartEvidence(
   const pointCandidates: Array<{ page: PageExtraction; candidate: ParsedPointCandidate }> = [];
   for (const page of pages) {
     for (const candidate of page.parsed.experiments) {
-      if (experimentIds.has(candidate.experiment_id)) {
-        fail(`duplicate experiment_id ${candidate.experiment_id}`);
+      const existing = experimentById.get(candidate.experiment_id);
+      if (existing !== undefined) {
+        if (experimentSemanticDigest(existing.candidate) !== experimentSemanticDigest(candidate)) {
+          fail(`conflicting duplicate experiment_id ${candidate.experiment_id}`);
+        }
+        warnings.push(
+          `experiment ${candidate.experiment_id} repeated on page ${page.pageNumber} with matching semantics; ` +
+            `kept page ${existing.page.pageNumber} locator`,
+        );
+        continue;
       }
       experimentIds.add(candidate.experiment_id);
-      experimentCandidates.push({ page, candidate });
+      const entry = { page, candidate };
+      experimentById.set(candidate.experiment_id, entry);
+      experimentCandidates.push(entry);
     }
     for (const candidate of page.parsed.activities) {
       if (activityKeys.has(candidate.activity_key)) {
