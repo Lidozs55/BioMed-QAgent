@@ -13,7 +13,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { PublicHttpClient } from "../../external/network/http-client.js";
-import { classifyTransportFailure, isAbortError } from "../../external/network/errors.js";
+import {
+  classifyTransportFailure,
+  isAbortError,
+  UnsafeUrlError,
+} from "../../external/network/errors.js";
 import { ChartExtractionError } from "./chart-json.js";
 
 /** Visual model name (Python ``VL_MODEL_NAME``). */
@@ -197,6 +201,7 @@ export function createVlmClient(
         const transportCode = classifyTransportFailure(error);
         const retryable = error instanceof TransientVlmError ||
           isAbortError(error) ||
+          (error instanceof UnsafeUrlError && error.message.startsWith("URL hostname could not be resolved:")) ||
           (transportCode !== null && TRANSIENT_TRANSPORT_CODES.has(transportCode));
         if (!retryable) throw error;
         if (attempt === MAX_VLM_ATTEMPTS) {
