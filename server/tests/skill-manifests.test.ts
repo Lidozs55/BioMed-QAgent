@@ -58,6 +58,14 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   // acquisition-only carrier route referenced by dataset-construction guidance;
   // registered contextually by the dynamic-family toolset, not a curated bundle entry
   "acquire_core_carrier",
+  // governed Core archive-member extraction tool (core-asset-tools); referenced
+  // by extract_chart_data_vlm guidance for ZIP supplementary member registration
+  "extract_core_archive",
+  // governed Core asset preview tool (core-asset-tools); referenced by
+  // extract_chart_data_vlm guidance for listing ZIP supplementary members
+  "preview_core_asset",
+  // extract_registered_paper_chart_evidence request parameter name (field, not a tool)
+  "supplementary_asset_ids",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
