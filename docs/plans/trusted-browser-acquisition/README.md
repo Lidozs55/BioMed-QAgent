@@ -72,8 +72,11 @@ identity.
 ## Phase 1: Core Formalization Boundary
 
 1. Add a Host-persisted browser evidence store/receipt writer behind
-   `download_from_page`. It records final URL, redirect chain, response metadata,
-   exact bytes, SourceAsset, DownloadAttempt, and evidence digest before proposal.
+   `download_from_page` and `navigate_page({ archive_html: true })`. The latter
+   stores the bounded, JavaScript-rendered DOM as `text/html` without inlining it
+   into Agent context or bundling external page resources. Both routes record
+   final URL, redirect chain, response metadata, exact bytes, SourceAsset,
+   DownloadAttempt, and evidence digest before proposal.
 2. Add a Core service that re-hashes the stored bytes, validates the receipt,
    resolves the fixed `browser.snapshot.v1` carrier, checks exact request
    identity, and rejects Agent-supplied provider or implementation digests.
