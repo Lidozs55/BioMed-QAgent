@@ -415,6 +415,68 @@ describe("registered paper chart evidence extraction", () => {
         extraction_method: "vlm",
         human_review_status: "pending",
       });
+      // R5 evidence-manifest contract: every admitted series row must carry a
+      // SHA-256 prompt digest that matches the digest the producer derives
+      // deterministically from the frozen extraction prompt.
+      const expectedPromptDigest = createHash("sha256")
+        .update(REGISTERED_PAPER_CHART_PROMPT, "utf8")
+        .digest("hex");
+      expect(series.prompt_digest).toBe(expectedPromptDigest);
+
+      // The carrier embeds the exact manifest that Core will require on the
+      // consuming provenance: projected from validated rows in the validator's
+      // native ChartRow/ChartPointRow vocabulary, not model output.
+      const manifest = carrier.extraction.evidence_manifest as {
+        charts: Array<Record<string, unknown>>;
+        points: Array<Record<string, unknown>>;
+      };
+      expect(Array.isArray(manifest.charts)).toBe(true);
+      expect(Array.isArray(manifest.points)).toBe(true);
+      expect(manifest.charts).toHaveLength(1);
+      expect(manifest.points).toHaveLength(2);
+      expect(manifest.charts[0]).toEqual({
+        chart_id: (rowsOf(carrier, "chart_series")[0] as { chart_series_id: string })
+          .chart_series_id,
+        source_asset_id: fixture.assets.pdfReceipt.asset_ref.asset_id,
+        chart_type: "line",
+        title: "Erlotinib",
+        x_label: "Erlotinib concentration",
+        x_unit: "nM",
+        x_scale: "log",
+        y_label: "EGFR activity",
+        y_unit: "percent",
+        y_scale: "linear",
+        data_point_count: 2,
+        legend: "Erlotinib",
+        extracted_at: FIXED_NOW.toISOString(),
+        model_name: RESOLVED_MODEL,
+        source_label: "Erlotinib",
+        page_number: "1",
+        bbox: "40,60,560,400",
+        extraction_tier: "L1_vlm",
+      });
+      const carrierPoints = rowsOf(carrier, "chart_points") as Array<
+        Record<string, unknown>
+      >;
+      expect(manifest.points).toEqual(carrierPoints.map((point) => ({
+        point_id: point.point_id,
+        chart_id: point.chart_series_id,
+        x_value: point.x_value,
+        y_value: point.y_value,
+        series_label: "Erlotinib",
+        confidence_level: point.extraction_confidence,
+        confidence_reason: point.confidence_reason,
+        human_review_state: point.review_status,
+        review_id: point.review_id ?? "",
+        review_evidence_digest: "",
+        review_reviewer: "",
+        reviewed_at: "",
+        review_reason: "",
+        original_x_value: point.original_x_value ?? "",
+        original_y_value: point.original_y_value ?? "",
+      })));
+      expect(carrier.extraction.prompt_digest).toBe(expectedPromptDigest);
+
       expect((series as { source_locator: { asset_id: string } }).source_locator.asset_id).toBe(
         fixture.assets.pdfReceipt.asset_ref.asset_id,
       );
@@ -458,11 +520,11 @@ describe("registered paper chart evidence extraction", () => {
       // Bounded summary only: no credentials, no raw provider payloads.
       const serialized = JSON.stringify(result);
       expect(serialized).not.toContain(API_KEY);
-      const carrierPoints = rowsOf(carrier, "chart_points") as Array<{ point_id: string }>;
+      const serializedCarrierPoints = rowsOf(carrier, "chart_points") as Array<{ point_id: string }>;
       expect(result.pending_review).toEqual({
         series_count: 1,
         point_count: 2,
-        review_ids: carrierPoints.map((point) => point.point_id),
+        review_ids: serializedCarrierPoints.map((point) => point.point_id),
       });
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
@@ -681,6 +743,114 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("projects an empty-chart empty-point manifest when the only series stays unclear", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ points: [] }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.rows.chart_points).toBe(0);
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      const manifest = carrier.extraction.evidence_manifest as {
+        charts: Array<Record<string, unknown>>;
+        points: unknown[];
+      };
+      // The unclear no-point series stays an explicit row (never an
+      // exact-looking stub); its manifest chart projects with zero points, and
+      // the provenance for this carrier carries the same manifest verbatim.
+      expect(manifest.charts).toEqual([{
+        chart_id: (rowsOf(carrier, "chart_series")[0] as { chart_series_id: string })
+          .chart_series_id,
+        source_asset_id: fixture.assets.pdfReceipt.asset_ref.asset_id,
+        chart_type: "line",
+        title: "Erlotinib",
+        x_label: "Erlotinib concentration",
+        x_unit: "nM",
+        x_scale: "log",
+        y_label: "EGFR activity",
+        y_unit: "percent",
+        y_scale: "linear",
+        data_point_count: 0,
+        legend: "Erlotinib",
+        extracted_at: FIXED_NOW.toISOString(),
+        model_name: RESOLVED_MODEL,
+        source_label: "Erlotinib",
+        page_number: "1",
+        bbox: "40,60,560,400",
+        extraction_tier: "L1_vlm",
+      }]);
+      expect(manifest.points).toEqual([]);
+      const provenance = await fixture.registry.resolveDerivedProvenance(result.carrier.asset_id);
+      expect(provenance.evidence).toMatchObject({
+        carrier_kind: "registered_paper_chart_evidence",
+        prompt_digest: carrier.extraction.prompt_digest,
+        manifest: manifest as unknown as Record<string, unknown>,
+      });
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("binds the evidence manifest to the exact validated carrier bytes", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+
+      const bytes = await readFile(path.join(fixture.taskRoot, result.carrier.relative_path));
+      // Exact-byte binding: the digest of the on-disk carrier bytes equals the
+      // registration digest, and the manifest embedded in exactly those bytes
+      // is what the Core provenance carries for the consuming validator.
+      expect(result.carrier.asset_id).toBe(`asset_${createHash("sha256").update(bytes).digest("hex")}`);
+      const json = JSON.parse(bytes.toString("utf8")) as {
+        extraction: { prompt_digest: string; evidence_manifest: unknown };
+      };
+      const provenance = await fixture.registry.resolveDerivedProvenance(result.carrier.asset_id);
+      expect(provenance.evidence.manifest).toEqual(json.extraction.evidence_manifest);
+      expect(provenance.evidence.prompt_digest).toBe(json.extraction.prompt_digest);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("focuses the single corrective retry with deterministic validated context", async () => {
+    const fixture = await makeFixture((callNumber) =>
+      callNumber === 0 ? makeVlmResponse({ points: [] }) : makeVlmResponse(),
+    );
+    try {
+      await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+
+      expect(fixture.calls).toHaveLength(2);
+      const retryPrompt = fixture.prompts[1];
+      // Deterministic validated focus: the deficit names the trusted producer
+      // state for the deficient series (figure, bbox, axes, legend) and the
+      // bounded legal activity_key identifiers.
+      expect(retryPrompt).toContain("series fig2_erlo");
+      expect(retryPrompt).toContain("[validated: figure Figure_2A");
+      expect(retryPrompt).toContain("bbox [40, 60, 560, 400]");
+      expect(retryPrompt).toContain("x=Erlotinib concentration (nM) log");
+      expect(retryPrompt).toContain("y=EGFR activity (percent) linear");
+      expect(retryPrompt).toContain("legend=Erlotinib");
+      expect(retryPrompt).toContain("legal activity_keys: act_ic50_erlo");
+      // No-guess closure remains explicit and the retry stays bounded to one.
+      expect(retryPrompt).toMatch(/Do not guess/i);
+      expect(retryPrompt).toContain("do not emit a point");
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("batches all pending carrier estimates into one data_review request", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {
@@ -772,6 +942,26 @@ describe("registered paper chart evidence extraction", () => {
         fixture.assets.pdfReceipt.asset_ref.asset_id,
         fixture.assets.supplementReceipt.asset_ref.asset_id,
       ]);
+
+      // R5 evidence-manifest contract: both candidate and reviewed
+      // vlm_extraction provenance must embed a manifest equal to the one in
+      // the exact carrier bytes, bound to model identity and prompt digest.
+      const candidateCarrierBytes = await readFile(
+        path.join(fixture.taskRoot, result.carrier.relative_path),
+      );
+      const candidateCarrierJson = JSON.parse(candidateCarrierBytes.toString("utf8")) as {
+        extraction: { prompt_digest: string; evidence_manifest: unknown };
+      };
+      expect(candidateCarrierJson.extraction.prompt_digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(candidateProvenance.evidence).toMatchObject({
+        carrier_kind: "registered_paper_chart_evidence",
+        prompt_digest: candidateCarrierJson.extraction.prompt_digest,
+        manifest: candidateCarrierJson.extraction.evidence_manifest,
+      });
+      expect(candidateProvenance.evidence.manifest).toEqual(
+        candidateCarrierJson.extraction.evidence_manifest,
+      );
+
       const candidateResult = await fixture.registry.resolveDerivedOperationResult(
         candidateProvenance.operation_result_id,
       );
@@ -800,6 +990,25 @@ describe("registered paper chart evidence extraction", () => {
       expect(reviewedProvenance.operation_kind).toBe("vlm_extraction");
       expect(reviewedProvenance.parent_asset_ids).toContain(result.carrier.asset_id);
       expect(reviewedProvenance.parent_asset_ids).toHaveLength(2);
+
+      // Reviewed provenance binds the same manifest/prompt digest to the
+      // exact reviewed carrier bytes.
+      const reviewedCarrierBytes = await readFile(
+        path.join(fixture.taskRoot, result.reviewed_carrier.relative_path),
+      );
+      const reviewedCarrierJson = JSON.parse(reviewedCarrierBytes.toString("utf8")) as {
+        extraction: { prompt_digest: string; evidence_manifest: unknown };
+      };
+      expect(reviewedCarrierJson.extraction.prompt_digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(reviewedProvenance.evidence).toMatchObject({
+        carrier_kind: "registered_paper_chart_evidence",
+        prompt_digest: reviewedCarrierJson.extraction.prompt_digest,
+        manifest: reviewedCarrierJson.extraction.evidence_manifest,
+      });
+      expect(reviewedProvenance.evidence.manifest).toEqual(
+        reviewedCarrierJson.extraction.evidence_manifest,
+      );
+
       const reviewedResult = await fixture.registry.resolveDerivedOperationResult(
         reviewedProvenance.operation_result_id,
       );
