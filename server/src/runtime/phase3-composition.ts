@@ -457,6 +457,7 @@ export async function createPhase3Runtime(
       // static validate/execute stay fenced for the whole task, across
       // restart, regardless of requirement_id changes or dynamic rejections.
       const semanticRouteFence = createSemanticRouteFence({
+        taskRoot,
         stateFile: path.join(taskRoot, "state", "semantic-route.json"),
       });
       // Permission control plane: persistent user settings + per-task broker.
@@ -619,11 +620,11 @@ export async function createPhase3Runtime(
             options.dynamicFamilySeams?.resolveProductRequirements
             ?? resolveCoreProductTopologyRequirements
           )(submission.family_spec.assessment_policy_ref);
-          const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
-          // Commit the one-way route fence before any prepare side effect so
-          // a changed requirement_id can never take the static route after
-          // the first formal dynamic prepare/scaffold boundary.
+          // Commit the one-way route fence before coordinator persistence or
+          // any formal dynamic preparation side effect. A changed
+          // requirement_id can never take the static route after this point.
           await semanticRouteFence.commitDynamicRoute();
+          const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
             requirementId: submission.execution_proposal.requirement_id,
