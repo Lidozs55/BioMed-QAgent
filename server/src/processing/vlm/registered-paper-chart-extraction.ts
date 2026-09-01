@@ -60,7 +60,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.1.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.2.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -864,6 +864,7 @@ export async function extractRegisteredPaperChartEvidence(
   } catch {
     fail("resolved VLM base URL is invalid");
   }
+  const warnings: string[] = [];
   const pages: PageExtraction[] = [];
   for (const image of pageImages.images) {
     const imageBytes = await readFile(image.path);
@@ -872,18 +873,27 @@ export async function extractRegisteredPaperChartEvidence(
       REGISTERED_PAPER_CHART_PROMPT,
       signal,
     );
-    pages.push({
-      pageNumber: image.pageIndex,
-      parsed: parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`),
-      inputDigest: sha256(imageBytes),
-      outputDigest: sha256(Buffer.from(content, "utf8")),
-      providerModel: model,
-    });
+    try {
+      pages.push({
+        pageNumber: image.pageIndex,
+        parsed: parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`),
+        inputDigest: sha256(imageBytes),
+        outputDigest: sha256(Buffer.from(content, "utf8")),
+        providerModel: model,
+      });
+    } catch (error) {
+      if (!(error instanceof ChartExtractionError)) throw error;
+      warnings.push(
+        `page ${image.pageIndex} model response was rejected and skipped: ${error.message}`,
+      );
+    }
+  }
+  if (pages.length === 0) {
+    fail(`all rendered page model responses were rejected: ${warnings.join("; ")}`);
   }
   const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
 
   // -- 5. Merge page responses into merged candidates (with page context).
-  const warnings: string[] = [];
   if (pageImages.skippedPages > 0) {
     warnings.push(
       `${pageImages.skippedPages} additional PDF page candidate(s) were not rendered because of the page cap`,

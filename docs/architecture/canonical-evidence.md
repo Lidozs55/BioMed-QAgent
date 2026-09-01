@@ -84,7 +84,11 @@ Core trust boundary as every other family:
   full PDF pages from the already verified PDF bytes (216 DPI with page/pixel
   caps), preserving vector marks, axes, legends and surrounding labels in one
   visual input; embedded-image extraction remains available to exploratory
-  tooling but is not the publication carrier boundary.
+  tooling but is not the publication carrier boundary. Structurally invalid
+  single-page model responses are audited and skipped; the extraction still
+  fails closed unless the remaining pages satisfy the complete experiment/
+  series/table contracts. Transient VLM transport failures use bounded retries
+  and never convert a failed page into fabricated evidence.
 - **Provenance retention.** The formal publication keeps, per series and per
   point: source asset, page/bbox locator, extraction model name and pinned
   version, every transform step (`vlm_extract`, `coordinate_transform`,

@@ -493,6 +493,55 @@ describe("registered paper chart evidence extraction", () => {
     }
   }, 60_000);
 
+  it("skips one structurally invalid page response when another page closes the evidence", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const invalidPage = makeVlmResponse({
+        paper: null,
+        experiments: [{ experiment_id: "partial" }],
+        activities: [],
+        series: [],
+        points: [],
+      });
+      const validPage = makeVlmResponse({ paper: null });
+      let callIndex = 0;
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+        vlmClientFactory: () => ({
+          call: async () => { throw new Error("legacy call must not be used"); },
+          callWithMeta: async () => ({
+            content: callIndex++ === 0 ? invalidPage : validPage,
+            model: PROVIDER_MODEL_VERSION,
+          }),
+        }),
+        extractPageImages: async (_pdfBytes, _sourceLabel, destDir) => {
+          await mkdir(destDir, { recursive: true });
+          const first = path.join(destDir, "paper_p7.png");
+          const second = path.join(destDir, "paper_p8.png");
+          await Promise.all([writeFile(first, "page 7"), writeFile(second, "page 8")]);
+          return {
+            images: [
+              { path: first, pageIndex: 7, bbox: "0,0,612,792" },
+              { path: second, pageIndex: 8, bbox: "0,0,612,792" },
+            ],
+            skippedPages: 0,
+          };
+        },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.warnings).toContain(
+        "page 7 model response was rejected and skipped: registered paper chart evidence rejected: page 7 experiment protein is required",
+      );
+      expect(result.rows.experiment_records).toBe(1);
+      expect(result.rows.chart_series).toBe(1);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("batches all pending carrier estimates into one data_review request", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {
