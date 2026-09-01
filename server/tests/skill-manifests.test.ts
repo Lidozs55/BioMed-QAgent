@@ -40,6 +40,10 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "source",
   "accession",
   "entities",
+  // browser navigate_page request parameter names (not tools)
+  "max_chars",
+  "offset",
+  "archive_html",
   // entity/schema field names, declared input roles, and adapter ids
   // referenced by dataset-construction guidance (identifiers, not tools)
   "csv_data",

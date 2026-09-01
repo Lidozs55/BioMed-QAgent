@@ -43,6 +43,7 @@ import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs, assertSafeFilenam
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { CrawlerFacade } from "../../external/crawler/index.js";
 import { BROWSER_HEADERS, MAX_CRAWLER_DOWNLOAD_BYTES } from "../../external/crawler/index.js";
+import { MAX_BROWSER_CONTENT_BYTES } from "../../external/browser/index.js";
 import { makeSourceId } from "../../external/sources/fallback.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
 import type { DownloadAttempt, SourceAsset } from "../../dataset/contracts/source.js";
@@ -200,18 +201,187 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
   const hooks = noopHooks(options.hooks);
   const hostFailureCounts = new Map<string, number>();
 
+  const publishBrowserAcquisition = async (input: {
+    requestedUrl: string;
+    finalUrl: string;
+    redirectChain: BrowserAcquisitionEvidence["redirect_chain"];
+    status: number;
+    mediaType: string;
+    filename: string;
+    body: AsyncIterable<Buffer>;
+    startedAt: string;
+    attemptId: string;
+    maxBytes: number;
+    signal?: AbortSignal;
+  }) => {
+    validateDownloadFilename(input.filename);
+    const dirs = taskWorkDirs(options.taskRoot);
+    await ensureAcquisitionDirs(dirs);
+    const sourceId = makeSourceId(DATABASE.BROWSER, input.filename, input.requestedUrl);
+    const partPath = path.join(dirs.downloadTmp, `${input.attemptId}.part`);
+    const hash = createHash("sha256");
+    let bytesReceived = 0;
+    const target = createWriteStream(partPath, { flags: "wx" });
+    try {
+      try {
+        for await (const chunk of input.body) {
+          if (input.signal?.aborted === true) {
+            throw input.signal.reason instanceof Error ? input.signal.reason : new Error("aborted");
+          }
+          bytesReceived += chunk.length;
+          if (bytesReceived > input.maxBytes) {
+            throw new Error(`browser acquisition exceeded ${input.maxBytes} byte limit`);
+          }
+          hash.update(chunk);
+          await new Promise<void>((resolveWrite, rejectWrite) => {
+            target.write(chunk, (error) => (error ? rejectWrite(error) : resolveWrite()));
+          });
+        }
+        await new Promise<void>((resolveEnd, rejectEnd) => {
+          target.end(() => resolveEnd());
+          target.on("error", (error: Error) => rejectEnd(error));
+        });
+      } finally {
+        target.destroy();
+      }
+      if (bytesReceived === 0) throw new Error("download was empty");
+
+      const checksum = hash.digest("hex");
+      const assetId = assetIdFromSha256(checksum);
+      const finishedAt = new Date().toISOString();
+      const blobPath = options.cache.blobPath(checksum);
+      const cached = await stat(blobPath).catch(() => null);
+      if (cached === null || !cached.isFile()) {
+        await publishCacheBlob(partPath, blobPath, checksum);
+      }
+
+      const destination = sourceAssetPath(dirs, assetId, input.filename);
+      await mkdir(path.dirname(destination), { recursive: true });
+      const existing = await stat(destination).catch(() => null);
+      if (existing !== null && existing.isFile()) {
+        if ((await sha256File(destination)) !== checksum) {
+          throw new Error("existing task asset differs");
+        }
+      } else {
+        try {
+          await link(partPath, destination);
+        } catch {
+          await copyFile(partPath, destination);
+        }
+        if ((await sha256File(destination)) !== checksum) {
+          throw new Error("task asset checksum mismatch");
+        }
+      }
+
+      await options.cache.writeMetadata(
+        canonicalRequestHash(DATABASE.BROWSER, input.filename, input.requestedUrl),
+        { sha256: checksum, size_bytes: String(bytesReceived), media_type: input.mediaType },
+      );
+      options.registrar?.register("browser", {
+        filename: input.filename,
+        filePath: destination,
+        sha256: checksum,
+        sizeBytes: bytesReceived,
+        mediaType: input.mediaType,
+        sourceUrl: input.requestedUrl,
+        sourceDatabase: DATABASE.BROWSER,
+      }, options.taskId);
+
+      const attempt: DownloadAttempt = {
+        schema_version: "1.0",
+        attempt_id: input.attemptId,
+        source_id: sourceId,
+        url: input.requestedUrl,
+        status: "succeeded",
+        bytes_received: bytesReceived,
+        error_code: null,
+        error_message: null,
+        started_at: input.startedAt,
+        finished_at: finishedAt,
+      };
+      const asset: SourceAsset = {
+        schema_version: "1.0",
+        asset_id: assetId,
+        kind: "source",
+        relative_path: path.relative(dirs.root, destination).split(path.sep).join("/"),
+        sha256: checksum,
+        size_bytes: bytesReceived,
+        media_type: input.mediaType,
+        generated_by_step_id: null,
+        source_id: sourceId,
+        successful_attempt_id: input.attemptId,
+        derived_from_asset_id: null,
+        data_level: DATA_LEVEL.METADATA,
+      };
+      const registrationReceipt = options.sourceAssetRegistry === undefined || options.sourceAssetRegistry === null
+        ? null
+        : await options.sourceAssetRegistry.register({
+            sourceId,
+            relativePath: asset.relative_path,
+            mediaType: input.mediaType,
+          });
+      const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
+      const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
+      const evidence: BrowserAcquisitionEvidence = {
+        schema_version: "1.0",
+        evidence_id: `browser_evidence_${canonicalDigest({
+          taskId,
+          runId,
+          attemptId: input.attemptId,
+          checksum,
+          requestedUrl: input.requestedUrl,
+          finalUrl: input.finalUrl,
+        }).slice(0, 32)}`,
+        task_id: taskId,
+        run_id: runId,
+        requested_url: input.requestedUrl,
+        final_url: input.finalUrl,
+        redirect_chain: input.redirectChain,
+        status: input.status,
+        media_type: input.mediaType,
+        retrieved_at: finishedAt,
+        bytes_received: bytesReceived,
+        sha256: checksum,
+        browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
+        source_asset_id: asset.asset_id,
+        source_id: asset.source_id,
+        relative_path: asset.relative_path,
+        download_attempt_id: attempt.attempt_id,
+        provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
+        provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,
+      };
+      const persistedEvidence = options.evidenceStore === undefined
+        ? null
+        : await options.evidenceStore.put(evidence);
+      return {
+        destination,
+        bytesReceived,
+        finishedAt,
+        asset,
+        registrationReceipt,
+        attempt,
+        evidence,
+        evidenceDigest: persistedEvidence?.evidenceDigest ?? canonicalDigest(evidence),
+      };
+    } finally {
+      target.destroy();
+      await unlink(partPath).catch(() => undefined);
+    }
+  };
+
   const navigatePage: BioMedAgentTool = {
     name: NAVIGATE_PAGE_TOOL_NAME,
     label: "Navigate web page",
     description:
       "Navigate with the guarded Playwright crawler (real browser headers, " +
-      "2s rate limiting) and return page metadata, visible text, and links. " +
+      "2s rate limiting) and return page metadata, cleaned visible text, and links. " +
       "Extracts the <title>, a visible body-text window (default 5000 " +
       "characters, up to 20000 via max_chars; page through longer text with " +
       "offset), and up to 50 deduplicated absolute links with anchor text " +
-      "(links_total counts the rest) for discovering download entries on " +
-      "list pages. Use for direct web navigation and reading page content " +
-      "on any public URL.",
+      "(links_total counts the rest). Set archive_html=true to persist the " +
+      "complete rendered DOM HTML as a verified SourceAsset; the HTML is not " +
+      "inlined into the tool response. Use for direct web navigation and page " +
+      "content on any public URL.",
     parameters: {
       type: "object",
       properties: {
@@ -228,13 +398,21 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
             "Start position in the extracted body text (default 0). Use with " +
             "body_text_truncated/body_text_total_chars to read long pages in windows.",
         },
+        archive_html: {
+          type: "boolean",
+          default: false,
+          description:
+            "Persist the complete rendered DOM HTML as a verified SourceAsset. " +
+            "The response still contains cleaned text and asset metadata, not inline HTML.",
+        },
       },
       required: ["url"],
       additionalProperties: false,
     },
     execute: async (argumentsValue, signal) => {
-      const record = argumentsValue as { url?: unknown; max_chars?: unknown; offset?: unknown };
+      const record = argumentsValue as { url?: unknown; max_chars?: unknown; offset?: unknown; archive_html?: unknown };
       const url = typeof record.url === "string" ? record.url : "";
+      const archiveHtml = record.archive_html === true;
       const maxChars =
         typeof record.max_chars === "number" && Number.isInteger(record.max_chars) && record.max_chars > 0
           ? Math.min(record.max_chars, MAX_BODY_CHARS_LIMIT)
@@ -244,6 +422,7 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           ? record.offset
           : 0;
       hooks.onQueryStarted(url, SOURCE);
+      const startedAt = new Date().toISOString();
       try {
         const result = await options.crawler.browser(url, signal);
         if (!result.ok) {
@@ -259,22 +438,64 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           };
         }
         const html = result.content;
+        const finalUrl = result.url || url;
         const bodyText = extractBodyText(html);
-        const { links, total: linksTotal } = extractLinks(html, url);
+        const { links, total: linksTotal } = extractLinks(html, finalUrl);
+        const page = {
+          url,
+          final_url: finalUrl,
+          redirect_chain: result.redirect_chain ?? [],
+          status_code: result.status_code,
+          method_used: result.method_used,
+          title: extractTitle(html),
+          body_text_preview: bodyText.slice(offset, offset + maxChars),
+          body_text_offset: offset,
+          body_text_total_chars: bodyText.length,
+          body_text_truncated: offset + maxChars < bodyText.length,
+          links,
+          links_total: linksTotal,
+          content_type: result.headers["content-type"] ?? "",
+          html_archived: archiveHtml,
+        };
+        if (!archiveHtml) {
+          hooks.onQuery(url, SOURCE, "success", 1);
+          return { content: JSON.stringify(page) };
+        }
+
+        const htmlBytes = Buffer.from(html, "utf8");
+        const filename = `rendered-page-${createHash("sha256").update(finalUrl, "utf8").digest("hex").slice(0, 16)}.html`;
+        const attemptId = `download_attempt_${randomUUID()}`;
+        const published = await publishBrowserAcquisition({
+          requestedUrl: url,
+          finalUrl,
+          redirectChain: result.redirect_chain ?? [],
+          status: result.status_code,
+          mediaType: "text/html",
+          filename,
+          body: (async function* renderedHtml(): AsyncIterable<Buffer> {
+            yield htmlBytes;
+          })(),
+          startedAt,
+          attemptId,
+          maxBytes: MAX_BROWSER_CONTENT_BYTES,
+          signal,
+        });
         hooks.onQuery(url, SOURCE, "success", 1);
         return {
           content: JSON.stringify({
-            url,
-            status_code: result.status_code,
-            method_used: result.method_used,
-            title: extractTitle(html),
-            body_text_preview: bodyText.slice(offset, offset + maxChars),
-            body_text_offset: offset,
-            body_text_total_chars: bodyText.length,
-            body_text_truncated: offset + maxChars < bodyText.length,
-            links,
-            links_total: linksTotal,
-            content_type: result.headers["content-type"] ?? "",
+            ...page,
+            source: SOURCE,
+            source_url: url,
+            local_files: [published.destination],
+            mime_type: "text/html",
+            bytes_received: published.bytesReceived,
+            retrieved_at: published.finishedAt,
+            source_asset: published.asset,
+            source_asset_registration_receipt: published.registrationReceipt,
+            download_attempt: published.attempt,
+            browser_acquisition_evidence: published.evidence,
+            browser_evidence_digest: published.evidenceDigest,
+            formal_status: "preparation_only",
           }),
         };
       } catch (error) {
@@ -478,7 +699,6 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           // ENOENT: the legacy flat destination does not exist yet — proceed.
         }
 
-        const sourceId = makeSourceId(DATABASE.BROWSER, filename, url);
         const attemptId = `download_attempt_${randomUUID()}`;
         const startedAt = new Date().toISOString();
         await options.crawler.pace(url);
@@ -507,144 +727,19 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           .trim()
           .toLowerCase();
 
-        await ensureAcquisitionDirs(dirs);
-        const partPath = path.join(dirs.downloadTmp, `${attemptId}.part`);
-        const hash = createHash("sha256");
-        let bytesReceived = 0;
-        const target = createWriteStream(partPath, { flags: "wx" });
-        try {
-          for await (const chunk of response.body) {
-            if (signal?.aborted === true) {
-              throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
-            }
-            bytesReceived += chunk.length;
-            const maxDownloadBytes = options.maxDownloadBytes ?? MAX_CRAWLER_DOWNLOAD_BYTES;
-            if (bytesReceived > maxDownloadBytes) {
-              throw new Error(`browser download exceeded ${maxDownloadBytes} byte limit`);
-            }
-            hash.update(chunk);
-            await new Promise<void>((resolveWrite, rejectWrite) => {
-              target.write(chunk, (error) => (error ? rejectWrite(error) : resolveWrite()));
-            });
-          }
-          await new Promise<void>((resolveEnd, rejectEnd) => {
-            target.end(() => resolveEnd());
-            target.on("error", (error: Error) => rejectEnd(error));
-          });
-        } catch (error) {
-          await unlink(partPath).catch(() => undefined);
-          throw error;
-        } finally {
-          target.destroy();
-        }
-        if (bytesReceived === 0) {
-          await unlink(partPath).catch(() => undefined);
-          throw new Error("download was empty");
-        }
-        const checksum = hash.digest("hex");
-        const assetId = assetIdFromSha256(checksum);
-        const finishedAt = new Date().toISOString();
-
-        // Content-cache blob publication (download parity) before the task
-        // asset publication.
-        const blobPath = options.cache.blobPath(checksum);
-        const cached = await stat(blobPath).catch(() => null);
-        if (cached === null || !cached.isFile()) {
-          await publishCacheBlob(partPath, blobPath, checksum);
-        }
-        const destination = sourceAssetPath(dirs, assetId, filename);
-        await mkdir(path.dirname(destination), { recursive: true });
-        const existing = await stat(destination).catch(() => null);
-        if (existing !== null && existing.isFile()) {
-          if ((await sha256File(destination)) !== checksum) {
-            throw new Error("existing task asset differs");
-          }
-          await unlink(partPath).catch(() => undefined);
-        } else {
-          try {
-            await link(partPath, destination);
-          } catch {
-            await copyFile(partPath, destination);
-          }
-          await unlink(partPath).catch(() => undefined);
-          if ((await sha256File(destination)) !== checksum) {
-            throw new Error("task asset checksum mismatch");
-          }
-        }
-        await options.cache.writeMetadata(
-          canonicalRequestHash(DATABASE.BROWSER, filename, url),
-          { sha256: checksum, size_bytes: String(bytesReceived), media_type: mediaType },
-        );
-        options.registrar?.register("browser", {
-          filename,
-          filePath: destination,
-          sha256: checksum,
-          sizeBytes: bytesReceived,
-          mediaType,
-          sourceUrl: url,
-          sourceDatabase: DATABASE.BROWSER,
-        }, options.taskId);
-
-        const attempt: DownloadAttempt = {
-          schema_version: "1.0",
-          attempt_id: attemptId,
-          source_id: sourceId,
-          url,
-          status: "succeeded",
-          bytes_received: bytesReceived,
-          error_code: null,
-          error_message: null,
-          started_at: startedAt,
-          finished_at: finishedAt,
-        };
-        const asset: SourceAsset = {
-          schema_version: "1.0",
-          asset_id: assetId,
-          kind: "source",
-          relative_path: path.relative(dirs.root, destination).split(path.sep).join("/"),
-          sha256: checksum,
-          size_bytes: bytesReceived,
-          media_type: mediaType,
-          generated_by_step_id: null,
-          source_id: sourceId,
-          successful_attempt_id: attemptId,
-          derived_from_asset_id: null,
-          data_level: DATA_LEVEL.METADATA,
-        };
-        const taskId = typeof options.taskId === "function" ? options.taskId() : options.taskId ?? "unknown_task";
-        const runId = typeof options.runId === "function" ? options.runId() : options.runId ?? null;
-        if (options.sourceAssetRegistry !== undefined && options.sourceAssetRegistry !== null) {
-          await options.sourceAssetRegistry.register({
-            sourceId,
-            relativePath: asset.relative_path,
-            mediaType,
-          });
-        }
-        const finalUrl = response.url ?? url;
-        const evidence: BrowserAcquisitionEvidence = {
-          schema_version: "1.0",
-          evidence_id: `browser_evidence_${canonicalDigest({ taskId, runId, checksum, url, finalUrl }).slice(0, 32)}`,
-          task_id: taskId,
-          run_id: runId,
-          requested_url: url,
-          final_url: finalUrl,
-          redirect_chain: response.redirectChain ?? [],
+        const published = await publishBrowserAcquisition({
+          requestedUrl: url,
+          finalUrl: response.url ?? url,
+          redirectChain: response.redirectChain ?? [],
           status: response.status,
-          media_type: mediaType,
-          retrieved_at: finishedAt,
-          bytes_received: bytesReceived,
-          sha256: checksum,
-          browser_policy_revision: BROWSER_ACQUISITION_POLICY_REVISION,
-          source_asset_id: asset.asset_id,
-          source_id: asset.source_id,
-          relative_path: asset.relative_path,
-          download_attempt_id: attempt.attempt_id,
-          provider_id: BROWSER_ACQUISITION_PROVIDER_ID,
-          provider_implementation_digest: BROWSER_PROVIDER_IMPLEMENTATION_DIGEST,
-        };
-        const persistedEvidence = options.evidenceStore === undefined
-          ? null
-          : await options.evidenceStore.put(evidence);
+          mediaType,
+          filename,
+          body: response.body,
+          startedAt,
+          attemptId,
+          maxBytes: options.maxDownloadBytes ?? MAX_CRAWLER_DOWNLOAD_BYTES,
+          signal,
+        });
         if (hostname !== null) {
           hostFailureCounts.set(hostname, 0);
         }
@@ -653,14 +748,15 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           content: JSON.stringify({
             source: SOURCE,
             source_url: url,
-            local_files: [destination],
+            local_files: [published.destination],
             mime_type: mediaType,
-            bytes_received: bytesReceived,
-            retrieved_at: finishedAt,
-            source_asset: asset,
-            download_attempt: attempt,
-            browser_acquisition_evidence: evidence,
-            browser_evidence_digest: persistedEvidence?.evidenceDigest ?? canonicalDigest(evidence),
+            bytes_received: published.bytesReceived,
+            retrieved_at: published.finishedAt,
+            source_asset: published.asset,
+            source_asset_registration_receipt: published.registrationReceipt,
+            download_attempt: published.attempt,
+            browser_acquisition_evidence: published.evidence,
+            browser_evidence_digest: published.evidenceDigest,
             formal_status: "preparation_only",
           }),
         };

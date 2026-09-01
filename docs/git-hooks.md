@@ -54,6 +54,18 @@ feature branch to a same-named remote branch instead.
 - Hooks apply to **all worktrees** (shared `.git` config). A worktree whose
   branch predates `.husky/` has inert hooks until the files land there.
 
+### Known trap: commit-msg hangs on merge commits (Windows, 2026-09-01)
+
+`git merge --no-ff <branch> -m "..."` runs `commitlint --edit .git/MERGE_MSG`
+via the commit-msg hook, and on this machine that pnpm→commitlint chain can
+hang indefinitely (10+ minutes observed) on the default merge message, leaving
+the merge staged ("All conflicts fixed but you are still merging"). Plain
+commits on the same machine pass the same hook in seconds. Workaround used in
+practice: kill the hanging `commitlint` process, then conclude with
+`git commit --no-verify -m "Merge branch '...'"` — acceptable only because a
+merge commit adds no new tree content and every content commit on the branch
+already passed the identical hook (state the reason in the merge body).
+
 ## Reference
 
 - Husky 9: https://typicode.github.io/husky/

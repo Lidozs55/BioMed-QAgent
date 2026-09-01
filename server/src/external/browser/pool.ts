@@ -135,12 +135,26 @@ function serializeDocumentDimensions(): { width: number; height: number } {
   };
 }
 
+export interface BrowserRedirectHop {
+  from_url: string;
+  to_url: string;
+  status: number;
+}
+
+interface BrowserNavigationReceipt {
+  final_url: string;
+  redirect_chain: BrowserRedirectHop[];
+  status_code: number;
+  headers: Record<string, string>;
+}
+
 export interface BrowserFetchResult {
   url: string;
   content: string;
   status_code: number;
   elapsed_ms: number;
   headers: Record<string, string>;
+  redirect_chain?: BrowserRedirectHop[];
 }
 
 export interface BrowserScreenshotResult {
@@ -341,8 +355,9 @@ async function followMainFrameNavigation(
   route: Route,
   authorizeRequest: BrowserRequestAuthorizer,
   hopTimeoutMs: number,
-): Promise<void> {
+): Promise<BrowserNavigationReceipt> {
   const request = route.request();
+  const redirectChain: BrowserRedirectHop[] = [];
   let currentUrl = request.url();
   let method = request.method();
   let postData: Buffer | null = request.postDataBuffer();
@@ -354,15 +369,15 @@ async function followMainFrameNavigation(
         `browser refuses to render data-file URL (path ends with ${dataSuffix}): ${currentUrl}; download the file (download_from_page) instead of rendering it`,
       );
     }
-    const headers = { ...request.headers() };
-    delete headers["host"];
-    delete headers["connection"];
-    delete headers["accept-encoding"];
-    delete headers["content-length"];
+    const requestHeaders = { ...request.headers() };
+    delete requestHeaders["host"];
+    delete requestHeaders["connection"];
+    delete requestHeaders["accept-encoding"];
+    delete requestHeaders["content-length"];
     const response = await route.fetch({
       url: currentUrl,
       method,
-      headers,
+      headers: requestHeaders,
       postData: postData ?? undefined,
       maxRedirects: 0,
       timeout: hopTimeoutMs,
@@ -373,27 +388,35 @@ async function followMainFrameNavigation(
       if (location === "") {
         throw new Error(`browser redirect hop ${hop + 1} is missing a Location header`);
       }
-      currentUrl = new URL(location, currentUrl).toString();
+      const nextUrl = new URL(location, currentUrl).toString();
+      redirectChain.push({ from_url: currentUrl, to_url: nextUrl, status });
+      currentUrl = nextUrl;
       if (status !== 307 && status !== 308) {
         method = "GET";
         postData = null;
       }
       continue;
     }
-    const mediaType = response.headers()["content-type"] ?? "";
+    const headers = response.headers();
+    const mediaType = headers["content-type"] ?? "";
     if (isDataFileMediaType(mediaType)) {
       throw new Error(
         `browser refuses to render data-file content (content-type ${mediaType.split(";", 1)[0].trim()}); download the file (download_from_page) instead of rendering it`,
       );
     }
-    const declaredBytes = Number.parseInt(response.headers()["content-length"] ?? "", 10);
+    const declaredBytes = Number.parseInt(headers["content-length"] ?? "", 10);
     if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BROWSER_MAINFRAME_BYTES) {
       throw new Error(
         `browser main-frame document exceeded ${MAX_BROWSER_MAINFRAME_BYTES} byte limit (content-length ${declaredBytes}); download the file (download_from_page) instead of rendering it`,
       );
     }
     await route.fulfill({ response });
-    return;
+    return {
+      final_url: currentUrl,
+      redirect_chain: redirectChain,
+      status_code: status,
+      headers,
+    };
   }
   throw new Error(`browser navigation exceeded ${MAX_BROWSER_REDIRECT_HOPS} redirect hops`);
 }
@@ -409,7 +432,12 @@ export class BrowserSession {
     private readonly context: BrowserContext,
     readonly page: Page,
     private readonly routeErrors: Error[],
+    private readonly navigationReceipts: BrowserNavigationReceipt[],
   ) {}
+
+  get lastNavigationReceipt(): BrowserNavigationReceipt | null {
+    return this.navigationReceipts.at(-1) ?? null;
+  }
 
   /** Perform one allowlisted declarative browser action. */
   async action(options: BrowserActionOptions): Promise<BrowserActionResult> {
@@ -423,7 +451,7 @@ export class BrowserSession {
         throw new Error("browser navigate requires a URL");
       }
       const response = await this.goto(destination, timeoutMs);
-      this.statusCode = response?.status() ?? 0;
+      this.statusCode = this.lastNavigationReceipt?.status_code ?? response?.status() ?? 0;
       this.navigated = true;
       return { content: Buffer.alloc(0), status_code: this.statusCode, media_type: "text/html" };
     }
@@ -625,14 +653,16 @@ export class NodeBrowserPool {
     });
     try {
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
+      const receipt = session.lastNavigationReceipt;
       const serialized = await session.page.evaluate(serializeDocumentBounded, MAX_BROWSER_CONTENT_BYTES);
       const content = boundedSerializedText(serialized, MAX_BROWSER_CONTENT_BYTES, "browser content");
       return {
-        url,
+        url: receipt?.final_url ?? response?.url() ?? url,
         content,
-        status_code: response?.status() ?? 0,
+        status_code: receipt?.status_code ?? response?.status() ?? 0,
         elapsed_ms: Date.now() - startedAt,
-        headers: response?.headers() ?? {},
+        headers: receipt?.headers ?? response?.headers() ?? {},
+        redirect_chain: receipt?.redirect_chain ?? [],
       };
     } finally {
       await session.close();
@@ -658,6 +688,7 @@ export class NodeBrowserPool {
     });
     try {
       const response = await this.navigate(session, url, options.waitUntil ?? "networkidle", options.timeoutMs, options.signal);
+      const receipt = session.lastNavigationReceipt;
       await enforceScreenshotDimensions(session.page, { fullPage, selector, viewportWidth, viewportHeight });
       const timeout = options.timeoutMs ?? this.navigationTimeoutMs;
       const capture = selector === null ? session.page.screenshot({ fullPage, timeout }) : session.page.locator(selector).screenshot({ timeout });
@@ -673,9 +704,9 @@ export class NodeBrowserPool {
         throw new Error(`browser screenshot exceeded ${MAX_BROWSER_SCREENSHOT_BYTES} byte limit`);
       }
       return {
-        url: response?.url() ?? url,
+        url: receipt?.final_url ?? response?.url() ?? url,
         buffer: content,
-        status_code: response?.status() ?? 0,
+        status_code: receipt?.status_code ?? response?.status() ?? 0,
         elapsed_ms: Date.now() - startedAt,
       };
     } finally {
@@ -709,6 +740,7 @@ export class NodeBrowserPool {
         await this.policy.validateUrl(url, authorizedHosts);
       });
       const routeErrors: Error[] = [];
+      const navigationReceipts: BrowserNavigationReceipt[] = [];
       let context: BrowserContext | null = null;
       let page: Page | null = null;
       try {
@@ -726,7 +758,9 @@ export class NodeBrowserPool {
           const isMainFrame = isMainFrameRequest(request, page);
           try {
             if (isMainFrame) {
-              await followMainFrameNavigation(route, authorizeRequest, this.navigationTimeoutMs);
+              navigationReceipts.push(
+                await followMainFrameNavigation(route, authorizeRequest, this.navigationTimeoutMs),
+              );
             } else {
               await authorizeRequest(request.url(), resourceTypeOf(request, page));
               await route.continue();
@@ -741,7 +775,7 @@ export class NodeBrowserPool {
           }
         });
         page = await context.newPage();
-        return new BrowserSession(this, context, page, routeErrors);
+        return new BrowserSession(this, context, page, routeErrors, navigationReceipts);
       } catch (error) {
         // Best-effort bounded teardown on the failure path (mirrors
         // ``BrowserSession.close``).

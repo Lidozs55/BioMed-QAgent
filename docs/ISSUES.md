@@ -114,6 +114,14 @@
 - **影响：** 单机协作开发/评测时，任何会话启动 `pnpm dev`/`pnpm start` 或第二个实例都会静默杀掉他人活跃 run，且可能留下使下一个 Host 无法启动的损坏事件文件。
 - **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（已在 `docs/gold-formal-rerun.md` 增加警示）；**已实现（`main@ac2ffaba`）**：runtime 启动即获取 tasks-root 排他 lease（`.host-lease.json`，含持有 pid），第二个**活**实例 fail-fast 拒绝启动（`HostLeaseHeldError`），死 pid 视为陈旧租约可接管；该保护只对新代码实例生效——升级期间仍在运行的旧实例没有 lease，仍需人工确认单实例。事件撕裂的追加级独占锁/单写者队列与撕裂自愈暂不做，lease 已消除并发写者来源。
 
+### [P2] 本机稳定失败的 2 个环境性红测（干净 HEAD 复现，2026-09-01 实证）
+
+- **状态：** 2026-09-01 在 `main@e464a524`（stash 还原本地 delta 后的纯净 HEAD）与工作区改动两个状态下均稳定复现，与本轮 browser/TLS 改动无关。
+- **现象：** (1) `tests/gold-v1-current-run-assertion.test.mjs` 在 vitest 收集阶段报 `SyntaxError: Invalid or unexpected token`（suite 级失败，0 用例运行；`node --check` 对其导入的 `docs/evaluation/gold-v1/assert-current-run.mjs` 单独检查通过）；(2) `tests/workspace.test.ts` 的 "exec of a non-executable file and a missing binary returns a structured spawn failure" 报 `spawn EFTYPE`（Windows 对非可执行文件的 spawn 语义差异）。
+- **影响：** 本机 `pnpm --filter @biomed/server test` 恒红 2 个文件，干扰失败测试循环的归因；CI（Linux）不受影响。
+- **最小复现：** 干净 main 上 `pnpm --filter @biomed/server exec vitest run tests/gold-v1-current-run-assertion.test.mjs tests/workspace.test.ts`。
+- **下一步：** (1) 用 vitest 逐行定位 .mjs 收集失败的 token（疑似 shebang 或 unicode 字符在 Vite transform 路径上的解析差异）；(2) workspace 测试按平台断言 Windows 的 EFTYPE/EACCES 差异，或在用例中按平台跳过非可执行 spawn 分支。
+
 ## 维护规则
 
 新增条目必须写出状态、影响、最小复现和下一步。修复从失败测试开始；合并后从本文件删除，由测试和提交历史承担关闭证据。架构 hardening 或产品里程碑不得重复登记在这里和 `TODO.md`。

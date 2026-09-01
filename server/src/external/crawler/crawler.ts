@@ -19,7 +19,7 @@
  *   "crawler exceeded N redirects".
  */
 
-import { BROWSER_UA, type BrowserFetchOptions, type BrowserFetchResult, type BrowserRequestAuthorizer, type BrowserScreenshotOptions, type BrowserScreenshotResult } from "../browser/pool.js";
+import { BROWSER_UA, type BrowserFetchOptions, type BrowserFetchResult, type BrowserRedirectHop, type BrowserRequestAuthorizer, type BrowserScreenshotOptions, type BrowserScreenshotResult } from "../browser/pool.js";
 import { PublicHttpClient, type HttpClientResponse } from "../network/http-client.js";
 import { AsyncHostRateLimiter, DEFAULT_RATE_LIMIT_SECONDS } from "./rate-limit.js";
 
@@ -45,6 +45,8 @@ export interface FetchResult {
   method_used: CrawlerMethodUsed;
   error: string | null;
   headers: Record<string, string>;
+  /** Main-frame redirects followed by the rendered browser tier. */
+  redirect_chain?: BrowserRedirectHop[];
   attempts: CrawlAttempt[];
   /** Python ``FetchResult.ok``. */
   ok: boolean;
@@ -215,6 +217,7 @@ export class CrawlerFacade {
         method_used: "crawl",
         error: null,
         headers: result.headers,
+        redirect_chain: result.redirect_chain ?? [],
         attempts: [],
         ok: result.status_code >= 200 && result.status_code < 300,
       };

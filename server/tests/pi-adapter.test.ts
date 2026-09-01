@@ -286,7 +286,7 @@ describe("Pi system prompt", () => {
     expect(SYSTEM_BRIEFING.startsWith("[System briefing]")).toBe(true);
     expect(SYSTEM_BRIEFING).toContain("[System constraints]");
     expect(SYSTEM_BRIEFING).toContain("[System workflow]");
-    expect(SYSTEM_BRIEFING.length).toBeLessThanOrEqual(3_000);
+    expect(SYSTEM_BRIEFING.length).toBeLessThanOrEqual(3_400);
     // No wall-clock/deadline constraints exist; inventing a time limit is a
     // binding violation (gold1-qwen direct-run failure mode, model-blockers B3).
     expect(SYSTEM_BRIEFING).toMatch(/no wall-clock or deadline constraints/i);

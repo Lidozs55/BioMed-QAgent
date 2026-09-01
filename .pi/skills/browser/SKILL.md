@@ -5,9 +5,16 @@ description: Render and navigate public web pages with a guarded crawler, and do
 
 # Browser
 
-Use `navigate_page` to render a page and extract its title and body text, and
-`download_from_page` to download files through isolated staging with
-checksum-addressed SourceAsset validation and linked download provenance.
+Use `navigate_page` to render a page and extract its title, cleaned visible body
+text, and bounded links. The default response removes HTML formatting and never
+persists or inlines the page HTML; use `max_chars` / `offset` to page through
+long text. Set `archive_html: true` only when the complete rendered DOM is needed
+as a verified `text/html` SourceAsset. That mode returns the asset, registration,
+and acquisition-evidence metadata, not the HTML bytes in model context.
+
+Use `download_from_page` for known file URLs. It downloads through isolated
+staging with checksum-addressed SourceAsset validation and linked download
+provenance.
 
 ## When to use
 
@@ -21,4 +28,7 @@ checksum-addressed SourceAsset validation and linked download provenance.
 
 - Requests use a real browser User-Agent, Referer/Accept headers, and rate
   limiting.
-- Downloads must be content-verified and recorded in provenance.
+- `archive_html` stores the JavaScript-rendered DOM (bounded at 10 MiB); it does
+  not bundle linked stylesheets, images, or scripts into an offline web archive.
+- Downloads and archived HTML must be content-verified and recorded in
+  provenance.
