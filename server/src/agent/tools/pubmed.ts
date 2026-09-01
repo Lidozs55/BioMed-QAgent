@@ -68,6 +68,8 @@ export interface PubmedServiceDeps {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /** Task-owned source-asset registry for immediate preview resolution. */
+  sourceAssetRegistry?: import("../../runtime/source-assets/registry.js").SourceAssetRegistry | null;
 }
 
 /**
@@ -214,6 +216,13 @@ export async function downloadSupplementaryAdapter(
     onPublished: (published) => deps.registrar?.register("publication", published, deps.taskId),
   });
   if (supplementary.asset !== null && supplementary.attempt.status === "succeeded") {
+    if (deps.sourceAssetRegistry !== undefined && deps.sourceAssetRegistry !== null) {
+      await deps.sourceAssetRegistry.register({
+        sourceId: `pubmed_supplementary_${pmid}`,
+        relativePath: supplementary.asset.relative_path,
+        mediaType: "application/zip",
+      });
+    }
     return {
       source: "pubmed",
       accession: pmid,
@@ -296,6 +305,13 @@ export interface PubmedToolDeps {
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   /** Task id used as cache provenance. */
   taskId?: string | (() => string);
+  /**
+   * Task-owned source-asset registry. When present, successful downloads are
+   * registered here right after publication so ``preview_core_asset`` can
+   * immediately resolve them (the D3/H4/I3 "registered asset was not found"
+   * gap: downloads previously reached only the global cache).
+   */
+  sourceAssetRegistry?: import("../../runtime/source-assets/registry.js").SourceAssetRegistry | null;
 }
 
 function searchPubmedTool(deps: PubmedServiceDeps): BioMedAgentTool {

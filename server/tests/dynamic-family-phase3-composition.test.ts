@@ -337,6 +337,9 @@ describe("dynamic family phase3 composition fencing", () => {
             const prepared = await prepareTool.execute(raw);
             if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
             const receipt = (JSON.parse(prepared.content) as { preflight_receipt: DynamicFamilyPreflightReceipt }).preflight_receipt;
+            // Pure receipt-only submit: no payload re-echo. The stored wire
+            // must be re-parsed server-side to rebuild `.projection` (the
+            // model-blockers $projection regression, 5/5 dynamic runs).
             const submitPayload = { preflight_receipt: receipt };
             const submitted = await submitTool.execute(submitPayload);
             if (submitted.isError === true) submitFailure = submitted.content;

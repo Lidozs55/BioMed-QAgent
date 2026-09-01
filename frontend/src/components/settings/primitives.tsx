@@ -1,6 +1,7 @@
 import { type ReactNode } from "react";
 
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
@@ -46,9 +47,9 @@ export function SettingRow({
     >
       <div className="min-w-0 flex-1">
         {controlId ? (
-          <label htmlFor={controlId} className={cn("text-sm leading-snug font-medium", danger && "text-destructive")}>
+          <Label htmlFor={controlId} className={cn("text-sm leading-snug font-medium", danger && "text-destructive")}>
             {title}
-          </label>
+          </Label>
         ) : (
           <p className={cn("text-sm leading-snug font-medium", danger && "text-destructive")}>{title}</p>
         )}

@@ -48,9 +48,21 @@
 % --------------------------------------------------------------
 % 字体（英文；中文由 ctex 按系统自动选择，不在此固定 CJK 字体）
 % --------------------------------------------------------------
-\setmainfont{TeX Gyre Termes}
-\setsansfont{TeX Gyre Heros}
-\setmonofont{Latin Modern Mono}
+% 按文件名加载 texmf 内字体，不依赖系统 fontconfig（跨环境一致）
+\setmainfont{texgyretermes}[
+  Extension=.otf,
+  UprightFont=*-regular, BoldFont=*-bold,
+  ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\setsansfont{texgyreheros}[
+  Extension=.otf,
+  UprightFont=*-regular, BoldFont=*-bold,
+  ItalicFont=*-italic, BoldItalicFont=*-bolditalic]
+\setmonofont{lmmono10}[
+  Extension=.otf,
+  UprightFont=*-regular,
+  BoldFont=lmmonolt10-bold.otf,
+  ItalicFont=*-italic,
+  BoldItalicFont=lmmonolt10-boldoblique.otf]
 
 % XeTeX 写入 ToUnicode，保证 PDF 中文可复制、可搜索
 \XeTeXgenerateactualtext=1

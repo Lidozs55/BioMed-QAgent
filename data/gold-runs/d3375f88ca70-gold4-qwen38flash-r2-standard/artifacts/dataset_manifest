@@ -1,0 +1,288 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "artifact_fc53f3127f103cb503604b02caff6e67",
+      "media_type": "text/csv",
+      "relative_path": "tables/targets.csv",
+      "role": "primary_dataset",
+      "schema_version": "1.0",
+      "sha256": "dcc849178206cff36e6b16793969a6e41d951ab65be5712c7f5e377eca11bdbe",
+      "size_bytes": 150
+    },
+    {
+      "artifact_id": "artifact_2cf35fc2ee9d152644422e24f796c2de",
+      "media_type": "text/csv",
+      "relative_path": "tables/evidence.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "393f0e493fe05129b2805252a6970aa5916da0c97f72a29991e1a9b7afef5c6c",
+      "size_bytes": 685
+    },
+    {
+      "artifact_id": "artifact_e2777c101c83970f47d7b4c5d7f55497",
+      "media_type": "text/csv",
+      "relative_path": "tables/sources.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "99aad944737040d3ad2153e703ee84d4d59cc74d89b72acc42b6a3a4f7fdd1a0",
+      "size_bytes": 580
+    },
+    {
+      "artifact_id": "artifact_6dde289eeb71620b09a6b8bee0b5e0f2",
+      "media_type": "text/csv",
+      "relative_path": "tables/supporting.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "9ad417d6b31720bcc2ad22fd866ab7bfb521b0f9fb29879b2011581f0735b4aa",
+      "size_bytes": 257
+    },
+    {
+      "artifact_id": "artifact_7a8f68091ad0d877d3f1ef95e8796210",
+      "media_type": "application/json",
+      "relative_path": "schema.json",
+      "role": "schema",
+      "schema_version": "1.0",
+      "sha256": "592da8f8aedfb9db4c51890710e0f958348828016da92ac6a0478d30beb72d88",
+      "size_bytes": 10619
+    },
+    {
+      "artifact_id": "artifact_69ab6e6470962cf4df0f85f3b41c8097",
+      "media_type": "application/json",
+      "relative_path": "provenance.json",
+      "role": "provenance",
+      "schema_version": "1.0",
+      "sha256": "aa9e65681e4d63802a745a4733a593511326764ceea54e0e03a7377636f5487b",
+      "size_bytes": 570
+    },
+    {
+      "artifact_id": "artifact_ee750ffbd4de02c35ff11aefbca9e21b",
+      "media_type": "application/json",
+      "relative_path": "registered_adapter_audit.json",
+      "role": "audit_report",
+      "schema_version": "1.0",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "size_bytes": 3
+    },
+    {
+      "artifact_id": "artifact_70e6db99dba8506dd68db15c97e06daf",
+      "media_type": "application/json",
+      "relative_path": "source_coverage_report.json",
+      "role": "audit_report",
+      "schema_version": "1.0",
+      "sha256": "60e5eb0322070bd952ec5c7ff8fbb57de7d9ae205356c9c231d70e6ec80298d9",
+      "size_bytes": 4443
+    }
+  ],
+  "candidate_refs": [
+    {
+      "audit_refs": [],
+      "candidate_id": "candidate_2a750bcf769d281b5e48dbc9c7812332",
+      "confidence_refs": [
+        "result_sars2_spike_ace2_target_v1_targets:integrated_table:0:dcc849178206cff36e6b16793969a6e41d951ab65be5712c7f5e377eca11bdbe",
+        "result_sars2_spike_ace2_target_v1_evidence:integrated_table:0:393f0e493fe05129b2805252a6970aa5916da0c97f72a29991e1a9b7afef5c6c",
+        "result_sars2_spike_ace2_target_v1_sources:integrated_table:0:99aad944737040d3ad2153e703ee84d4d59cc74d89b72acc42b6a3a4f7fdd1a0",
+        "result_sars2_spike_ace2_target_v1_supporting:integrated_table:0:9ad417d6b31720bcc2ad22fd866ab7bfb521b0f9fb29879b2011581f0735b4aa"
+      ],
+      "provenance_refs": [
+        "result_sars2_spike_ace2_target_v1_targets:integrated_table:0:dcc849178206cff36e6b16793969a6e41d951ab65be5712c7f5e377eca11bdbe",
+        "result_sars2_spike_ace2_target_v1_evidence:integrated_table:0:393f0e493fe05129b2805252a6970aa5916da0c97f72a29991e1a9b7afef5c6c",
+        "result_sars2_spike_ace2_target_v1_sources:integrated_table:0:99aad944737040d3ad2153e703ee84d4d59cc74d89b72acc42b6a3a4f7fdd1a0",
+        "result_sars2_spike_ace2_target_v1_supporting:integrated_table:0:9ad417d6b31720bcc2ad22fd866ab7bfb521b0f9fb29879b2011581f0735b4aa"
+      ],
+      "relation_ids": [
+        "target_evidence_target",
+        "target_evidence_target_source",
+        "target_evidence_source",
+        "target_evidence_supporting",
+        "target_evidence_supporting_source"
+      ],
+      "table_ids": [
+        "targets",
+        "evidence",
+        "sources",
+        "supporting"
+      ]
+    }
+  ],
+  "confidence_summary": {
+    "source": "registered_table_schema_and_b3"
+  },
+  "dataset_family": "target_evidence",
+  "manifest_id": "manifest_435622c0b473ae21",
+  "primary_key": [
+    "entity_id",
+    "entity_namespace"
+  ],
+  "provenance_summary": {
+    "coverage": {
+      "coverage_ratio": 1,
+      "traced_rows": 1,
+      "untraced_rows": 0
+    },
+    "source_count": 1
+  },
+  "relations": [
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "target_id",
+        "target_namespace"
+      ],
+      "from_table_id": "evidence",
+      "missing_policy": "reject",
+      "relation_id": "target_evidence_target",
+      "to_fields": [
+        "entity_id",
+        "entity_namespace"
+      ],
+      "to_table_id": "targets"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "targets",
+      "missing_policy": "reject",
+      "relation_id": "target_evidence_target_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "evidence",
+      "missing_policy": "reject",
+      "relation_id": "target_evidence_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "evidence_id"
+      ],
+      "from_table_id": "supporting",
+      "missing_policy": "reject",
+      "relation_id": "target_evidence_supporting",
+      "to_fields": [
+        "evidence_id"
+      ],
+      "to_table_id": "evidence"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "supporting",
+      "missing_policy": "reject",
+      "relation_id": "target_evidence_supporting_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    }
+  ],
+  "requirement_id": "sars2_spike_ace2_target_v1",
+  "row_count": 1,
+  "row_granularity": "one target identity",
+  "schema_ref": "target_evidence.target.v1",
+  "schema_version": "2.0",
+  "sha256": "435622c0b473ae21282976cfe874c6962bc426f3269d8b3e87426a42628d14c0",
+  "source_summary": {
+    "source_uniprot_2d2edc762ff9fda5e82f": {
+      "asset_id": "asset_7b842858b8e3d8e69169488d157f01b95c4c6198d805be7c2bb838d662cf5a4b"
+    }
+  },
+  "tables": [
+    {
+      "allow_empty": false,
+      "field_names": [
+        "entity_id",
+        "entity_namespace",
+        "entity_type",
+        "preferred_name",
+        "organism",
+        "source_id"
+      ],
+      "primary_key": [
+        "entity_id",
+        "entity_namespace"
+      ],
+      "required": true,
+      "role": "primary",
+      "schema_ref": "target_evidence.target.v1",
+      "table_id": "targets"
+    },
+    {
+      "allow_empty": false,
+      "field_names": [
+        "evidence_id",
+        "target_id",
+        "target_namespace",
+        "evidence_type",
+        "assertion",
+        "evidence_value",
+        "source_id",
+        "source_locator"
+      ],
+      "primary_key": [
+        "evidence_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "target_evidence.evidence.v1",
+      "table_id": "evidence"
+    },
+    {
+      "allow_empty": false,
+      "field_names": [
+        "source_id",
+        "source_database",
+        "source_asset_id",
+        "source_locator",
+        "retrieved_at",
+        "carrier_type"
+      ],
+      "primary_key": [
+        "source_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "target_evidence.source.v1",
+      "table_id": "sources"
+    },
+    {
+      "allow_empty": true,
+      "field_names": [
+        "supporting_id",
+        "evidence_id",
+        "supporting_type",
+        "supporting_value",
+        "source_id"
+      ],
+      "primary_key": [
+        "supporting_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "target_evidence.supporting.v1",
+      "table_id": "supporting"
+    }
+  ],
+  "task_id": "task_ts_ca7f8e47-06df-43e5-8d49-ef532afef3f3",
+  "validation_summary": {
+    "checked_count": 66,
+    "failed_count": 0,
+    "profile_ref": "target_evidence.release.v1",
+    "report_path": "validation_report.json",
+    "status": "passed"
+  }
+}

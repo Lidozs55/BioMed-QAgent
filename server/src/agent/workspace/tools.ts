@@ -41,6 +41,28 @@ function success(details: unknown, isError = false): BioMedToolResult {
   return { content: JSON.stringify(details), details, isError };
 }
 
+/**
+ * Conservative guidance attached to a permission denial: which governed read
+ * path exists for this scope, if any. It never promises that a path is
+ * readable — the agent must still try the named tool (model-blockers
+ * G1/H4/J3: releases were not registered, so preview is right to decline).
+ */
+function readPathHint(scope: string): string {
+  switch (scope) {
+    case "workspace":
+    case "task_output":
+      return "task-owned Core assets can be inspected with preview_core_asset (asset_<sha256> id) or read via workspace_read inside your workspace; framework output paths are not registered as assets";
+    case "framework_internal":
+    case "sensitive":
+      return "no governed read tool exists for this path; only task-owned Core assets (preview_core_asset with an asset_<sha256> id) and your workspace are readable through governed tools";
+    case "project":
+    case "external":
+      return "project files are readable only with an explicit grant; task-owned Core assets can be inspected with preview_core_asset (asset_<sha256> id)";
+    default:
+      return "no governed read hint available";
+  }
+}
+
 async function executeBounded(
   operation: () => Promise<BioMedToolResult>,
 ): Promise<BioMedToolResult> {
@@ -58,11 +80,24 @@ async function executeBounded(
         capability: error.request.capability,
         resource: error.request.resource ?? null,
         scope: error.request.scope,
+        read_path_hint: readPathHint(error.request.scope),
       };
       return success(details, true);
     }
+    // Unexpected internal failures must stay visible: degrade to a generic
+    // code but keep the concrete message (plus errno, when present) so the
+    // caller can self-correct instead of blind-retrying. Messages never
+    // contain secrets; user-supplied values are not echoed by our own code.
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
     return success(
-      { code: "WORKSPACE_OPERATION_FAILED", message: "Workspace operation failed" },
+      {
+        code: "WORKSPACE_OPERATION_FAILED",
+        message,
+        ...(typeof code === "string" ? { errno: code } : {}),
+      },
       true,
     );
   }
@@ -230,7 +265,9 @@ export function createWorkspaceTools(workspace: TaskWorkspace): BioMedAgentTool[
         return success(
           result,
           result.policy !== "allowed" || result.cancelled || result.timedOut ||
-            (result.exitCode !== null && result.exitCode !== 0),
+            // null exitCode means the process never ran (spawn failure;
+            // stderr carries the spawn diagnostic).
+            result.exitCode !== 0,
         );
       }),
     },

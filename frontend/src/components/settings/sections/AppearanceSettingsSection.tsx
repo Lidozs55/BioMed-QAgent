@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Switch } from "@/components/ui/switch";
 import {
   REDUCED_MOTION_OPTIONS,
@@ -124,12 +125,13 @@ function ThemePreviewCard({
 }) {
   // 预览卡使用真实色板色值渲染主题效果，属有意例外（DESIGN.md 语义色规则不适用于主题预览）
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "w-full rounded-xl border p-3 text-left transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+        "h-auto w-full flex-col items-stretch justify-start rounded-xl border p-3 text-left font-normal hover:bg-transparent focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
         active
           ? "border-primary ring-2 ring-primary/25"
           : "border-border hover:border-muted-foreground/40",
@@ -162,7 +164,7 @@ function ThemePreviewCard({
         <span className="text-sm font-medium">{label}</span>
         <span className="text-xs text-muted-foreground">{active ? "当前" : hint}</span>
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -209,6 +211,12 @@ export function AppearanceSettingsSection() {
       label: item.name,
     })),
   ];
+  // Base UI needs the `items` map to render the font name (not the raw key)
+  // in the closed trigger.
+  const fontItems = fontOptions.map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
 
   const importFontFile = async (file: File | undefined) => {
     if (!file) return;
@@ -272,20 +280,23 @@ export function AppearanceSettingsSection() {
             title="预设色板"
             description="快速切换一组经过对比度校验的强调色。"
             control={
-              <div className="flex items-center gap-1.5">
+              <ToggleGroup
+                value={accent === "custom" ? [] : [accent]}
+                onValueChange={(next) => {
+                  const selected = next[0];
+                  if (selected) setAccent(selected as Exclude<ThemeAccent, "custom">);
+                }}
+                aria-label="强调色"
+                className="flex items-center gap-1.5"
+              >
                 {(Object.keys(ACCENT_PRESETS) as Exclude<ThemeAccent, "custom">[]).map((key) => {
                   const preset = ACCENT_PRESETS[key];
                   return (
-                    <button
+                    <ToggleGroupItem
                       key={key}
-                      type="button"
+                      value={key}
                       aria-label={`强调色 ${preset.label}`}
-                      aria-pressed={accent === key}
-                      onClick={() => setAccent(key)}
-                      className={cn(
-                        "flex size-7 items-center justify-center rounded-full ring-1 ring-foreground/15 transition-transform",
-                        accent === key && "scale-110 ring-2 ring-foreground/40",
-                      )}
+                      className="size-7 rounded-full p-0 ring-1 ring-foreground/15 transition-transform hover:bg-transparent data-pressed:scale-110 data-pressed:ring-2 data-pressed:ring-foreground/40"
                       style={{ backgroundColor: preset.light }}
                     >
                       <span
@@ -294,10 +305,10 @@ export function AppearanceSettingsSection() {
                           accent === key ? "bg-white" : "bg-transparent",
                         )}
                       />
-                    </button>
+                    </ToggleGroupItem>
                   );
                 })}
-              </div>
+              </ToggleGroup>
             }
           />
           <SettingRow
@@ -324,7 +335,7 @@ export function AppearanceSettingsSection() {
             title="字体"
             description="切换后立即作用于整个应用。"
             control={
-              <Select value={font} onValueChange={(value) => setFont(value ?? "inter")}>
+              <Select items={fontItems} value={font} onValueChange={(value) => setFont(value ?? "inter")}>
                 <SelectTrigger className="w-48" aria-label="界面字体">
                   <SelectValue />
                 </SelectTrigger>
@@ -384,14 +395,16 @@ export function AppearanceSettingsSection() {
                         )}
                       >
                         {item.name}
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon-xs"
                           aria-label={`删除字体 ${item.name}`}
                           onClick={() => removeImportedFont(item.id)}
                           className="text-muted-foreground hover:text-destructive"
                         >
-                          <XIcon className="size-3" />
-                        </button>
+                          <XIcon aria-hidden="true" />
+                        </Button>
                       </Badge>
                     );
                   })}
@@ -591,36 +604,37 @@ function ThemeColorPicker({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          aria-pressed={value === ""}
-          onClick={() => onChange("")}
-          className={cn(
-            "h-7 rounded-full border px-2.5 text-xs transition-colors",
-            value === ""
-              ? "border-primary bg-primary/10 font-medium text-primary"
-              : "border-border text-muted-foreground hover:border-muted-foreground/40",
-          )}
+        <ToggleGroup
+          value={value === "" ? ["default"] : [value.toLowerCase()]}
+          onValueChange={(next) => {
+            const selected = next[0];
+            if (selected === "default") {
+              onChange("");
+              return;
+            }
+            const original = options.find((hex) => hex.toLowerCase() === selected);
+            if (original) onChange(original);
+          }}
+          aria-label={`${label}预设`}
+          className="flex flex-wrap items-center gap-2"
         >
-          默认
-        </button>
-        {options.map((hex) => {
-          const selected = value.toLowerCase() === hex.toLowerCase();
-          return (
-            <button
+          <ToggleGroupItem
+            value="default"
+            aria-label={`${label} 默认`}
+            className="h-7 rounded-full border px-2.5 text-xs text-muted-foreground data-pressed:border-primary data-pressed:bg-primary/10 data-pressed:font-medium data-pressed:text-primary"
+          >
+            默认
+          </ToggleGroupItem>
+          {options.map((hex) => (
+            <ToggleGroupItem
               key={hex}
-              type="button"
+              value={hex.toLowerCase()}
               aria-label={`${label} ${hex}`}
-              aria-pressed={selected}
-              onClick={() => onChange(hex)}
-              className={cn(
-                "size-7 rounded-full ring-1 ring-foreground/15 transition-transform",
-                selected && "scale-110 ring-2 ring-foreground/40",
-              )}
+              className="size-7 rounded-full p-0 ring-1 ring-foreground/15 transition-transform data-pressed:scale-110 data-pressed:ring-2 data-pressed:ring-foreground/40"
               style={{ backgroundColor: hex }}
             />
-          );
-        })}
+          ))}
+        </ToggleGroup>
         <ColorSwatch
           value={value}
           onChange={onChange}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { ParameterEditor } from "@/components/settings/model/ParameterEditor";
@@ -231,25 +233,23 @@ export function ModelDetailDialog({
             <dd>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {MODALITY_OPTIONS.map(([key, label]) => (
-                  <label
+                  <Label
                     key={key}
                     className="flex cursor-pointer items-center gap-1.5 text-xs"
                     title={`模型${label}模态`}
                   >
-                    <input
-                      type="checkbox"
-                      className="size-3.5 cursor-pointer accent-primary"
+                    <Checkbox
                       checked={capabilities[key]}
-                      onChange={(event) =>
+                      onCheckedChange={(checked) =>
                         setCapabilities((current) => ({
                           ...current,
-                          [key]: event.target.checked,
+                          [key]: checked,
                         }))
                       }
                       aria-label={`模态：${label}`}
                     />
                     {label}
-                  </label>
+                  </Label>
                 ))}
               </div>
             </dd>
@@ -259,13 +259,13 @@ export function ModelDetailDialog({
 
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
-              <label
+              <Label
                 htmlFor="detail-context-window"
                 className="text-sm text-foreground"
                 title="上下文窗口（Tokens），清空表示未知"
               >
                 上下文窗口
-              </label>
+              </Label>
               <Input
                 id="detail-context-window"
                 type="number"
@@ -278,13 +278,13 @@ export function ModelDetailDialog({
               />
             </div>
             <div className="flex items-center justify-between gap-3">
-              <label
+              <Label
                 htmlFor="detail-max-output"
                 className="text-sm text-foreground"
                 title="最大输出 Tokens，清空表示未知"
               >
                 最大输出 Tokens
-              </label>
+              </Label>
               <Input
                 id="detail-max-output"
                 type="number"

@@ -51,7 +51,7 @@ export const GDC_DATA_TYPE_MAP: Readonly<Record<string, string>> = {
 };
 
 /** Token 短于该字符数时不参与 OR 匹配（避免 "and"/"or" 等噪声词）。 */
-const MIN_TOKEN_LEN = 3;
+export const MIN_TOKEN_LEN = 3;
 
 /** Build a GDC API URL with query parameters (Python ``_build_url``). */
 export function buildGdcUrl(

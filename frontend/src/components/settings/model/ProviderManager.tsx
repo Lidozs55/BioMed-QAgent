@@ -14,6 +14,11 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import type { ProviderInfo, ProviderInput, SettingsAPIClient, VendorInfo } from "@/hooks/useAPI";
 
@@ -267,25 +272,22 @@ export function ProviderManager({ api, providers, loading, onChanged }: Provider
             </Field>
             <Field>
               <FieldLabel htmlFor="provider-api-key">API Key</FieldLabel>
-              <div className="relative">
-                <Input
+              <InputGroup>
+                <InputGroupInput
                   id="provider-api-key"
                   type={showKey ? "text" : "password"}
                   value={draft.apiKey}
                   placeholder={editing?.api_key_configured ? "留空则保持不变" : "sk-..."}
                   onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
-                  className="pr-8"
                 />
-                <button
-                  type="button"
-                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                <InputGroupButton
+                  size="icon-sm"
                   aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}
                   onClick={() => setShowKey((next) => !next)}
-                  tabIndex={-1}
                 >
-                  {showKey ? <EyeClosedIcon className="size-4" /> : <EyeIcon className="size-4" />}
-                </button>
-              </div>
+                  {showKey ? <EyeClosedIcon aria-hidden="true" /> : <EyeIcon aria-hidden="true" />}
+                </InputGroupButton>
+              </InputGroup>
             </Field>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <WarningIcon className="size-3.5 shrink-0" />

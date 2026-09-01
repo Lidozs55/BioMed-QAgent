@@ -334,7 +334,11 @@ describe("permission control plane over HTTP (P3)", () => {
       {
         tool: "workspace_read",
         isError: true,
-        result: expect.objectContaining({ code: "PERMISSION_DENIED" }),
+        result: expect.objectContaining({
+          code: "PERMISSION_DENIED",
+          scope: "external",
+          read_path_hint: expect.stringContaining("preview_core_asset"),
+        }),
       },
     ]);
 

@@ -39,6 +39,7 @@ import {
 import { catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
 import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
 import {
+  effectiveContextWindow,
   resolveActiveConfig,
   resolveVlmConfig,
   VisionConfigError,
@@ -47,7 +48,6 @@ import {
 } from "./model-resolution.js";
 import { createSettingsRouter } from "./routes.js";
 import {
-  bootstrapEnvironmentDefaults,
   defaultRegistry,
   loadAuthState,
   loadRegistryState,
@@ -63,7 +63,6 @@ import {
 export interface ModelSettingsServiceOptions {
   settingsDir: string;
   legacyRegistryPath?: string;
-  environment?: Record<string, string | undefined>;
   fetcher?: typeof fetch;
   resolveHost?: AddressResolver;
 }
@@ -147,7 +146,6 @@ function assertHttpBaseUrl(value: string): void {
 export class ModelSettingsService {
   private readonly registryPath: string;
   private readonly legacySettingsPath: string;
-  private readonly environment: Record<string, string | undefined>;
   private readonly fetcher: typeof fetch;
   private readonly resolveHost: AddressResolver;
   private writes: Promise<void> = Promise.resolve();
@@ -160,16 +158,14 @@ export class ModelSettingsService {
   ) {
     this.registryPath = path.join(options.settingsDir, "model-registry.json");
     this.legacySettingsPath = path.join(options.settingsDir, "model.json");
-    this.environment = options.environment ?? process.env;
     this.fetcher = options.fetcher ?? fetch;
     this.resolveHost = options.resolveHost ?? resolveAllAddresses;
     this.router = createSettingsRouter(this);
   }
 
   static async create(options: ModelSettingsServiceOptions): Promise<ModelSettingsService> {
-    const environment = options.environment ?? process.env;
-    const registry = await loadRegistryState(options.settingsDir, environment);
-    const auth = await loadAuthState(options.settingsDir, environment);
+    const registry = await loadRegistryState(options.settingsDir);
+    const auth = await loadAuthState(options.settingsDir);
     const service = new ModelSettingsService(options, registry, auth);
     await migrateLegacySettings(
       service.registry,
@@ -183,7 +179,6 @@ export class ModelSettingsService {
       service.options.legacyRegistryPath,
       (model) => service.activateInMemory(model),
     );
-    bootstrapEnvironmentDefaults(service.registry, service.auth, environment);
     service.syncCatalogMetadata();
     await service.persist();
     return service;
@@ -193,7 +188,7 @@ export class ModelSettingsService {
     this.router.handle(request, response);
 
   resolveActiveModel = async (): Promise<BioMedModelConfig> =>
-    resolveActiveConfig(this.registry, this.auth, this.environment);
+    resolveActiveConfig(this.registry, this.auth);
 
   resolveRuntimeLimits = (): RuntimeLimits => ({ ...this.registry.settings.runtime_limits });
 
@@ -215,19 +210,22 @@ export class ModelSettingsService {
       });
       throw new VisionConfigError(stale);
     }
-    return resolveVlmConfig(this.registry, this.auth, this.environment);
+    return resolveVlmConfig(this.registry, this.auth);
   };
 
   /* ---- Routes surface ---- */
 
   getSettings(): JsonObject {
     const settings = this.registry.settings;
+    const model = settings.active_model_id === null
+      ? undefined
+      : this.registry.models.find((item) => item.id === settings.active_model_id);
     const apiKey = settings.provider_id === null
       ? this.auth.direct_api_key
       : this.auth.provider_api_keys[settings.provider_id] ?? "";
-    const contextWindow = settings.context_window ?? 131_072;
+    const contextWindow = effectiveContextWindow(settings, model);
     const reserve = Math.ceil(contextWindow * settings.safety_reserve_ratio);
-    const modelName = settings.model_name.trim();
+    const modelName = (model?.model_id ?? settings.model_name).trim();
     // Pi clamps max output to the remaining context budget; a zero/negative
     // budget still requires user confirmation before running because Pi would
     // otherwise silently turn the request into a 1-token response.
@@ -243,11 +241,15 @@ export class ModelSettingsService {
       base_url: settings.base_url,
       api_key: maskApiKey(apiKey),
       api_key_configured: apiKey !== "",
-      model_name: settings.model_name,
+      model_name: model?.model_id ?? settings.model_name,
       max_tokens: settings.max_tokens,
       advanced: settings.advanced,
       context_window: contextWindow,
-      context_window_source: settings.context_window === null ? "inferred" : "user",
+      context_window_source: settings.context_window !== null
+        ? "user"
+        : model?.context_window !== undefined && model?.context_window !== null
+          ? "catalog"
+          : "inferred",
       safety_reserve_ratio: settings.safety_reserve_ratio,
       safety_reserve_tokens: reserve,
       compaction_trigger_ratio: settings.compaction_trigger_ratio,
@@ -256,7 +258,7 @@ export class ModelSettingsService {
       run_ready: apiKey !== "" && modelName !== "",
       run_block_reason: runBlockReason,
       runtime_limits: settings.runtime_limits,
-      ...visionSettingsFacts(this.registry, this.auth, this.environment),
+      ...visionSettingsFacts(this.registry, this.auth),
     };
   }
 
@@ -268,7 +270,27 @@ export class ModelSettingsService {
         settings.base_url = requiredString(body.base_url, "base_url");
         assertHttpBaseUrl(settings.base_url);
       }
-      if (body.model_name !== undefined) settings.model_name = requiredString(body.model_name, "model_name");
+      if (body.model_name !== undefined) {
+        const requested = requiredString(body.model_name, "model_name");
+        // B7: a PUT on the legacy model_name must never diverge from the
+        // active registry model, or execution would silently run the active
+        // record while the stored field claims another model (the
+        // display/execution drift that mis-ran gold1 r1). Reject conflicts and
+        // direct the caller to the registry route; with no active record the
+        // legacy field remains authoritative.
+        const activeId = settings.active_model_id;
+        if (activeId !== null) {
+          const activeModel = this.registry.models.find((candidate) => candidate.id === activeId) ?? null;
+          if (activeModel !== null && activeModel.model_id !== requested) {
+            throw new HttpError(
+              422,
+              `model_name "${requested}" conflicts with the active registry model "${activeModel.model_id}"; ` +
+                "switch the active model through POST /api/v1/model-registry/models/<id>/activate instead",
+            );
+          }
+        }
+        settings.model_name = requested;
+      }
       if (body.max_tokens !== undefined) settings.max_tokens = boundedNumber(body.max_tokens, "max_tokens", 1);
       if (body.context_window === null) settings.context_window = null;
       else if (body.context_window !== undefined) settings.context_window = boundedNumber(body.context_window, "context_window", 1);
@@ -334,8 +356,11 @@ export class ModelSettingsService {
       if (body.max_tokens !== undefined ||
           body.context_window !== undefined ||
           body.safety_reserve_ratio !== undefined) {
-        // context_window 为 null 时与运行时回退一致按 131072 计算。
-        const effectiveWindow = settings.context_window ?? 131_072;
+        // 与运行时保持一致：显式 settings 窗口优先，模型目录值仅作回退。
+        const activeModel = settings.active_model_id === null
+          ? undefined
+          : this.registry.models.find((item) => item.id === settings.active_model_id);
+        const effectiveWindow = effectiveContextWindow(settings, activeModel);
         const budget = effectiveWindow * (1 - settings.safety_reserve_ratio);
         if (settings.max_tokens >= budget) {
           throw new HttpError(
@@ -713,7 +738,7 @@ export class ModelSettingsService {
    * 用户随后必须显式激活模型。
    */
   private resetActiveConnectionSettings(clearProvider: boolean): void {
-    const defaults = defaultRegistry(this.environment).settings;
+    const defaults = defaultRegistry().settings;
     const settings = this.registry.settings;
     if (clearProvider) settings.provider_id = null;
     settings.active_model_id = null;
@@ -808,7 +833,7 @@ export class ModelSettingsService {
     if (active !== undefined && active.metadata_source !== "user") {
       const settings = this.registry.settings;
       settings.active_model_id = active.id;
-      settings.context_window = active.context_window ?? settings.context_window;
+      if (settings.context_window === null) settings.context_window = active.context_window;
       const maxTokens = deriveModelMaxTokens(active);
       if (maxTokens !== null) settings.max_tokens = maxTokens;
     }

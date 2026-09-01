@@ -46,10 +46,13 @@ used to exercise/restrict event pages.
    canonical `fs.read` in the current task workspace (excluding secret-named
    files) and the argument-free, workspace-local fixed parser form
    `node parse*.js` / `node parse*.mjs` are automatically allowed, once.
-   Recognized shell-wrapper or subprocess-network bypasses are automatically
-   denied once so the same run can recover through governed tools. Malformed,
-   secret, external, unknown, and other out-of-policy requests remain
-   fail-closed and stop with exit code `20`.
+   Any well-formed workspace `process.exec` request that is not that fixed
+   parser is automatically denied once (including recognized shell/network
+   bypasses and unknown commands), so the Host rejects only that tool call and
+   the same run can continue through governed tools. Deny never grants
+   execution. Malformed requests, missing request identity, sensitive or
+   external filesystem requests, non-workspace exec scopes, and unknown
+   capabilities remain fail-closed and stop with exit code `20`.
 6. Every `kind=data_review` request stops with exit code `21` and writes
    `HIL-STOP.json`. `browser_evidence_acceptance` and
    `publication_acceptance` are treated as data-review stops regardless of

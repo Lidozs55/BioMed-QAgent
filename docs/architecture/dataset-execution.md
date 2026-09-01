@@ -65,6 +65,11 @@ scaffold，标记 unchanged retry forbidden；修改来源/抽取事实后必须
 以及 acquisition-only binary carrier；provider 已接线只证明可信 acquisition/输入解码，
 不证明 FamilySpec/Projection/transform/源站可达性或 Publication closure。具体 Dynamic
 提交仍由 `acquisition_requests` schema 和 `prepare_dynamic_family_publication` receipt 校验。
+Dynamic receipt-only prepared submission 持久在 task-owned state，并以 generation、submission
+ digest 和 consumed fence 绑定；Host 重启后只恢复未消费且 digest 完整的 receipt，进行中的
+reservation 继续 fail-closed。`extract_core_archive` 与 supplementary extractor 产出的
+成员必须是带父 archive provenance 和 committed OperationResult 的 derived asset，不能把
+archive/PDF/XLSX carrier 直接当作 Dynamic 的文本输入。
 
 Profile 选择按语义和表闭包从具体到通用：要求 `paper_records`、
 `experiment_records`、`activity_value_records`、图表系列/点和补充资产共同闭合的论文实验

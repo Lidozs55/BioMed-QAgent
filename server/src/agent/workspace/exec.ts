@@ -161,6 +161,30 @@ function redactArguments(args: readonly string[]): string[] {
 
 }
 
+/**
+ * Spawn-time failures (missing binary, missing execute bit, ...) never reach
+ * the child, so stderr arrives empty and the raw errno exception used to
+ * escape as an opaque WORKSPACE_OPERATION_FAILED. Prepend an actionable,
+ * auditable diagnostic (the errno code is machine-readable and never
+ * secret-bearing) so the caller can self-correct instead of blind-retrying.
+ */
+function spawnDiagnostics(
+  code: string | undefined,
+  executable: string,
+  stderr: string,
+): string {
+  if (code === undefined) return stderr;
+  const hint = code === "EACCES"
+    ? " (not executable: grant the execute bit or run through an interpreter)"
+    : code === "ENOENT"
+    ? " (command not found on PATH and not a workspace-relative file)"
+    : code === "EISDIR"
+    ? " (path is a directory, not an executable file)"
+    : "";
+  const prefix = `Failed to spawn ${executable}: ${code}${hint}`;
+  return stderr === "" ? prefix : `${prefix}\n${stderr}`;
+}
+
 function rejectedResult(command: string[], message: string, durationMs = 0): WorkspaceExecResult {
   return {
     command,
@@ -273,13 +297,24 @@ async function taskkill(pid: number): Promise<void> {
 
 async function killProcessTree(pid: number): Promise<void> {
   if (process.platform === "win32") {
+    // Only reached with a real pid on Windows: taskkill on a fabricated id
+    // would be a pointless external call (it errors and is swallowed).
+    if (pid <= 1) return;
     await taskkill(pid);
     return;
   }
+  // A spawn that failed before creating a process (EACCES/ENOENT) leaves
+  // ``child.pid`` undefined; the historical ``?? -1`` made ``-pid`` equal 1,
+  // i.e. ``process.kill(1, "SIGKILL")`` — a real SIGKILL aimed at init when
+  // privileges allow. Never signal anything at or below pid 1.
+  if (pid <= 1) return;
   try {
     process.kill(-pid, "SIGKILL");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    // ESRCH: the group already exited. EPERM: the group is already being
+    // reaped (or runs under another uid) — nothing safe to signal.
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
   }
 }
 
@@ -319,6 +354,12 @@ export async function executeWorkspaceCommand(
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  // ``error`` fires instead of a child when spawn itself fails (missing
+  // binary, no execute bit, ...): capture the errno for the result stderr.
+  let spawnErrorCode: string | undefined;
+  child.once("error", (error) => {
+    spawnErrorCode = (error as NodeJS.ErrnoException).code;
+  });
   let exitCode: number | null;
   let timedOut = false;
   let cancelled = false;
@@ -329,7 +370,14 @@ export async function executeWorkspaceCommand(
   let termination: Promise<void> | undefined;
   const terminate = (): Promise<void> => {
     termination ??= killProcessTree(child.pid ?? -1).finally(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      // No pid means spawn never completed — there is no child to kill.
+      if (
+        child.pid !== undefined &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
+        child.kill("SIGKILL");
+      }
     });
     return termination;
   };
@@ -373,7 +421,11 @@ export async function executeWorkspaceCommand(
       command,
       exitCode,
       stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
+      stderr: spawnDiagnostics(
+        spawnErrorCode,
+        input.executable,
+        Buffer.concat(stderr).toString("utf8"),
+      ),
       durationMs: Math.max(0, Math.round(performance.now() - started)),
       truncated,
       timedOut,

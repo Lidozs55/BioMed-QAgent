@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { DatasetBridgeResponse } from "@biomed/contracts";
-import { createDatasetExecutionTools } from "../src/agent/tools/dataset-execution.js";
+import { createDatasetExecutionTools, resolveAssetReferences, type SourceAssetRegistryLike } from "../src/agent/tools/dataset-execution.js";
 import { createDefaultDatasetFamilyRegistry } from "../src/dataset/families/index.js";
 import { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
 import { readExecutionContinuation } from "../src/runtime/execution-continuation.js";
@@ -809,5 +809,50 @@ describe("Pi DatasetExecution tools", () => {
       spec: expect.objectContaining({ dataset_family: "variant_evidence" }),
     }));
     expect(result).toMatchObject({ isError: true, details: { code: "spec_rejected" } });
+  });
+});
+
+describe("source_files dual-form resolution (P2)", () => {
+  const registry: SourceAssetRegistryLike = {
+    async resolveByRelativePath(relativePath: string) {
+      if (relativePath === "source_assets/extracted/member.csv") return `asset_${"a".repeat(64)}`;
+      return null;
+    },
+  };
+
+  test("keeps bare asset ids unchanged", async () => {
+    const assetId = `asset_${"b".repeat(64)}`;
+    const resolved = await resolveAssetReferences({ b1: assetId }, "source_files", registry);
+    expect(resolved).toEqual({ b1: assetId });
+  });
+
+  test("resolves a registered relative path to its asset id", async () => {
+    const resolved = await resolveAssetReferences(
+      { b1: "source_assets/extracted/member.csv" },
+      "source_files",
+      registry,
+    );
+    expect(resolved.b1).toBe(`asset_${"a".repeat(64)}`);
+  });
+
+  test("rejects an unregistered relative path with an actionable error", async () => {
+    await expect(resolveAssetReferences(
+      { b1: "source_assets/extracted/missing.csv" },
+      "source_files",
+      registry,
+    )).rejects.toThrow(/unregistered path/);
+  });
+
+  test("rejects a value that is neither an asset id nor a registered path", async () => {
+    await expect(resolveAssetReferences(
+      { b1: "C:/absolute/file.csv" },
+      "source_files",
+      registry,
+    )).rejects.toThrow(/must be either a task-owned asset id/);
+  });
+
+  test("no registry means references pass through untouched", async () => {
+    const resolved = await resolveAssetReferences({ b1: "anything" }, "source_files", undefined);
+    expect(resolved).toEqual({ b1: "anything" });
   });
 });

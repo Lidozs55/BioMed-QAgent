@@ -6,6 +6,7 @@ export {
   GDC_API_BASE,
   GDC_DATA_TYPE_MAP,
   GDC_JSON_TIMEOUT_MS,
+  MIN_TOKEN_LEN,
   buildGdcUrl,
   fetchGdcJson,
   matchGdcTerm,

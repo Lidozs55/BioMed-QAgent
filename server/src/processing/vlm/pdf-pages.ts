@@ -1,12 +1,14 @@
 /**
- * Caption-guided full-page rendering for vector PDFs (Gold6 vision repair,
- * task 7). The embedded-raster tier (``pdf-images.ts``) stays the FIRST tier;
- * this module is the fallback for PDFs whose figures are pure vector drawing
- * (no image XObject), where the first tier finds nothing usable.
+ * Caption-guided full-page rendering for vector and composite PDFs (Gold6
+ * vision repair, task 7). The exploratory chart tool uses this module after
+ * its embedded-raster tier; the governed registered-paper route uses complete
+ * page rasters directly so axes, legends, labels, and vector marks stay in one
+ * image.
  *
  * pdfjs renders each candidate page through ``@napi-rs/canvas`` (the pdfjs
- * Node canvas backend, a direct dependency of ``@biomed/server``) at
- * ``RENDER_DPI``. Page candidates are bounded by ``MAX_PDF_PAGES_PER_FILE``:
+ * Node canvas backend, a direct dependency of ``@biomed/server``) at the
+ * requested bounded DPI. Page candidates are bounded by
+ * ``MAX_PDF_PAGES_PER_FILE``:
  * the text layer is scanned first and pages matching ``Fig``/``Figure``,
  * ``dose``, ``response``, or the extraction hint rank as caption candidates;
  * only when no candidate exists do the first pages render — never the
@@ -34,8 +36,10 @@ export const MAX_PDF_PAGES_PER_FILE = 12;
 /** Default page rendering resolution (2x the 72dpi PDF unit space). */
 export const RENDER_DPI = 144;
 
+/** Bounded DPI range accepted by the in-process renderer. */
 const MIN_RENDER_DPI = 72;
 const MAX_RENDER_DPI = 300;
+/** Per-page allocation/scan cap; checked before canvas creation. */
 export const MAX_PDF_RENDER_PIXELS = 25_000_000;
 /** Padding added around the detected drawing bbox (rendered pixels). */
 const INK_PADDING_PX = 4;
@@ -137,9 +141,9 @@ function detectInkBbox(ctx: SKRSContext2D, width: number, height: number): strin
 }
 
 /**
- * Render the bounded caption-guided candidate pages of a PDF into PNG rasters
- * under ``destDir``. Throws ``ChartExtractionError`` when the PDF cannot be
- * opened, a page render fails, or ``signal`` reports cancellation.
+ * Read a PDF path, then render its bounded caption-guided candidate pages.
+ * Governed registered-asset callers use ``renderPdfPagesFromBytes`` instead so
+ * the rasterizer consumes the exact bytes that passed digest verification.
  */
 export async function renderPdfPages(
   pdfPath: string,
@@ -156,7 +160,11 @@ export async function renderPdfPages(
   return renderPdfPagesFromBytes(bytes, pdfPath, destDir, options);
 }
 
-/** Render the exact byte-verified PDF carrier into bounded full-page rasters. */
+/**
+ * Render already verified PDF bytes into bounded full-page PNG rasters. The
+ * input is copied before pdfjs receives it because pdfjs may transfer/detach
+ * its Uint8Array while loading the document.
+ */
 export async function renderPdfPagesFromBytes(
   verifiedBytes: Uint8Array,
   sourceLabel: string,
@@ -211,7 +219,7 @@ export async function renderPdfPagesFromBytes(
         ? candidates.length - chosen.length
         : Math.max(0, doc.numPages - chosen.length);
 
-    // -- 2. Render the bounded candidate set at RENDER_DPI.
+    // -- 2. Render the bounded candidate set at the admitted DPI.
     await mkdir(destDir, { recursive: true });
     const stem = path.basename(sourceLabel, path.extname(sourceLabel));
     const pages: RenderedPdfPage[] = [];

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { SourceAssetRegistry } from "../../src/runtime/source-assets/registry.js";
 import {
   BROWSER_UA,
   DEFAULT_BROWSER_LAUNCH_ARGS,
@@ -634,11 +635,13 @@ describe("browser tools", () => {
     });
     const facade = new CrawlerFacade({ minInterval: 0 });
     const queries: Array<[string, string, string, number | undefined]> = [];
+    const registry = new SourceAssetRegistry("task_browser_registry", root);
     const [, downloadFromPage] = createBrowserTools({
       taskRoot: root,
       cache: new ContentCache(path.join(root, "cache")),
       client,
       crawler: facade,
+      sourceAssetRegistry: registry,
       hooks: { onQuery: (query, source, status, count) => queries.push([query, source, status, count]) },
     });
 
@@ -660,6 +663,12 @@ describe("browser tools", () => {
     const asset = data["source_asset"] as Record<string, unknown>;
     expect(asset["sha256"]).toBe(expectedSha);
     expect(asset["asset_id"]).toBe(`asset_${expectedSha}`);
+    // The download is registered in the task source-asset registry, so
+    // preview_core_asset can resolve it immediately (model-blockers I3). The
+    // browser layout is source_assets/<asset_id>/<filename>.
+    const registered = await registry.resolveAny(`asset_${expectedSha}`);
+    expect(registered.registration_receipt.relative_path).toContain("source_assets/");
+    expect(registered.registration_receipt.relative_path.endsWith("data.pdf")).toBe(true);
     const attempt = data["download_attempt"] as Record<string, unknown>;
     expect(attempt["status"]).toBe("succeeded");
     expect(attempt["bytes_received"]).toBe(pdfBytes.length);

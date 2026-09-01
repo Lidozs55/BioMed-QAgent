@@ -23,6 +23,7 @@ import {
 } from "../../external/acquisition/index.js";
 import {
   GDC_API_BASE,
+  MIN_TOKEN_LEN,
   buildGdcUrl,
   fetchGdcJson,
   matchGdcTerm,
@@ -159,7 +160,11 @@ export async function searchGdc(
   }
 
   const hits = gdcHits(payload);
-  const records: GdcSearchRecord[] = [];
+  const tokens = effectiveTerm
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length >= MIN_TOKEN_LEN);
+  const ranked: Array<{ record: GdcSearchRecord; score: number }> = [];
   for (const hit of hits) {
     if (!isRecord(hit)) continue;
     const projectId = String(hit["project_id"] ?? "");
@@ -171,17 +176,40 @@ export async function searchGdc(
     const searchText = [projectId, name, ...disease, ...primarySite].join(" ");
     if (!matchGdcTerm(effectiveTerm, searchText)) continue;
 
-    records.push({
-      project_id: projectId,
-      name,
-      disease_type: disease,
-      primary_site: primarySite,
-      case_count: numberOrZero(summary["case_count"]),
-      file_count: numberOrZero(summary["file_count"]),
-      data_categories: isRecord(hit["summary"]) ? dataCategories(hit["summary"]) : [],
+    // Relevance scoring (model-blockers B6): a Boolean OR over tokens leaves
+    // API order first, so "breast cancer TCGA" surfaced TCGA-LUAD before
+    // TCGA-BRCA. Rank by token hit density plus weighted exact/whole-field
+    // matches (project_id, disease_type / primary_site, name).
+    const lowerText = searchText.toLowerCase();
+    const tokenHits = tokens.filter((token) => lowerText.includes(token)).length;
+    let score = tokens.length === 0 ? 1 : tokenHits / tokens.length;
+    const projectIdLower = projectId.toLowerCase();
+    if (tokens.some((token) => projectIdLower.startsWith(token) || projectIdLower.includes(token))) {
+      score += 0.5;
+    }
+    if (tokens.length > 0) {
+      for (const list of [disease, primarySite]) {
+        for (const field of list) {
+          if (tokens.some((token) => field.toLowerCase().includes(token))) score += 0.25;
+        }
+      }
+      if (tokens.some((token) => name.toLowerCase().includes(token))) score += 0.25;
+    }
+    ranked.push({
+      record: {
+        project_id: projectId,
+        name,
+        disease_type: disease,
+        primary_site: primarySite,
+        case_count: numberOrZero(summary["case_count"]),
+        file_count: numberOrZero(summary["file_count"]),
+        data_categories: isRecord(hit["summary"]) ? dataCategories(hit["summary"]) : [],
+      },
+      score,
     });
-    if (records.length >= maxResults) break;
   }
+  ranked.sort((left, right) => right.score - left.score);
+  const records = ranked.slice(0, maxResults).map((entry) => entry.record);
 
   hooks.onQuery(effectiveTerm, "gdc", "success", records.length);
   return {

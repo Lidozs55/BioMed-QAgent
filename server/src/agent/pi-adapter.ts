@@ -23,15 +23,13 @@ import {
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
-import { PHASE1_SYSTEM_PROMPT, phase1ResourceRoots } from "./phase1-prompt.js";
+import { PHASE1_SYSTEM_PROMPT, SYSTEM_BRIEFING, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
 import {
   RunProgressContextTracker,
   runProgressContextMessage,
 } from "./run-progress-context.js";
 import { SKILL_TOOL_MAP } from "./skills/skill-tool-map.js";
-
-type Environment = Record<string, string | undefined>;
 
 export interface PiUpstreamEvent {
   type: string;
@@ -97,7 +95,6 @@ export interface PiUpstreamSession {
 }
 
 export interface PiAgentAdapterOptions {
-  environment?: Environment;
   createUpstreamSession?: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
@@ -308,6 +305,7 @@ export function toolCatalogPrompt(
     "Available curated skill/tool map (complete for this session):",
     "Use it before substantive work to choose the route and respect each trust boundary.",
     "Tools marked (active) have full schemas now. For other listed tools, call activate_agent_tools before use; activation does not bypass permissions, validation, or publication gates.",
+    "A tool call to a listed tool that is NOT active fails with 'Tool not found' — this never means the tool is missing. Exactly one recovery exists: call activate_agent_tools with that tool's name, then retry the call with its real schema. Do not invent parameters or guess signatures for inactive tools; the catalog above is the only schema source.",
     ...skillEntries,
     ...(otherTools.length === 0
       ? []
@@ -432,26 +430,6 @@ async function validateSessionConfig(
     ? undefined
     : await requireDirectory("session directory", config.sessionDir);
   return { ...config, cwd, resourceRoots, skillRoots, sessionDir };
-}
-
-function modelFromEnvironment(environment: Environment): BioMedModelConfig {
-  const provider = environment.PI_PROVIDER ?? "dashscope";
-  const modelId = environment.PI_MODEL ?? environment.MODEL_NAME;
-  const apiKey = environment.PI_API_KEY ?? environment.DASHSCOPE_API_KEY;
-  const baseUrl = environment.PI_BASE_URL ?? environment.DASHSCOPE_BASE_URL;
-  if (modelId === undefined || modelId.trim() === "") {
-    throw new BioMedAgentError(
-      "INVALID_CONFIGURATION",
-      "Pi model configuration is required",
-    );
-  }
-  if (apiKey === undefined || apiKey.trim() === "") {
-    throw new BioMedAgentError(
-      "INVALID_CONFIGURATION",
-      "Pi provider credentials are required",
-    );
-  }
-  return { provider, modelId, apiKey, baseUrl };
 }
 
 /**
@@ -790,12 +768,19 @@ export function toUpstreamEvent(
 
 async function createRealUpstreamSession(
   config: BioMedSessionConfig,
-  environment: Environment,
   resolveModel?: () => Promise<BioMedModelConfig>,
 ): Promise<PiUpstreamSession> {
-  let current = config.model ?? (resolveModel === undefined
-    ? modelFromEnvironment(environment)
-    : await resolveModel());
+  let current: BioMedModelConfig;
+  if (config.model !== undefined) {
+    current = config.model;
+  } else if (resolveModel !== undefined) {
+    current = await resolveModel();
+  } else {
+    throw new BioMedAgentError(
+      "INVALID_CONFIGURATION",
+      "Pi model configuration is required",
+    );
+  }
   const currentWindow = (): number => current.contextWindow ?? 131_072;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
@@ -1132,7 +1117,7 @@ export async function generateOneShotText(
     skillRoots: [],
     resourceRoots: [],
     tools: [],
-  }, process.env);
+  });
   let output = "";
   let reasoningChars = 0;
   let lengthContinuationStalls = 0;
@@ -1583,7 +1568,6 @@ class PiBioMedAgentSession implements BioMedAgentSession {
 }
 
 export class PiAgentAdapter implements BioMedAgentAdapter {
-  private readonly environment: Environment;
   private readonly createUpstreamSession: (
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
@@ -1591,11 +1575,10 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
   private readonly onResourceDiagnostic: (message: string) => void;
 
   constructor(options: PiAgentAdapterOptions = {}) {
-    this.environment = options.environment ?? process.env;
     this.createUpstreamSession =
       options.createUpstreamSession ??
       ((config) =>
-        createRealUpstreamSession(config, this.environment, options.resolveModel));
+        createRealUpstreamSession(config, options.resolveModel));
     this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
     this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
   }
@@ -1634,6 +1617,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
       validated = await validateSessionConfig({
         ...config,
         systemPrompt:
+          SYSTEM_BRIEFING +
+          "\n\n" +
           PHASE1_SYSTEM_PROMPT +
           toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)) +
           systemContextSection(config.systemContext),

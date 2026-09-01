@@ -187,8 +187,17 @@ from workspace files.
 ## Evidence Asset Ownership
 
 A formal VLM input begins with a task-owned Core-acquired or Core-derived image
-or PDF asset. After point-level `vlm_extraction` HIL, the processing layer writes
-a content-addressed evidence manifest containing source asset IDs, page/bbox,
+or PDF asset. The governed registered-paper route rehashes the registered JATS
+XML and PDF bytes, validates the requested PMID/PMCID/DOI against the JATS
+identity, and takes title/journal/date/authors from that XML rather than model
+output. It renders the verified PDF bytes in-process with PDF.js +
+`@napi-rs/canvas` as bounded 216-DPI complete page rasters (caption-guided,
+maximum 12 pages and 25 million pixels per page); it does not rely on embedded
+image XObjects, browser screenshots or the Chromium PDF viewer. Rendered PNGs
+remain task staging and never become publication inputs by themselves.
+
+After point-level `vlm_extraction` HIL, the processing layer writes a
+content-addressed evidence manifest containing source asset IDs, page/bbox,
 model and version, prompt digest, axis/legend facts, point values, confidence,
 review IDs, evidence digests, reviewer, review time and corrections. Dataset
 Core registers that manifest as a derived SourceAsset and persists the matching

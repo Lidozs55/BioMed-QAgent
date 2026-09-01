@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import path from "node:path";
-
 import type { DynamicFamilyPreflightReceipt } from "@biomed/contracts";
+
+import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
+
+const DIGEST = /^[0-9a-f]{64}$/u;
 
 export interface DynamicFamilyPreflightPreparation {
   readonly requirementId: string;
@@ -40,112 +40,188 @@ interface ReservationState {
   readonly token: object;
 }
 
+interface PersistedActiveReceipt {
+  readonly generation: number;
+  readonly sequence: number;
+  readonly receipt_digest: string;
+  readonly submission_digest: string;
+  readonly stored_submission?: unknown;
+  readonly consumed: boolean;
+}
+
+interface PersistedExecutionState {
+  readonly requirement_id: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly has_prepared: boolean;
+  readonly active: PersistedActiveReceipt | null;
+}
+
+interface PersistedCoordinatorState {
+  readonly schema_version: "1.0";
+  readonly states: readonly PersistedExecutionState[];
+}
+
 export interface DynamicFamilyPreflightCoordinatorOptions {
-  readonly statePath?: string;
+  /** Optional task-owned state file. Omit for an in-memory test coordinator. */
+  readonly stateFile?: string;
 }
 
 export interface DynamicFamilyPreflightCoordinator {
   /** Begin a new prepare and synchronously invalidate the prior receipt. */
-  beginPrepare(requirementId: string): DynamicFamilyPreflightPreparation;
+  beginPrepare(requirementId: string): Promise<DynamicFamilyPreflightPreparation>;
   /** Commit only the latest in-flight preparation for its build. */
   commitPrepare(
     preparation: DynamicFamilyPreflightPreparation,
     receipt: DynamicFamilyPreflightReceipt,
     submissionDigest: string,
     storedSubmission?: unknown,
-  ): void;
+  ): Promise<void>;
   /**
    * Resolve the server-side prepared submission bound to a live (not yet
    * consumed) receipt. Receipt-only submit uses this instead of re-echoing the
    * whole payload; the returned reference is the exact object passed to
    * commitPrepare, so integrity is anchored by the receipt digest chain.
    */
-  resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): T;
+  resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): Promise<T>;
   /** Atomically consume the current receipt before any acquisition side effect. */
-  reserve(receipt: DynamicFamilyPreflightReceipt, submissionDigest: string): DynamicFamilyPreflightReservation;
+  reserve(receipt: DynamicFamilyPreflightReceipt, submissionDigest: string): Promise<DynamicFamilyPreflightReservation>;
   /** Clear a consumed receipt after success or failure. */
-  complete(reservation: DynamicFamilyPreflightReservation): void;
+  complete(reservation: DynamicFamilyPreflightReservation): Promise<void>;
   /** Live generation fence checked by acquisition/transform execution. */
   isCurrent(reservation: DynamicFamilyPreflightReservation): boolean;
 }
 
-function loadStates(statePath: string | undefined): Map<string, ExecutionState> {
-  if (statePath === undefined) return new Map();
-  let parsed: unknown;
+function jsonClone(value: unknown): unknown {
+  let serialized: string;
   try {
-    parsed = JSON.parse(readFileSync(statePath, "utf8"));
+    serialized = JSON.stringify(value);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
-    throw new Error("dynamic preflight durable state is unreadable", { cause: error });
+    throw new TypeError("stored dynamic preflight submission must be JSON serializable", { cause: error });
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("dynamic preflight durable state is invalid");
+  if (serialized === undefined) {
+    throw new TypeError("stored dynamic preflight submission must not be undefined");
   }
-  const record = parsed as Record<string, unknown>;
-  if (record.schema_version !== "1.0" || !Array.isArray(record.states)) {
-    throw new Error("dynamic preflight durable state is invalid");
+  return JSON.parse(serialized) as unknown;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new TypeError(`persisted dynamic preflight ${label} is invalid`);
   }
-  const states = new Map<string, ExecutionState>();
-  for (const raw of record.states) {
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error("dynamic preflight durable state entry is invalid");
+  return value as number;
+}
+
+function requiredDigest(value: unknown, label: string): string {
+  if (typeof value !== "string" || !DIGEST.test(value)) {
+    throw new TypeError(`persisted dynamic preflight ${label} is invalid`);
+  }
+  return value;
+}
+
+function persistedState(value: unknown): PersistedCoordinatorState {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("persisted dynamic preflight state must be an object");
+  }
+  const object = value as Record<string, unknown>;
+  if (object.schema_version !== "1.0" || !Array.isArray(object.states)) {
+    throw new TypeError("persisted dynamic preflight state has an invalid schema");
+  }
+  const states: PersistedExecutionState[] = [];
+  const seen = new Set<string>();
+  for (const item of object.states) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new TypeError("persisted dynamic preflight execution state is invalid");
     }
-    const entry = raw as Record<string, unknown>;
-    if (
-      typeof entry.requirement_id !== "string"
-      || !Number.isSafeInteger(entry.generation)
-      || !Number.isSafeInteger(entry.sequence)
-      || typeof entry.has_prepared !== "boolean"
-      || states.has(entry.requirement_id)
-    ) {
-      throw new Error("dynamic preflight durable state entry is invalid");
+    const entry = item as Record<string, unknown>;
+    const requirementId = entry.requirement_id;
+    if (typeof requirementId !== "string" || requirementId.length === 0 || seen.has(requirementId)) {
+      throw new TypeError("persisted dynamic preflight requirement identity is invalid");
     }
-    let active: ActiveReceipt | null = null;
-    if (entry.active !== null) {
-      if (entry.active === undefined || typeof entry.active !== "object" || Array.isArray(entry.active)) {
-        throw new Error("dynamic preflight durable active receipt is invalid");
+    seen.add(requirementId);
+    const activeValue = entry.active;
+    let active: PersistedActiveReceipt | null = null;
+    if (activeValue !== null) {
+      if (activeValue === undefined || typeof activeValue !== "object" || Array.isArray(activeValue)) {
+        throw new TypeError("persisted dynamic preflight active receipt is invalid");
       }
-      const candidate = entry.active as Record<string, unknown>;
-      if (
-        !Number.isSafeInteger(candidate.generation)
-        || !Number.isSafeInteger(candidate.sequence)
-        || typeof candidate.receipt_digest !== "string"
-        || !/^[0-9a-f]{64}$/.test(candidate.receipt_digest)
-        || typeof candidate.submission_digest !== "string"
-        || !/^[0-9a-f]{64}$/.test(candidate.submission_digest)
-        || typeof candidate.consumed !== "boolean"
-      ) {
-        throw new Error("dynamic preflight durable active receipt is invalid");
-      }
+      const activeObject = activeValue as Record<string, unknown>;
+      const storedSubmission = "stored_submission" in activeObject
+        ? jsonClone(activeObject.stored_submission)
+        : undefined;
       active = {
-        generation: candidate.generation as number,
-        sequence: candidate.sequence as number,
-        receiptDigest: candidate.receipt_digest,
-        submissionDigest: candidate.submission_digest,
-        storedSubmission: candidate.stored_submission,
-        consumed: candidate.consumed,
-        reservationToken: null,
+        generation: positiveInteger(activeObject.generation, "active generation"),
+        sequence: positiveInteger(activeObject.sequence, "active sequence"),
+        receipt_digest: requiredDigest(activeObject.receipt_digest, "receipt digest"),
+        submission_digest: requiredDigest(activeObject.submission_digest, "submission digest"),
+        ...(storedSubmission === undefined ? {} : { stored_submission: storedSubmission }),
+        consumed: activeObject.consumed === true,
       };
     }
-    states.set(entry.requirement_id, {
-      generation: entry.generation as number,
-      sequence: entry.sequence as number,
-      hasPrepared: entry.has_prepared,
+    const generation = positiveInteger(entry.generation, "generation");
+    const sequence = positiveInteger(entry.sequence, "sequence");
+    const hasPrepared = entry.has_prepared === true;
+    if (active !== null && (!hasPrepared || active.generation !== generation || active.sequence > sequence)) {
+      throw new TypeError("persisted dynamic preflight active receipt is inconsistent");
+    }
+    states.push({
+      requirement_id: requirementId,
+      generation,
+      sequence,
+      has_prepared: hasPrepared,
       active,
     });
   }
-  return states;
+  return { schema_version: "1.0", states };
 }
 
 export function createDynamicFamilyPreflightCoordinator(
   options: DynamicFamilyPreflightCoordinatorOptions = {},
 ): DynamicFamilyPreflightCoordinator {
-  const states = loadStates(options.statePath);
+  const states = new Map<string, ExecutionState>();
   const reservations = new WeakMap<object, ReservationState>();
+  let loaded = options.stateFile === undefined;
+  let loadPromise: Promise<void> | null = null;
+  let writeChain = Promise.resolve();
 
-  const persist = (): void => {
-    if (options.statePath === undefined) return;
-    const snapshot = {
+  const load = async (): Promise<void> => {
+    if (loaded) return;
+    if (loadPromise !== null) return loadPromise;
+    loadPromise = (async () => {
+      const value = await readJsonFileOrNull<unknown>(options.stateFile!);
+      if (value !== null) {
+        const parsed = persistedState(value);
+        for (const entry of parsed.states) {
+          states.set(entry.requirement_id, {
+            generation: entry.generation,
+            sequence: entry.sequence,
+            hasPrepared: entry.has_prepared,
+            active: entry.active === null ? null : {
+              generation: entry.active.generation,
+              sequence: entry.active.sequence,
+              receiptDigest: entry.active.receipt_digest,
+              submissionDigest: entry.active.submission_digest,
+              storedSubmission: entry.active.stored_submission,
+              // A reservation token is process-local. A consumed receipt is
+              // intentionally left consumed after restart (fail closed).
+              consumed: entry.active.consumed,
+              reservationToken: null,
+            },
+          });
+        }
+      }
+      loaded = true;
+    })();
+    try {
+      await loadPromise;
+    } finally {
+      loadPromise = null;
+    }
+  };
+
+  const persist = async (): Promise<void> => {
+    if (options.stateFile === undefined) return;
+    const snapshot: PersistedCoordinatorState = {
       schema_version: "1.0",
       states: [...states.entries()].map(([requirementId, state]) => ({
         requirement_id: requirementId,
@@ -157,18 +233,20 @@ export function createDynamicFamilyPreflightCoordinator(
           sequence: state.active.sequence,
           receipt_digest: state.active.receiptDigest,
           submission_digest: state.active.submissionDigest,
-          stored_submission: state.active.storedSubmission,
+          ...(state.active.storedSubmission === undefined ? {} : {
+            stored_submission: jsonClone(state.active.storedSubmission),
+          }),
           consumed: state.active.consumed,
         },
       })),
     };
-    mkdirSync(path.dirname(options.statePath), { recursive: true });
-    const temporary = `${options.statePath}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
-    renameSync(temporary, options.statePath);
+    const write = writeChain.then(() => writeJsonAtomic(options.stateFile!, snapshot));
+    writeChain = write.catch(() => undefined);
+    await write;
   };
 
   const stateFor = (requirementId: string): ExecutionState => {
+    if (requirementId.trim() === "") throw new TypeError("dynamic preflight requirement id is required");
     const existing = states.get(requirementId);
     if (existing !== undefined) return existing;
     const created: ExecutionState = { generation: 0, sequence: 0, hasPrepared: false, active: null };
@@ -177,18 +255,20 @@ export function createDynamicFamilyPreflightCoordinator(
   };
 
   return {
-    beginPrepare(requirementId): DynamicFamilyPreflightPreparation {
+    async beginPrepare(requirementId): Promise<DynamicFamilyPreflightPreparation> {
+      if (!loaded) await load();
       const state = stateFor(requirementId);
       if (state.hasPrepared) state.generation += 1;
       state.hasPrepared = true;
       state.sequence += 1;
       // A new prepare supersedes both an available and an in-flight receipt.
       state.active = null;
-      persist();
+      await persist();
       return Object.freeze({ requirementId, generation: state.generation, sequence: state.sequence });
     },
 
-    commitPrepare(preparation, receipt, submissionDigest, storedSubmission): void {
+    async commitPrepare(preparation, receipt, submissionDigest, storedSubmission): Promise<void> {
+      await load();
       const state = states.get(preparation.requirementId);
       if (
         state === undefined
@@ -200,19 +280,22 @@ export function createDynamicFamilyPreflightCoordinator(
       ) {
         throw new Error("dynamic preflight preparation was superseded");
       }
+      if (!DIGEST.test(submissionDigest)) throw new TypeError("dynamic preflight submission digest is invalid");
+      const clonedSubmission = storedSubmission === undefined ? undefined : jsonClone(storedSubmission);
       state.active = {
         generation: preparation.generation,
         sequence: preparation.sequence,
         receiptDigest: receipt.receipt_digest,
         submissionDigest,
-        storedSubmission,
+        storedSubmission: clonedSubmission,
         consumed: false,
         reservationToken: null,
       };
-      persist();
+      await persist();
     },
 
-    resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): T {
+    async resolveSubmission<T = unknown>(receipt: DynamicFamilyPreflightReceipt): Promise<T> {
+      await load();
       const state = states.get(receipt.requirement_id);
       if (state === undefined || receipt.generation !== state.generation) {
         throw new Error("dynamic preflight receipt has stale generation");
@@ -227,10 +310,11 @@ export function createDynamicFamilyPreflightCoordinator(
       if (active.storedSubmission === undefined) {
         throw new Error("dynamic preflight receipt has no stored submission; echo the prepared_submission instead");
       }
-      return active.storedSubmission as T;
+      return jsonClone(active.storedSubmission) as T;
     },
 
-    reserve(receipt, submissionDigest): DynamicFamilyPreflightReservation {
+    async reserve(receipt, submissionDigest): Promise<DynamicFamilyPreflightReservation> {
+      await load();
       const state = states.get(receipt.requirement_id);
       if (state === undefined || receipt.generation !== state.generation) {
         throw new Error("dynamic preflight receipt has stale generation");
@@ -248,7 +332,7 @@ export function createDynamicFamilyPreflightCoordinator(
       active.consumed = true;
       const token = {};
       active.reservationToken = token;
-      persist();
+      await persist();
       const reservation = Object.freeze({
         requirementId: receipt.requirement_id,
         generation: receipt.generation,
@@ -258,7 +342,8 @@ export function createDynamicFamilyPreflightCoordinator(
       return reservation;
     },
 
-    complete(reservation): void {
+    async complete(reservation): Promise<void> {
+      await load();
       const state = states.get(reservation.requirementId);
       const internal = reservations.get(reservation);
       if (state !== undefined && internal !== undefined) {
@@ -269,11 +354,7 @@ export function createDynamicFamilyPreflightCoordinator(
           && active.receiptDigest === reservation.receiptDigest
         ) {
           state.active = null;
-          try {
-            persist();
-          } catch (error) {
-            console.error("dynamic_preflight_state_cleanup_failed", error);
-          }
+          await persist();
         }
       }
       reservations.delete(reservation);

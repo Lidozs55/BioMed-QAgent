@@ -39,19 +39,16 @@ function activeApiKey(registry: RegistryState, auth: AuthState): string {
 }
 
 /**
- * Credential for a provider: its stored key first; DashScope-flavored
- * providers may fall back to the ``DASHSCOPE_API_KEY`` environment variable
- * (same deployment the env bootstrap seeds, so no cross-provider leak).
+ * Credential for a provider: its stored key only. The settings layer no
+ * longer reads any model parameter from environment variables, so there is
+ * no env fallback here; an empty stored key means the visual role is not
+ * ready (callers fail closed with an actionable message).
  */
 export function visionApiKey(
   provider: ProviderRecord,
   auth: AuthState,
-  environment: Record<string, string | undefined>,
 ): string {
-  const stored = auth.provider_api_keys[provider.id] ?? "";
-  if (stored !== "") return stored;
-  const isDashScope = provider.preset_id === "dashscope" || provider.id === "dashscope";
-  return isDashScope ? environment.DASHSCOPE_API_KEY ?? "" : "";
+  return auth.provider_api_keys[provider.id] ?? "";
 }
 
 type VisionPick =
@@ -121,7 +118,6 @@ export function visionAssignmentProblem(registry: RegistryState): string | null 
 export function visionSettingsFacts(
   registry: RegistryState,
   auth: AuthState,
-  environment: Record<string, string | undefined>,
 ): {
   vision_model_id: string | null;
   vision_model_name: string | null;
@@ -139,7 +135,7 @@ export function visionSettingsFacts(
       vision_block_reason: registry.settings.vision_model_id === null ? null : picked.failure,
     };
   }
-  const ready = visionApiKey(picked.provider, auth, environment).trim() !== "";
+  const ready = visionApiKey(picked.provider, auth).trim() !== "";
   return {
     // The id stays the *stored* assignment: an effective fallback to the
     // active model must not look like an explicit role in the UI.
@@ -153,10 +149,16 @@ export function visionSettingsFacts(
   };
 }
 
+export function effectiveContextWindow(
+  settings: RegistryState["settings"],
+  model: ModelRecord | undefined,
+): number {
+  return settings.context_window ?? model?.context_window ?? 131_072;
+}
+
 export function resolveActiveConfig(
   registry: RegistryState,
   auth: AuthState,
-  environment: Record<string, string | undefined>,
 ): BioMedModelConfig {
   const settings = registry.settings;
   const provider = activeProvider(registry);
@@ -166,17 +168,15 @@ export function resolveActiveConfig(
   if (apiKey === "" || modelId.trim() === "") {
     throw new Error("Pi provider credentials and model are required");
   }
+  const contextWindow = effectiveContextWindow(settings, model);
   return {
-    provider: provider?.preset_id ?? provider?.id ?? environment.PI_PROVIDER ?? "openai-compatible",
+    provider: provider?.preset_id ?? provider?.id ?? "openai-compatible",
     modelId,
     apiKey,
     baseUrl: provider?.base_url ?? settings.base_url,
-    contextWindow: model?.context_window ?? settings.context_window ?? 131_072,
+    contextWindow,
     maxTokens: settings.max_tokens,
-    safetyReserveTokens: Math.ceil(
-      (model?.context_window ?? settings.context_window ?? 131_072) *
-        settings.safety_reserve_ratio,
-    ),
+    safetyReserveTokens: Math.ceil(contextWindow * settings.safety_reserve_ratio),
     compactionTriggerRatio: settings.compaction_trigger_ratio,
     compactionTargetRatio: settings.compaction_target_ratio,
     temperature: settings.advanced.temperature,
@@ -197,11 +197,10 @@ export function resolveActiveConfig(
 export function resolveVlmConfig(
   registry: RegistryState,
   auth: AuthState,
-  environment: Record<string, string | undefined>,
 ): { apiKey: string; baseUrl: string; model: string } {
   const picked = pickVisionModel(registry);
   if (!picked.ok) throw new VisionConfigError(picked.failure);
-  const apiKey = visionApiKey(picked.provider, auth, environment);
+  const apiKey = visionApiKey(picked.provider, auth);
   if (apiKey.trim() === "") {
     throw new VisionConfigError(
       `视觉抽取模型「${picked.model.name}」所属供应商「${picked.provider.name}」` +

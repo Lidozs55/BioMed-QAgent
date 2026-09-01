@@ -3,10 +3,32 @@ import { createHash } from "node:crypto";
 import type { JsonValue, SourceLocatorV2 } from "@biomed/contracts";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
+import { ExecutionError } from "../../adapters/errors.js";
 import { MAX_XML_CARRIER_BYTES } from "../../runtime/provider-limits.js";
 
 export const BIOC_LITERATURE_PROVIDER_ID = "literature.bioc_xml.v1";
 export const BIOC_LITERATURE_PROVIDER_VERSION = "1.0.0";
+
+/**
+ * The BioC carrier parsed successfully but carries zero documents — the
+ * article has no open-access full text through this carrier. This is a
+ * terminal, non-retryable fact, kept distinct from malformed-input TypeErrors
+ * so the pipeline can surface it as structured NO_DATA instead of
+ * ``invalid_input`` (model-blockers G3: plain TypeErrors led the agent to
+ * retune parameters and retry the same dead route).
+ */
+export class NoFullTextError extends ExecutionError {
+  readonly reason_code = "no_fulltext";
+
+  constructor(documents: unknown, sourceDatabase: string) {
+    super(
+      `no_fulltext: the BioC collection contains no document for source '${sourceDatabase}' — ` +
+        "this article has no open-access full text through this carrier; report it as an unavailable source and do not retry the same route",
+    );
+    this.name = "NoFullTextError";
+    void documents;
+  }
+}
 
 export interface BioCLiteratureTransformInput {
   bytes: Buffer;
@@ -433,7 +455,14 @@ export function transformBioCLiteratureEvidence(input: BioCLiteratureTransformIn
   const collection = children(root, "collection")[0] ?? root;
   const sourceDatabase = input.sourceDatabase?.trim() || firstText(collection, "source") || "bioc";
   const documents = children(collection, "document");
-  if (documents.length === 0) throw new TypeError("BioC collection contains no document");
+  if (documents.length === 0) {
+    // A BioC collection with zero documents is a terminal fact, not a retryable
+    // parse defect: the article has no open-access full text through this
+    // carrier. Raising a plain TypeError used to surface as bridge
+    // ``invalid_input`` and the agent retried the same route (model-blockers
+    // G3). A dedicated error class keeps this distinguishable end to end.
+    throw new NoFullTextError(documents, sourceDatabase);
+  }
   const output: BioCLiteratureCanonicalTables = { literature_evidence: [], papers: [], sources: [] };
   documents.forEach((document, documentIndex) => {
     const parsed = parseDocument({ input, document, documentIndex, sourceDatabase });

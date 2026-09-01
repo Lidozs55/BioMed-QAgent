@@ -11,12 +11,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 import { ModelSettingsService } from "../src/settings/model-settings.js";
-import {
-  bootstrapEnvironmentDefaults,
-  defaultRegistry,
-  ENV_BOOTSTRAP_PROVIDER_ID,
-  type AuthState,
-} from "../src/settings/model-registry/store.js";
 
 const servers: Server[] = [];
 
@@ -39,7 +33,7 @@ async function serve(service: ModelSettingsService): Promise<string> {
 describe("TypeScript model settings", () => {
   test("creates providers and models, masks secrets, and feeds active parameters to Pi", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
 
     const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
@@ -97,7 +91,7 @@ describe("TypeScript model settings", () => {
 
   test("allows editing the context window of an API-sourced model and syncs active settings", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
 
     const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
@@ -142,7 +136,7 @@ describe("TypeScript model settings", () => {
 
   test("allows editing model modalities (capabilities) via updateModel", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -170,7 +164,7 @@ describe("TypeScript model settings", () => {
 
   test("accepts max_tokens values beyond the legacy spec upper bound", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -188,7 +182,7 @@ describe("TypeScript model settings", () => {
 
   test("marks metadata as user-edited when any editable field changes", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -217,7 +211,7 @@ describe("TypeScript model settings", () => {
 
   test("syncs active-model parameter edits into runtime settings without reactivation", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -237,7 +231,7 @@ describe("TypeScript model settings", () => {
 
   test("syncs max_output_tokens edits for the active model when params lack max_tokens", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -257,7 +251,7 @@ describe("TypeScript model settings", () => {
 
   test("does not sync parameter edits for inactive models", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -282,7 +276,7 @@ describe("TypeScript model settings", () => {
 
   test("falls back to the default max output when the activated model exposes none", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -308,7 +302,7 @@ describe("TypeScript model settings", () => {
 
   test("resets ghost connection settings when deleting the active provider", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -341,7 +335,7 @@ describe("TypeScript model settings", () => {
 
   test("resets ghost model settings when deleting the active model", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -369,7 +363,7 @@ describe("TypeScript model settings", () => {
 
   test("rejects non-http(s) base_url values on settings and provider writes", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const put = async (payload: Record<string, unknown>): Promise<Response> =>
       fetch(`${baseUrl}/api/v1/settings`, {
@@ -419,7 +413,7 @@ describe("TypeScript model settings", () => {
 
   test("rejects compaction target ratios that do not stay below the trigger ratio", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const put = async (payload: Record<string, unknown>): Promise<Response> =>
       fetch(`${baseUrl}/api/v1/settings`, {
@@ -445,7 +439,7 @@ describe("TypeScript model settings", () => {
 
   test("rejects max_tokens that consume the reserved context window budget", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const put = async (payload: Record<string, unknown>): Promise<Response> =>
       fetch(`${baseUrl}/api/v1/settings`, {
@@ -470,7 +464,7 @@ describe("TypeScript model settings", () => {
 
   test("validates model params against the provider parameter specs", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Custom OpenAI",
       base_url: "https://models.example/v1",
@@ -521,16 +515,38 @@ describe("TypeScript model settings", () => {
       providers: [],
       models: [],
     }));
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
 
     // 磁盘上的历史违规组合不锁死不相关字段的更新。
     await expect(service.updateSettings({ model_name: "other-model" })).resolves.toBeUndefined();
     expect(service.getSettings()).toMatchObject({ model_name: "other-model", max_tokens: 200000 });
   });
 
+  test("B7: PUT settings model_name conflicts with the active registry model", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir });
+    const provider = await service.createProvider({
+      name: "B7 provider",
+      base_url: "https://models.example/v1",
+      api_key: "sk-b7",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "active-chat",
+      source: "api",
+    });
+    // The first model is auto-activated; a legacy model_name PUT that names a
+    // different model must be rejected (B7 display/execution drift guard).
+    await expect(service.updateSettings({ model_name: "some-other-model" }))
+      .rejects.toThrow(/conflicts with the active registry model/);
+    // The same model_name still resolves (no conflict).
+    await expect(service.updateSettings({ model_name: "active-chat" })).resolves.toBeUndefined();
+    expect(service.getSettings()).toMatchObject({ model_name: "active-chat" });
+  });
+
   test("persists, validates, and resets runtime limits", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
 
     const updated = await fetch(`${baseUrl}/api/v1/settings`, {
@@ -587,7 +603,7 @@ describe("TypeScript model settings", () => {
 
   test("exposes a context budget warning while keeping the API-ready state", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
 
     const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
@@ -625,7 +641,7 @@ describe("TypeScript model settings", () => {
 
   test("migrates unversioned legacy runtime limits to the widened defaults", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    await ModelSettingsService.create({ settingsDir, environment: {} });
+    await ModelSettingsService.create({ settingsDir });
     const registryPath = path.join(settingsDir, "model-registry.json");
     const stored = JSON.parse(await readFile(registryPath, "utf8")) as {
       settings: Record<string, unknown>;
@@ -638,7 +654,7 @@ describe("TypeScript model settings", () => {
     };
     await writeFile(registryPath, JSON.stringify(stored), "utf8");
 
-    const migrated = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const migrated = await ModelSettingsService.create({ settingsDir });
     expect(migrated.resolveRuntimeLimits()).toEqual(DEFAULT_RUNTIME_LIMITS);
     const persisted = JSON.parse(await readFile(registryPath, "utf8")) as {
       settings: { runtime_limits_version?: number };
@@ -648,11 +664,19 @@ describe("TypeScript model settings", () => {
 
   test("feeds configured compaction thresholds into the Pi model config", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({
-      settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
-    });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
+    // Model params come via the settings API, not environment variables.
+    const provider = await service.createProvider({
+      name: "Custom OpenAI",
+      base_url: "https://models.example/v1",
+      api_key: "sk-compaction",
+    });
+    await service.createModel({
+      provider_id: provider.id,
+      model_id: "compaction-chat",
+      context_window: 64000,
+    });
 
     await fetch(`${baseUrl}/api/v1/settings`, {
       method: "PUT",
@@ -677,7 +701,6 @@ describe("TypeScript model settings", () => {
     );
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: {},
       fetcher,
       resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
     });
@@ -711,7 +734,6 @@ describe("TypeScript model settings", () => {
     );
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: {},
       fetcher,
       resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
     });
@@ -816,7 +838,6 @@ describe("TypeScript model settings", () => {
 
     const service = await ModelSettingsService.create({
       settingsDir,
-      environment: {},
     });
     const models = service.listModels();
 
@@ -826,14 +847,15 @@ describe("TypeScript model settings", () => {
     ]));
     expect(service.getSettings()).toMatchObject({
       model_name: "qwen3.8-27b",
-      context_window: 1000000,
+      context_window: 524288,
+      context_window_source: "user",
       max_tokens: 64000,
     });
   });
 
   test("returns provider and model parameter specs with defaults", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
       method: "POST",
@@ -874,7 +896,7 @@ describe("TypeScript model settings", () => {
 
   test("merges the thinking toggle into reasoning_effort with an off default", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
 
     const createProvider = async (name: string, presetId?: string) => {
@@ -915,7 +937,7 @@ describe("TypeScript model settings", () => {
 
   test("VLM resolution fails closed instead of returning the hidden qwen-vl-max default", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const providerResponse = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
       method: "POST",
@@ -953,11 +975,14 @@ describe("TypeScript model settings", () => {
 
   test("preserves a masked key and clears it only on an explicit empty value", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({
-      settingsDir,
-      environment: { PI_API_KEY: "sk-direct-secret", PI_MODEL: "qwen3.8-flash" },
-    });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
+    // Direct credentials + model name come via the settings API, not env.
+    await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: "sk-direct-secret", model_name: "qwen3.8-flash" }),
+    });
     const current = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
 
     await fetch(`${baseUrl}/api/v1/settings`, {
@@ -1012,109 +1037,10 @@ describe("TypeScript model settings", () => {
     const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
     expect(providers).toHaveLength(1);
   });
-  test("bootstraps a DashScope provider from DASHSCOPE_API_KEY without inventing a model", async () => {
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({
-      settingsDir,
-      environment: { DASHSCOPE_API_KEY: "sk-dashscope-env" },
-    });
-    const baseUrl = await serve(service);
-
-    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`))
-      .json() as Array<Record<string, unknown>>;
-    expect(providers).toHaveLength(1);
-    expect(providers[0]).toMatchObject({
-      id: ENV_BOOTSTRAP_PROVIDER_ID,
-      preset_id: "dashscope",
-      api_key_configured: true,
-    });
-
-    // Key-only bootstrap must NOT fabricate an active model: running on an
-    // unchosen model silently bills the wrong account (2026-08-29 incident).
-    const models = await (await fetch(`${baseUrl}/api/v1/model-registry/models`))
-      .json() as unknown[];
-    expect(models).toHaveLength(0);
-
-    const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
-    expect(settings.model_name).toBe("");
-    expect(settings.api_key_configured).toBe(true);
-    expect(settings.run_ready).toBe(false);
-    await expect(service.resolveActiveModel()).rejects.toThrow("model are required");
-  });
-
-  test("env bootstrap honors catalog context facts for known models", () => {
-    const registry = defaultRegistry({});
-    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
-    // kimi-k3 in the local catalog: 1048576 window / 131072 output / 32768 suggested.
-    bootstrapEnvironmentDefaults(registry, auth, {
-      DASHSCOPE_API_KEY: "sk-dashscope-env",
-      PI_MODEL: "kimi-k3",
-    });
-    expect(registry.models[0]).toMatchObject({
-      model_id: "kimi-k3",
-      context_window: 1_048_576,
-      max_output_tokens: 131_072,
-      suggested_max_tokens: 32_768,
-      capabilities: { text: true, image: true, video: true, audio: false },
-    });
-    expect(registry.settings).toMatchObject({
-      model_name: "kimi-k3",
-      context_window: 1_048_576,
-      max_tokens: 32_768,
-    });
-  });
-
-  test("env bootstrap keeps the hardcoded fallback for models missing from the catalog", () => {
-    const registry = defaultRegistry({});
-    const auth: AuthState = { version: 1, direct_api_key: "", provider_api_keys: {} };
-    bootstrapEnvironmentDefaults(registry, auth, {
-      DASHSCOPE_API_KEY: "sk-dashscope-env",
-      PI_MODEL: "totally-unknown-model",
-    });
-    expect(registry.models[0]).toMatchObject({
-      model_id: "totally-unknown-model",
-      context_window: 131_072,
-      max_output_tokens: 8192,
-      suggested_max_tokens: 8192,
-    });
-    expect(registry.settings).toMatchObject({
-      context_window: 131_072,
-      max_tokens: 8192,
-    });
-  });
-
-  test("env bootstrap is idempotent and never overrides existing providers", async () => {
-    const env = { DASHSCOPE_API_KEY: "sk-dashscope-env" };
-    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    await ModelSettingsService.create({ settingsDir, environment: env });
-    const second = await ModelSettingsService.create({ settingsDir, environment: env });
-    const baseUrl = await serve(second);
-    const providers = await (await fetch(`${baseUrl}/api/v1/model-registry/providers`)).json() as unknown[];
-    expect(providers).toHaveLength(1);
-
-    const customDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const first = await ModelSettingsService.create({ settingsDir: customDir, environment: {} });
-    const firstBase = await serve(first);
-    await fetch(`${firstBase}/api/v1/model-registry/providers`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "Custom",
-        base_url: "https://models.example/v1",
-        api_key: "sk-custom",
-      }),
-    });
-    const restarted = await ModelSettingsService.create({ settingsDir: customDir, environment: env });
-    const restartedBase = await serve(restarted);
-    const customProviders = await (await fetch(`${restartedBase}/api/v1/model-registry/providers`))
-      .json() as Array<Record<string, unknown>>;
-    expect(customProviders).toHaveLength(1);
-    expect(customProviders[0]).toMatchObject({ name: "Custom" });
-  });
 
   test("ships no default model name: unconfigured until the user selects one", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
     expect(settings.model_name).toBe("");
@@ -1139,7 +1065,7 @@ describe("visual extraction model role", () => {
    */
   async function visionFixture(): Promise<VisionFixture> {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const createProvider = async (name: string, baseUrlValue: string, apiKey: string): Promise<string> => {
       const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {
@@ -1201,7 +1127,7 @@ describe("visual extraction model role", () => {
       vision_model_id: fixture.visionModelId,
     });
 
-    const reloaded = await ModelSettingsService.create({ settingsDir: fixture.settingsDir, environment: {} });
+    const reloaded = await ModelSettingsService.create({ settingsDir: fixture.settingsDir });
     await expect(reloaded.resolveVlmConfig()).resolves.toMatchObject({
       apiKey: "sk-vision-provider",
       model: "vision-chat-vl",
@@ -1249,7 +1175,7 @@ describe("visual extraction model role", () => {
 
   test("reports a credential blocker when the selected provider has no API key", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Keyless Vision Provider",
       base_url: "https://keyless.example/v1",
@@ -1276,7 +1202,7 @@ describe("visual extraction model role", () => {
 
   test("uses the active model for extraction when it is visual and no assignment exists", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const provider = await service.createProvider({
       name: "Visual Active Provider",
       base_url: "https://visual-active.example/v1",
@@ -1305,7 +1231,7 @@ describe("visual extraction model role", () => {
     // Simulate a hand-edited registry whose vision_model_id points nowhere
     // (updateSettings would reject the unknown id, so write it to disk).
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const first = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const first = await ModelSettingsService.create({ settingsDir });
     const provider = await first.createProvider({
       name: "Main Provider",
       base_url: "https://main.example/v1",
@@ -1323,7 +1249,7 @@ describe("visual extraction model role", () => {
     stored.settings.vision_model_id = "model_ghost";
     await writeFile(registryPath, JSON.stringify(stored), "utf8");
 
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     await expect(service.resolveVlmConfig()).rejects.toThrow(/重新选择/);
     expect(await storedSettings(settingsDir)).toMatchObject({ vision_model_id: null });
   });
@@ -1332,7 +1258,7 @@ describe("visual extraction model role", () => {
 describe("model registry list pagination and search", () => {
   async function loadedRegistry(): Promise<{ service: ModelSettingsService; baseUrl: string }> {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const baseUrl = await serve(service);
     const createProvider = async (name: string): Promise<string> => {
       const response = await fetch(`${baseUrl}/api/v1/model-registry/providers`, {

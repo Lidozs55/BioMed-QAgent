@@ -31,7 +31,7 @@ describe("legacy model.json migration", () => {
       "utf8",
     );
 
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
 
     const auth = await readFile(path.join(settingsDir, "model-auth.json"), "utf8");
     expect(auth).toContain("sk-legacy-secret");
@@ -87,7 +87,7 @@ describe("loaded registry schema validation", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+      const service = await ModelSettingsService.create({ settingsDir });
       expect(service.getSettings()).toMatchObject({
         max_tokens: 8192,
         // context_window falls back to the null default → inferred at runtime.
@@ -178,7 +178,7 @@ describe("vision model role migration", () => {
     );
     const registryPath = path.join(settingsDir, "model-registry.json");
 
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
 
     // The explicit visual role stays unset: a manually edited capability is
     // never promoted into an assignment during migration.
@@ -218,7 +218,7 @@ describe("vision model role migration", () => {
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+      const service = await ModelSettingsService.create({ settingsDir });
       expect(service.getSettings()).toMatchObject({ vision_model_id: null });
       expect(
         warnSpy.mock.calls.some((args) => args.join(" ").includes("vision_model_id")),
@@ -247,7 +247,7 @@ describe("legacy value range clamping on migration", () => {
       "utf8",
     );
 
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
 
     expect(service.getSettings()).toMatchObject({
       max_tokens: 8192,

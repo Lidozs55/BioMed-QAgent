@@ -78,7 +78,10 @@ export class PermissionBroker {
   private readonly audit: PermissionAuditSink;
   private readonly recordRunEvent: (payload: EventPayload) => Promise<void>;
   private readonly maxPendingMs: number;
-  private readonly pending = new Map<string, PendingRequest>();  constructor(options: BrokerOptions) {
+  private readonly pending = new Map<string, PendingRequest>();
+  /** requestIds whose resolve is in flight (concurrent-HTTP guard). */
+  private readonly resolving = new Set<string>();
+  constructor(options: BrokerOptions) {
     this.taskId = options.taskId;
     this.runId = options.runId;
     this.evaluator = options.evaluator;
@@ -272,94 +275,100 @@ export class PermissionBroker {
       entry.reject(new Error("permission request expired"));
       return false;
     }
-    this.pending.delete(runId);
-    if (decision === "allow") {
-      // The policy may have changed while the request was pending (e.g. the
-      // user switched to Restricted, or a deny rule was added). Re-evaluate
-      // the ORIGINAL request; a deny verdict invalidates the old approval.
-      const current = await this.evaluator.evaluate(pending);
-      if (current.decision === "deny") {
-        try {
-          await this.audit.record({
-            permission_request_id: pending.id,
-            task_id: pending.taskId,
-            run_id: pending.runId,
-            capability: pending.capability,
-            scope: pending.scope,
-            resource: pending.resource ?? null,
-            canonical_resource: pending.canonicalResource ?? null,
-            command: pending.command ?? null,
-            cwd: pending.cwd ?? null,
-            decision: "deny",
-            grant_scope: null,
-            timestamp: new Date().toISOString(),
-          });
-          await this.recordRunEvent({
-            type: "permission_resolved",
-            request_id: pending.id,
-            decision: "deny",
-            grant_scope: null,
-          });
-        } catch {
-          // Best-effort: the invalidation itself must not fail the settle.
+    // Concurrent-HTTP guard: a decision is applied exactly once per request.
+    if (this.resolving.has(requestId)) return false;
+    this.resolving.add(requestId);
+    try {
+      if (decision === "allow") {
+        // The policy may have changed while the request was pending (e.g. the
+        // user switched to Restricted, or a deny rule was added). Re-evaluate
+        // the ORIGINAL request; a deny verdict invalidates the old approval.
+        const current = await this.evaluator.evaluate(pending);
+        if (current.decision === "deny") {
+          try {
+            await this.audit.record({
+              permission_request_id: pending.id,
+              task_id: pending.taskId,
+              run_id: pending.runId,
+              capability: pending.capability,
+              scope: pending.scope,
+              resource: pending.resource ?? null,
+              canonical_resource: pending.canonicalResource ?? null,
+              command: pending.command ?? null,
+              cwd: pending.cwd ?? null,
+              decision: "deny",
+              grant_scope: null,
+              timestamp: new Date().toISOString(),
+            });
+            await this.recordRunEvent({
+              type: "permission_resolved",
+              request_id: pending.id,
+              decision: "deny",
+              grant_scope: null,
+            });
+          } catch {
+            // Best-effort: the invalidation itself must not fail the settle.
+          }
+          this.pending.delete(runId);
+          entry.reject(new PermissionDeniedError(
+            pending,
+            "Permission request was superseded by a stricter policy",
+          ));
+          return true;
         }
-        entry.reject(new PermissionDeniedError(
-          pending,
-          "Permission request was superseded by a stricter policy",
-        ));
+      }
+      let undo: (() => Promise<void>) | undefined;
+      try {
+        if (decision === "allow" && grantScope !== undefined) {
+          undo = await this.recordGrant(pending, grantScope, scopeWide);
+        }
+        await this.audit.record({
+          permission_request_id: pending.id,
+          task_id: pending.taskId,
+          run_id: pending.runId,
+          capability: pending.capability,
+          scope: pending.scope,
+          resource: pending.resource ?? null,
+          canonical_resource: pending.canonicalResource ?? null,
+          command: pending.command ?? null,
+          cwd: pending.cwd ?? null,
+          decision,
+          grant_scope: grantScope ?? null,
+          timestamp: new Date().toISOString(),
+        });
+        await this.recordRunEvent({
+          type: "permission_resolved",
+          request_id: pending.id,
+          decision,
+          grant_scope: grantScope ?? null,
+        });
+      } catch (error) {
+        // A failed grant/audit/event write must not lose the pending request:
+        // roll back any grant that was already recorded, keep the entry so the
+        // HTTP caller can retry, and surface the error. The tool call stays
+        // suspended until the approval actually lands (approval is not done).
+        if (undo !== undefined) {
+          try {
+            await undo();
+          } catch {
+            // Best-effort rollback; the failure is reported to the HTTP caller.
+          }
+        }
+        throw error;
+      }
+      if (decision === "deny") {
+        // Deny surfaces as a structured permission error to the tool call
+        // (plan §8), not as a "successful" decision.
+        this.pending.delete(runId);
+        entry.reject(new PermissionDeniedError(pending, "Permission denied by user"));
         return true;
       }
-    }
-    let undo: (() => Promise<void>) | undefined;
-    try {
-      if (decision === "allow" && grantScope !== undefined) {
-        undo = await this.recordGrant(pending, grantScope, scopeWide);
-      }
-      await this.audit.record({
-        permission_request_id: pending.id,
-        task_id: pending.taskId,
-        run_id: pending.runId,
-        capability: pending.capability,
-        scope: pending.scope,
-        resource: pending.resource ?? null,
-        canonical_resource: pending.canonicalResource ?? null,
-        command: pending.command ?? null,
-        cwd: pending.cwd ?? null,
-        decision,
-        grant_scope: grantScope ?? null,
-        timestamp: new Date().toISOString(),
-      });
-      await this.recordRunEvent({
-        type: "permission_resolved",
-        request_id: pending.id,
-        decision,
-        grant_scope: grantScope ?? null,
-      });
-    } catch (error) {
-      // A failed grant/audit/event write must NOT leave the original tool
-      // call suspended forever (audit fix, fault-injection tested). If a
-      // grant was already recorded (e.g. the persistent rule hit the disk
-      // before the event write failed), roll it back so no authorization
-      // survives a failed resolution (round-3 audit: transactional).
-      if (undo !== undefined) {
-        try {
-          await undo();
-        } catch {
-          // Best-effort rollback; the security-relevant failure is reported
-          // to both the HTTP caller and the tool call below.
-        }
-      }
-      entry.reject(toError(error, "permission decision could not be recorded"));
-      throw error;
-    }
-    if (decision === "deny") {
-      // Deny surfaces as a structured permission error to the tool call
-      // (plan §8), not as a "successful" decision.
-      entry.reject(new PermissionDeniedError(pending, "Permission denied by user"));
+      this.pending.delete(runId);
+      entry.resolve({ decision, grantScope });
       return true;
+    } finally {
+      this.resolving.delete(requestId);
     }
-    entry.resolve({ decision, grantScope });
-    return true;
   }
 
   /** Invalidate all pending requests for a run (cancel / shutdown). */

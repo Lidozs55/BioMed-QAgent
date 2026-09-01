@@ -8,6 +8,17 @@ import { CaretDownIcon, CheckIcon, CaretUpIcon } from "@phosphor-icons/react"
 
 const Select = SelectPrimitive.Root
 
+/**
+ * Base UI contract (unlike Radix): `<SelectValue>` renders the RAW selected
+ * value unless the Root receives an `items` prop
+ * (`Array<{ value, label }>` or `Record<value, label>`).
+ *
+ * Every `Select` usage MUST therefore pass `items` covering all its
+ * `SelectItem`s, so the closed trigger shows the human-readable label
+ * instead of an internal key. See `docs/` and the contract test in
+ * `src/components/ui/__tests__/select.test.tsx`.
+ */
+
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
     <SelectPrimitive.Group

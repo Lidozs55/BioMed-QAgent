@@ -2,6 +2,15 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 
+import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 interface MarkdownContentProps {
@@ -76,27 +85,27 @@ const components: Components = {
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-2 border-current/20" />,
+  hr: () => <Separator className="my-2 bg-current/20" />,
   strong: ({ children }) => (
     <strong className="font-semibold">{children}</strong>
   ),
   em: ({ children }) => <em className="italic">{children}</em>,
   del: ({ children }) => <del className="line-through">{children}</del>,
   table: ({ children }) => (
-    <table className="my-1 w-full border-collapse text-left text-xs">
-      {children}
-    </table>
+    <Table className="my-1 border-collapse text-left text-xs">{children}</Table>
   ),
-  thead: ({ children }) => (
-    <thead className="border-b border-current/20">{children}</thead>
-  ),
-  tbody: ({ children }) => <tbody>{children}</tbody>,
-  tr: ({ children }) => <tr>{children}</tr>,
+  thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+  tbody: ({ children }) => <TableBody>{children}</TableBody>,
+  tr: ({ children }) => <TableRow>{children}</TableRow>,
   th: ({ children }) => (
-    <th className="py-1 pr-2 font-semibold">{children}</th>
+    <TableHead className="h-auto py-1 pr-2 pl-0 text-xs font-semibold">
+      {children}
+    </TableHead>
   ),
   td: ({ children }) => (
-    <td className="border-b border-current/10 py-1 pr-2">{children}</td>
+    <TableCell className="border-b border-current/10 py-1 pr-2 pl-0 text-xs whitespace-normal">
+      {children}
+    </TableCell>
   ),
 };
 

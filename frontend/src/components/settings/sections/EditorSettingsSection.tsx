@@ -40,6 +40,10 @@ export function EditorSettingsSection() {
             description="选择按 Enter 时是发送消息还是插入换行。文件导入的提交始终使用 Enter。"
             control={
               <Select
+                items={SEND_SHORTCUT_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
                 value={sendShortcut}
                 onValueChange={(value) => setSendShortcut(value ?? "enter")}
               >

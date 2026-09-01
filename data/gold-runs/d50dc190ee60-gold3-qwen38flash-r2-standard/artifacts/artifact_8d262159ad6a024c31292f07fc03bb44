@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_31a55800-ac0c-40a5-b137-6d3b9e2bada8",
+  "requirement_id": "egfr-structures",
+  "universe_scope": "spec_source_bindings",
+  "scope_note": "Coverage is computed only within the task's declared source bindings (spec_source_bindings); this report is not a claim of exhaustive web coverage.",
+  "query_plan": [
+    {
+      "binding_id": "pdb-2ity",
+      "source": "pdb",
+      "mode": "builtin",
+      "provider_id": "pdb.files.v1",
+      "recipe_ref": null,
+      "adapter_id": "protein.structure.carrier.v1",
+      "accession": "2ITY",
+      "parameters": {}
+    }
+  ],
+  "acquisition_coverage": [
+    {
+      "binding_id": "pdb-2ity",
+      "source": "pdb",
+      "status": "acquired",
+      "asset": {
+        "asset_id": "asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d",
+        "sha256": "c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d",
+        "size_bytes": 250452,
+        "media_type": "text/plain",
+        "registered_at": "2026-08-31T08:25:05.147Z"
+      },
+      "rows": null,
+      "exclusion_reasons": []
+    }
+  ],
+  "discovery_queries": [
+    {
+      "operation_id": "tool:pdb:query:1",
+      "source": "pdb",
+      "query": "EGFR inhibitor complex",
+      "status": "success",
+      "result_count": 10,
+      "requested_limit": null,
+      "retrieved_at": "2026-08-31T08:21:03.440Z"
+    },
+    {
+      "operation_id": "tool:pdb:query:2",
+      "source": "pdb",
+      "query": "epidermal growth factor receptor kinase gefitinib",
+      "status": "success",
+      "result_count": 6,
+      "requested_limit": null,
+      "retrieved_at": "2026-08-31T08:21:09.805Z"
+    },
+    {
+      "operation_id": "tool:uniprot:query:1",
+      "source": "uniprot",
+      "query": "EGFR human receptor tyrosine kinase",
+      "status": "success",
+      "result_count": 5,
+      "requested_limit": null,
+      "retrieved_at": "2026-08-31T08:20:46.925Z"
+    }
+  ],
+  "summary": {
+    "universe_total": 1,
+    "acquired": 1,
+    "failed": 0,
+    "not_attempted": 0,
+    "integrated_rows": null,
+    "discovery_total": 3,
+    "discovery_failed": 0
+  }
+}

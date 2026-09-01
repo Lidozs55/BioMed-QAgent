@@ -24,7 +24,7 @@ import {
   type PiUpstreamEvent,
   type PiUpstreamSession,
 } from "../src/agent/pi-adapter.js";
-import { PHASE1_SYSTEM_PROMPT } from "../src/agent/phase1-prompt.js";
+import { PHASE1_SYSTEM_PROMPT, SYSTEM_BRIEFING } from "../src/agent/phase1-prompt.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -279,6 +279,49 @@ describe("Pi system prompt", () => {
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV/i,
+    );
+  });
+
+  test("briefs the system while deferring mechanics to the Phase 1 sections", () => {
+    expect(SYSTEM_BRIEFING.startsWith("[System briefing]")).toBe(true);
+    expect(SYSTEM_BRIEFING).toContain("[System constraints]");
+    expect(SYSTEM_BRIEFING).toContain("[System workflow]");
+    expect(SYSTEM_BRIEFING.length).toBeLessThanOrEqual(3_000);
+    // No wall-clock/deadline constraints exist; inventing a time limit is a
+    // binding violation (gold1-qwen direct-run failure mode, model-blockers B3).
+    expect(SYSTEM_BRIEFING).toMatch(/no wall-clock or deadline constraints/i);
+    expect(SYSTEM_BRIEFING).toMatch(/never invent any/i);
+    expect(SYSTEM_BRIEFING).toMatch(/not reasons to quit early, narrow a request, or report a fake blocker/i);
+    // No spinning: stop same-shape retries, debug minimally, bind plans to calls.
+    expect(SYSTEM_BRIEFING).toMatch(/consecutive identical failure signatures/i);
+    expect(SYSTEM_BRIEFING).toMatch(/minimal single-variable debugging or a genuinely independent route or source/i);
+    expect(SYSTEM_BRIEFING).toMatch(/bind each stated next step to the tool call that executes it/i);
+    // Exhaust before handoff (E3/J4/I1 model-half) and converge after publish
+    // (C2/G4 post-publication verification bound).
+    expect(SYSTEM_BRIEFING).toMatch(/exhaust before handoff/i);
+    expect(SYSTEM_BRIEFING).toMatch(/converge after publish/i);
+    // The briefing defers mechanics to the sections below instead of
+    // duplicating them: their exact wording must not appear here.
+    expect(SYSTEM_BRIEFING).not.toMatch(/never repeat an unchanged failing call/i);
+    expect(SYSTEM_BRIEFING).not.toMatch(/proves completion/i);
+  });
+
+  test("prepends the system briefing to the assembled session system prompt", async () => {
+    const upstream = new FakeUpstreamSession();
+    const capturedConfigs: BioMedSessionConfig[] = [];
+    const session = await new PiAgentAdapter({
+      createUpstreamSession: async (config) => {
+        capturedConfigs.push(config);
+        return upstream;
+      },
+    }).createSession(sessionConfig);
+
+    await collect(session.run("briefing order"));
+
+    const systemPrompt = capturedConfigs[0]?.systemPrompt ?? "";
+    expect(systemPrompt.startsWith("[System briefing]")).toBe(true);
+    expect(systemPrompt.indexOf("[Dataset completion contract]")).toBeGreaterThan(
+      systemPrompt.indexOf("[System briefing]"),
     );
   });
 });
@@ -1275,7 +1318,7 @@ describe("PiAgentAdapter", () => {
   });
 
   test("missing model credentials fail only when real session creation is requested", async () => {
-    const adapter = new PiAgentAdapter({ environment: {} });
+    const adapter = new PiAgentAdapter();
 
     await expect(adapter.createSession(sessionConfig)).rejects.toMatchObject({
       code: "INVALID_CONFIGURATION",

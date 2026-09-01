@@ -19,7 +19,7 @@ describe("concurrent settings writes", () => {
   test("serializes concurrent PUT and ends in a consistent state (M10-T06)", async () => {
     const settingsDir = await mkdtemp(path.join(os.tmpdir(), "biomed-put-"));
     roots.push(settingsDir);
-    const service = await ModelSettingsService.create({ settingsDir, environment: {} });
+    const service = await ModelSettingsService.create({ settingsDir });
     const server = createServer((request, response) => {
       if (!service.handle(request, response)) response.writeHead(404).end();
     });

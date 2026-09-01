@@ -1,0 +1,2 @@
+chain_record_id,structure_id,structure_version,chain_id,polymer_type,entity_id,entity_namespace,sequence_length,source_id,source_locator
+2ITY_v6_A,2ITY,6,A,polypeptide(L),,,327,source_pdb_2ity,"{""locator_version"":""2.0"",""locator_type"":""json_pointer"",""asset_id"":""asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d"",""logical_file"":""source_assets/asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d/2ITY.pdb"",""raw_value"":""A"",""json_pointer"":""/pdb_lines/548""}"

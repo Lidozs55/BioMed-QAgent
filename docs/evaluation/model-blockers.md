@@ -1,9 +1,16 @@
 # 模型卡点收集（gold 正式运行观察）
 
 > 目的：集中收集各 gold 案例正式运行中暴露的 **Agent 行为卡点**（提示词、产品、接口陷阱三类），供后续**批量**修复与提示词优化对照。
-> **当前处于收集期：只登记，不修改代码。** 等组员把其余案例测完后再统一分流修复（跟踪项见 [TODO](../TODO.md)）。
 > 纪律：每条卡点必须给出证据（事件 seq / 证据包路径 / 正文原话），不可证的不进表；证据包放 `data/gold-runs/<commit>-<case>-<model>-rN/`——**`data/` 整体保持 git 忽略（无白名单），每个 run 归档完必须手动 `git add -f data/gold-runs/<该目录>` 入库**（已 tracked 的 62 件为 gold1-r3…gold10 全部证据 + `data/gold/` 历史 log；漏 add 的新包不会被 git status 提示，静默丢失）；用量与终态见各包 `closure.json`（`run_usage`）。
 
+## 文件结构（2026-08-31 按内容位置拆分）
+
+> 拆分前全文留档于 `docs/archive/model-blockers-2026-08-31-before-split.md`（未提交；若精简过程中发现丢失决策依据，可从此恢复）。
+
+- [triage.md](triage.md) —— **修复面分流总表**（A/B 两分类，含 2026-08-30「已沉淀」与 2026-08-31「框架修复落点」注）+ 兄弟事实登记。**分流修复时以此文件为准**。
+- 本文件 —— 各 gold 案例逐条卡点登记（同一案例多 run 合并记录）+ 条目模板 + 十案全景对比 + 跨案恒等式。
+
+修改纪律：新增/修订卡点 → 本文件对应案例段落；分流/汇总结论 → triage.md。
 ## 条目模板
 
 ```markdown
@@ -14,59 +21,6 @@
 ```
 
 归类：**模型面**（知识不足/奇怪想法/工具描述不清可提示词解）/ **框架面**（框架限制死需动代码）/ 源边界（非损失）。
-
-## 修复面分流（两分类总表，以此为准）
-
-各 run 表格里历史标注的"prompt/产品/接口陷阱"归类保留作记录，分流修复时**以本节为准**。
-
-### A 类：模型认知 & 工具描述不清 → 提示词可解
-
-| ID | 一句话病因 | 提示词切入点 |
-|---|---|---|
-| B2 / E4 | 动态路由零调用（想象复杂度/包装成"范围决策"） | **穷尽界**：blocked/上交前必须实际调用一次 dynamic preflight 并附结果 |
-| B3 | 幻觉外部时限（预算 240 只用 35 就"等用户指示"） | 提示词写明 turn 预算事实；禁止以"时间限制"作放弃理由 |
-| B4 / C5 / D5 | 同路重复撞墙；检索变体空转；不扩池就断言"唯一候选" | 同一约束重试 ≤2 次止损；断言池枯竭前 ≥N 个不同检索式 |
-| B5 | 未 activate 直接调用，吃 Tool-not-found（工具懒加载规则未学会） | 教学 skill→tool 映射与先激活后调用；工具报错文案内联激活用法 |
-| D4 | `scaffold_dataset_execution_spec` 空参调用 | 教学 schema 必填约束（工具描述不清属此面） |
-| B6（前半） | search_gdc 首结果不对路就直接放弃整个 GDC 线 | 候选被证实存在时必须完成一次最小 formal 尝试 |
-| C2 / G4 | 发布后无界复核（gold1-r3 烧 79% token；gold4 试 58 调用撞同一堵墙 20 次才停） | **收敛界**：发布后核验预算 ≤N 调用；同一通道连续 2 次失败即止损并以 publication 事件为核验终点 |
-| E3 | 四个发现工具全激活零调用，向用户要本可自得的清单（PDB 子集/NCT） | **穷尽界**："请用户提供 X"前必须实际调用能拿到 X 的已激活工具并附证据 |
-| I1(模型半) | **可行方案不执行、上交待确认**：模型自己诊断出"拆三次独立 build"是正解且完全在其权限内（prepare/submit 自家工具），却写进"需要您的协助"第 3 条终止——因权限面 deny 经验（C1/D1）错误泛化为"改构建形态需请示"；63/240 轮即收尾 | **执行优先条款**：凡不超出已激活工具权限、不需要外部凭证的方案，进求助清单前必须本 run 内实际执行一次并报告成败；求助清单只放真正的用户输入（凭证/文件/口径决策） |
-| I4 | **单点探测失败即判整通道死**：gold7 对 `dbsnp.files.v1` 只试 1 个 rsID 空回就归因"provider 不可用"；无法区分"全灭 vs 该记录缺失"，也给框架立项报了过重的诊断 | 归因前 ≥2-3 个独立样本探测，终答按样本粒度报告失败率 |
-| J4 | **可达面自我设限（穷尽界新亚型）**：gold8 FAERS 绑定不依赖已阵亡的名册（逐药 openFDA 可查，历史成功 9 药 68 行），本次只绑 1 药即以"仅 acetaminophen 有可溯源记录"收尾——与历史事实矛盾，成功形态未复制到达可及样本上限 | 穷尽界条款扩展：**已在本案跑通一次的绑定形态，须复制到全部已核实可达样本或在终答逐样本说明放弃原因**；终答"只有 X 可行"前须列尝试矩阵 |
-| K3（调试半） | **同错误签名连续重复不最小化定位**：gold9 从首次 `OUTPUT_BYTES_MISMATCH` 到自检出 JSON 换行符 bug（`\n`→字面 backslash-n）用了约 15 轮、~10+ 次同型失败，靠灵感而非二分复现 | 调试纪律条款：**同一错误签名连续 ≥3 次即停止常规重试，改用单变量最小化复现**；把该能力写进 [Control and recovery] 段（此 bug 最终由模型自行定位，教学只为省成本不是救正确性） |
-| L1 | **回声死循环（退化形态，gold10 末段）**：~20 轮复读同一句"I'll test the two decisive facts"零工具调用，run 在"明知三表可发"状态下自我终止 0 发布；模型侧无法自纠（复读本身消耗了停止线） | 提示词只救一半（"计划句必须绑定工具调用"）；主修在框架行（runtime 相似度检测→steer/no_progress 护栏） |
-
-### B 类：框架限制 → 需动代码
-
-| ID | 一句话病因 | 修复入口（立项建议） |
-|---|---|---|
-| B1 / D1 / D3 / E5 / G1 / H4 / I3 | **载体检视与发布回执链**（同一根因链，最高优先）：preview/extract 不认 gzip；download 后资产首查 "not found"（D3/H4/I3 三个入口实例）；execute 不回传 artifact `asset_id`；已发布产物全工具面零读取通道（artifact_32hex/裸 digest/workspace 路径全不可达；gold9-K5 五件 artifact 全读不回，模型如实画界"ID-form gate + Core storage isolation"）——gold4 实证烧 81% token 撞墙，gold2/gold8 把题面字段判成不可核实 | 一个代码立项：① execute/publication detail 返回 artifact asset_ids（最小修）② preview/extract 支持 gzip ③ 所有 download/acquire 工具落盘+登记同事务原子化 ④ permission deny 响应附"无此读取通道"语义 |
-| E1 / E2 / G2 | **变异/试验发现链缺失**：clinvar.files.v1 要逐条 VCV 但无 accession 发现工具；clinicaltrials provider 要具体 NCT 但无检索工具；`variant_evidence` 静态族无 live provider | 补 esearch 家族发现工具 + variant_evidence 接 live provider（同族合并） |
-| D2 / C4 | **表达能力缺口**：gene-level 映射在正式路线中不可表达（mapping_files 拒 workspace 路径、probe_long.v2 无 gene 维度）；无 SOFT 注释平台直接不可闭合 | gene_expression family 增加 crosswalk 支撑表（参照 gold10 taxon crosswalk 方案）+ mapping_files 支持 Core-acquired 绑定 |
-| B7 | **配置双轨**：PUT settings 只改显示层、registry active 记录才是执行层（r1 整场跑错模型计费）。硬编码 default 那半已修（`fix/no-hardcoded-model-defaults`） | 剩余：PUT/active 级联或冲突拒绝；GET /settings 回显 `resolveActiveConfig()` 真值 |
-| C3 | basic_statistics 对大表字符串溢出（V8 单串上限） | 流式/分块解析或声明上限+抽样 |
-| G3 | literature_evidence provider 可靠性：Europe PMC `http_client_error` 双复现、BioC 空文档回 `invalid_input` 误导重试 | 复现对照 headers；空全文应回结构化 `no_fulltext` |
-| B6（后半） | search_gdc 查询 "breast cancer TCGA" 首结果 TCGA-LUAD | provider 查询→project 映射排序修复 |
-| H1 | **ChEMBL 发现→绑定断链**：`search_chembl` 拿到的真 CHEMBL ID 喂不进 `chembl.files.v1` 固定 provider 的 validity 门（~11 种参数形态全拒），gold5 题面 activity 数据结构性进不来 | 复现并修复 provider accession 校验门，接受自家发现工具的输出形态（链 2 合并立项） |
-| H2 | **`validate_dataset_execution` 假绿灯**：valid:true 但 schema 表达不了需求字段（`activity.v1` 对 assay 条件/单位/跨源列全 `unknown_required_field`）——校验层与表达层脱节 | validate 增加"spec 需求字段 × schema 能力"覆盖检查，不可表达直接 invalid 并指路 |
-| I1 | **Dynamic 单 projection 全表耦合**：一张空表（variant_genes）拖死同 build 内数据已全部核实的 studies 表，gold7 因此 2/3 交付 | per-table partial publish，或拒绝信息直接指路"拆独立 build"；另：模型给出拆建方案后停手等确认——穷尽界提示词一并覆盖 |
-| I2 | `dbsnp.files.v1` Core provider 返回空载荷（工具面 lookup_dbsnp 正常）→ GRCh38 坐标核验进不了正式链 | 复现 provider egress/解析；并入链 2 变异发现立项 |
-| I3 / J3 | staging 资产命名空间割裂新增实例：`download_supplementary` 的 ZIP 落 source_assets 但 preview "registered asset was not found"；**gold8 把该链的发布回执端放大到极限——为读回 1 个发布回执烧 29 调用/71% 墙钟，preview×17 全拒、4 次 `/publications/*` 外部锚定停审 deny**（链 1 断点最全形态） | 链 1 修复时覆盖 download_supplementary 登记原子性 + permission deny 响应附"无此读取通道"语义 |
-| J1 | **名册类外部源零 provider + 官方站全灭 + 无"用户上传→Core 权威资产"通道**：DILIrank 六通道逐 URL 实证不可达（DNS/404/401/ETIMEDOUT），题面 2/4 表 NO_DATA；quarantine 旁路明确非权威、进不了正式链 | 定义"用户上传→task-owned Core 资产→绑定"受治理正式通道（区别于 quarantine 非权威旁路）；DILIrank 镜像准入 |
-| J2 | **Bookshelf/LiverTox HTML 无 formalize provider**：页面可读（navigate 成功）但无 Core provider 把 HTML 变不可变载体 → "not publishable"。即 TODO"Recipe 格式宽路径（HTML/PDF）"的实测代价 | 按 Recipe 宽路径立项：HTML→registered parser→field_mapping HIL |
-| — | **wire 缺陷（gold7 新证，gold8 第 3 案，gold9-K4 第 4 案）**：全量重建后 receipt-only submit 仍现 `Expected object at $projection`×3，随后自行消失进入实质迭代；gold8 submit@796/815 同错再现；**gold9 模型自己数出 receipt-only `$projection undefined`×3 计入对账表——4/4 动态案全中**，stored-submission 重解析缺陷（疑与 a98a151a proposal 变更相关） | 写复现用例钉死（receipt-only + 无 echo 形态），修 contracts/proposal 版本兼容。**优先级最高** |
-| K1 | **静态适配器 32MiB 容量上限**：Orphadata 54MB XML 物理进不了 registered 文件通道，题面起点（疾病目录）只剩动态 transform 硬啃 | 大 XML 分块/流式 provider 或容量分级准入 |
-| L2 | **DA 载体 media-type 断链（gold10）**：论文补充 xlsx 经 acquire/extract 全链路 media type 恒为 `application/octet-stream`，DA 适配器只收 `text/csv`/真 xlsx → 唯一现实数据源进不去；`paper_supplement_differential_abundance` xlsx 解析通道存在但 guidance 未覆盖，模型外围试探 20+ 次不可见 | extract 解码产物按成员真实类型标注 media type；research_data_guidance microbiome 段点名 xlsx→DA 绑定姿势 |
-| L5 | **spec-as-string 4096 字符 transport 限制**（与 K2 同族）：多绑定四表 spec 逼近上限，压缩 transform 表达 | 与 K2 信封提升合并立项 |
-| K2 | **transform_source 尺寸天花板**：完整四表 integrator 装不进一次 prepare/submit 信封，多次截断失败后模型被迫发 383 字节"通路探针"代替产品 | prepare 分步传模块 / 提上限 / receipt 端存代码、submit 只传引用 |
-| K3（方言半） | **transform 沙箱方言陷阱**：禁 bracket access + JSON 内 `\n` 到 Core 变字面 backslash-n，同一 OUTPUT_BYTES_MISMATCH 烧 ~10+ 轮，是 20M token 主要来源 | admission 报错附最小可复现样例 + 官方 workaround 清单（换行用 String.fromCharCode(10) 等）写进 transform 工具描述 |
-| — | supervisor 对 Host events 瞬时 HTTP 500 零容错（3 连败，均在 operation_progress 风暴时段）+ Host 端 500 本身 | 运维面：supervisor 加重试；查 server events 端点 500 根因（疑似独立 bug） |
-| H3 | **stale-build 撕裂**：`node dist/index.js --static` 裸启动绕过 `prestart/build-contracts-if-needed`，contracts dist 落后 server 源码一个 rename（c005e323）→ gold5-r1 全场 thrash 报废 | 运维纪律：重启 static Host 前强制 `pnpm build`；或给 supervisor/runner 加 dist-vs-src mtime 启动断言 |
-
-### 不属于两类（外部源边界，合理阻断）
-
-- E6：COSMIC 需登录/API key，按边界规则拒绝——非损失。
 
 ## gold1 @ qwen3.7-plus（2026-08-29，main@5ac29b1dbf7d，task_ts_374f1e07-7255-41c3-92b7-6357c04ff12d）
 
@@ -96,8 +50,7 @@
 > | 发布后（回执验证+报告） | **41** | 326,906 | **10,503** | 4,171,136 | **4,508,545** | 592s |
 > | 合计 | 60 | 534,599 | 14,470 | 5,158,272 | 5,707,341 | 1463s |
 >
-> 上下文峰值 136,294 / 256k；首轮 29,157。**发布后阶段占 79% 计费 token、一半墙钟、73% 输出**——C2 的定量代价。成本 = 各列 × DashScope 单价（手工价格表）。
-> 记账缺口（待分流）：usage 目前只聚合到 run 级（`RunSummary.usage`），阶段/单轮拆分每次要手写脚本扫 `context_usage.usage` 事件——应补一条持久聚合命令（如 `gold:usage <evidence-dir>` 输出 pre/post 与逐轮表）。
+> 上下文峰值 136,294 / 256k；首轮 29,157。**发布后阶段占 79% 计费 token、一半墙钟、73% 输出**——C2 的定量代价。
 
 | # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
 | - | ---- | ---- | ---- | -------------------- |
@@ -108,9 +61,45 @@
 | C5 | **发现查询收窄空转**。追加 3 次 `search_geo`（GPL96/HGU133A 变体）total_count 0/1/0——在已知无同平台第二系列的方向上重复碰瓷 | prompt（轻） | 终答"发现查询收窄失败"段 | 同一约束变体重试 ≤2 次即止损（与 r1-B4 同族，正样本对照下影响小） |
 
 - **行为正样本（值得保留进 prompt 教学）**：单平台同粒度设计优先（43T+43N/GPL96）、拒绝跨 GSE 拼行、发现"probe-mapping 行数未独立验证"后主动修订而非宣称、Benford/末位数偏差如实保留并解释为 MAS5 log2 平台特征、pairing 推导规则交人确认——r1 的 B2/B3（动态路由零调用、时限幻觉）在 r3 未复现。
-- 基础设施观察（非模型问题，不入模板）：supervisor 死于 Host 瞬时 HTTP 500（seq≤207 journal 断档）；watcher 进程被控制台会话回收。durable 存储为唯一权威记录（1005 事件完整）。
+
+### gold1 卡点状态刷新（2026-08-31，依据 r4 post-fix 复测；对齐评测规范 `data/gold/README.md`）
+
+| 卡点 | 最新状态（r4 活体复验） |
+|---|---|
+| C1 gzip 视检→shell 绕路 | **已修+复验通过**：`core-asset-tools` gunzip 落地（triage「2026-08-31 框架修复落点」链 1 子集）；r4 中 bash 被 deny 后 `preview_core_asset` **一次通过 ×2**，无绕路无循环 |
+| C2 发布后无界复核 | **大幅缓解**：回执读回通道打开（链 1 修复③+deny 附 hint）后 r4 post-pub 仅 15 calls/361s 且全为有效逐行验证（r3：41 calls/4.51M token 撞墙）；「预算上限」硬收敛仍开放；通用行为面已沉淀 `[System briefing]` |
+| C3 basic_statistics 溢出 | 未复现（模型没再试）；**风险仍在**：r4 主表 870–909 MB，同工具再试必炸，条目保持开放 |
+| C4 无 SOFT 平台不可闭合 | **仍存在（r4 再确认）**：GPL27630 无注释表（源侧事实），D2/C4 表达能力立项不变 |
+| C5 检索变体空转 | 未复现：r4 仅 `search_geo`×1 即锁定候选（同路止损已沉淀 briefing） |
+| （关联）B7 配置双轨 | r4 前双层断言（settings=registry=执行层）一次通过；activate→settings 反向同步已落地，legacy PUT 一致性仍开放 |
+
+**r4 与评测规范的合规偏差（如实记录，正式对照实验前须修正）**：① 规范上下文**统一 1M**，r4 实际 256k（峰值 142k 未触发压缩，方向结论有效，但 gold1–10 全部历史 run 均为 256k，不满足新规范，后续重测须先改配置）；② 规范输入=各案例 `TOPIC.txt` 原文，`data/gold/gold1_*/` 目录尚未建立，r3/r4 用 `docs/evaluation/gold-v1/prompts/gold1.txt`（r3 另附加过交付描述，不合规）；③ 规范 run 记录入 `data/gold/<case>/runs-log.md`——待 case 目录建立后把 r3/r4 记录补入（本文两节即素材，避免与队友建目录的命名冲突暂不代建）；④ r4 未挂 supervisor（其 events-500 脆性未修），采用人工监控+durable 归档，证据链完整。
+
+## gold1-r4 @ qwen3.8-flash（2026-08-31，main@07962047，post-fix 复测，task_ts_393e5b8b-2640-43c0-a03f-2ddc9367f782）
+
+> **修复后回归样本**：与 r3 同 TOPIC、同模型、同 Host 姿势（重建→双层配置断言→`model_change` 铁证）。36 calls / 2193s / **3.73M token（r3 的 65%）** / 峰值 142k / **工具错误仅 2**（r3 为 7+，且十案普遍两位数起步）。
+>
+> | 阶段 | 调用 | token | 墙钟 | 对比 r3 |
+> | --- | --- | --- | --- | --- |
+> | 发布前 | 21 | 1,838,570 | 1536s | 大降（r3 发布前已烧一半） |
+> | 发布后 | 15 | 1,893,629 | 361s | **自检有效完成而非漫游**（r3：41 调用/4.51M/592s 撞墙） |
+>
+> 终态 `pub_breast_tumor_normal_gse15852_d6614644a0eb07e5`（GSE15852/GPL96，9 artifacts 含新 `source_coverage_report.json`），86 样本 43T+43N **逐行回读确认**，5.06% 探针无映射/Benford 平台特征/单系列局限全部如实申报。
+
+**已修项的活体复验（本次跑中直接目击）**：
+1. **链 1 视检**：workspace_exec(bash zcat) 被 deny 后模型**一次即转向** `preview_core_asset` → **gz 预览一次通过 ×2（err=false）**。r3/D1/L2 的死墙实测消失。
+2. **G1/E5 回执读取**：发布后 `inspect_source_coverage`×2 + `workspace_list/read` ×11 全部成功——模型第一次真正读回并逐行验证了自己发布的表（十案里从未有过），发布后开销从"撞墙"变成"验证"。
+3. **wire `$projection`**：本 run 无动态路线，未覆盖（**该修复仍需一个动态案复验**，如 gold7/9/10 重跑）。
+4. **B7 配置双轨**：run 前 settings/registry 双层断言一次通过（PUT 语义修复的行为面未深测）。
+5. 队友新工具 `inspect_source_coverage`（a98a151a）已被模型自发采用——发现性良好。
+
+**残留观察**：execute 第一次把发现阶段的 workspace asset 路径塞 `source_files` → `formal dynamic carrier lacks exact Core acquisition provenance`（retryable），模型自我诊断正确（"交付数据不依赖那次字节"）且一次修正成功——D2 类"Core acquisition provenance"门槛仍会对模型产生一次可预期的困惑税，guidance 未变。bash 冲动（第 2 次跨案复现）仍在，被政策正确接住。
+
+**新退化风险记录（供组员测其余 case 时留意）**：`merged/primary.csv` 报告为 **870–909 MB** 主表——gene_expression.long.v2 全展开后体量巨大，`basic_statistics` 的 V8 单串上限（C3）在这种表上必炸；r4 模型未尝试跑它（进步），但该尺寸对下游下载/预览链是新压力点。
 
 ## gold2 @ qwen3.8-flash（2026-08-30，main@74b81a19c1ff，task_ts_183292cd-0e9d-439d-a5ae-2786fa9eba34）
+
+
 
 > 身份断言通过（`model_change`=dashscope/qwen3.8-flash）。终态 **succeeded_publication（部分交付）**：`pub_luad_egfr_gse31852_probe_v1_8c9cb8a834cae23b`，probe-level 长表 4,128,828 行（33,297 探针×124 样本），validation 10/10 passed，coverage 1.0，7 artifacts。
 > **但 gold2 题面三要求只闭合 1/3**：probe-level ✔；样本临床/EGFR 分组 ✘（NO_DATA）；gene-level 映射表 ✘（blocked）。模型对后两项给出了逐项尝试日志与请求清单，零虚构、零临时 CSV 冒充。
@@ -136,6 +125,26 @@
 - **正样本（保留进教学素材）**：execute 一次失败后自纠参数重试成功；124 样本组标签拒绝用模型知识填充（宁 NO_DATA）；拒绝 provisional CSV；请求清单可直接执行（含安装命令与授权选项）；发布后收敛比 gold1 快 2.2 倍（267s vs 592s）。
 - 基础设施观察：supervisor 第 3 次死于 `operation_progress` 事件风暴时段的 Host 瞬时 HTTP 500（journal 停在 seq≤200）；本 run 起改用"人工监控+durable 归档"，证据完整性不再依赖 supervisor 存活。
 
+## gold2-r2 @ qwen3.8-flash（2026-08-31，main@236e3c8f8a2a，**规范版复测**，task_ts_f696876d-f559-40e6-a074-fd348b1028c6）
+
+> 首案按 `data/gold/README.md` 全流程执行：TOPIC=prompts 原文、上下文调至规范 1M、supervisor --adopt 挂账（2 次停审人工 deny 后续挂成功，journal 全程无断档）。62 calls / 45.9min / **6.96M token** / 峰值 158,674（1M 下压缩路径未触发）/ **工具错误仅 6**（上案 10+）。
+> 终态 **succeeded_publication（1/3）**：`pub_gse31852_probe_93b14dd03566dacf`（4,128,828 行 probe 长表，validation 10/10，provenance 1.0，8 artifacts 含 source_coverage_report，**发布回执逐行回读验证**——抽样 raw_value 对上 GSM）。
+
+**复验结果——已修项确认（+3 项新活体证据）**：
+1. **D1/gzip 视检 → 已修生效**：`preview_core_asset` gz 解码一次通过 ×2（上案"五路全封"的最初一环）；模型仍先后两次伸手 `bash -c` / 纯 `zcat`（seq77/134 停审 deny）——**能力修好了，行为冲动残留**（briefing 止损条款管住了循环：两次被拒即弃，未再第三次）。
+2. **D3/下载即登记 → 已修生效**：本 run preview 未再出现"registered asset was not found"（上案 seq799 死点）。
+3. **G1/发布回执 → 活体打开通道**：post-pub 22×`workspace_read`+4×`inspect_source_coverage` 全成功，上案 4 种 ID 命名空间混乱一次未现；发布后 942s 全部用于**有效**审计对账（对照上案同款时间做无头漫游）。
+4. **D2 gene-level 形态刷新（仍未闭合，但阻塞点后移了）**：mapping_files 注册通道这次**被接受**（validate 双绿灯+执行），死在基因级覆盖率闸门 `probe_coverage_required_gene_level`：GPL6244 是基因级 ST 阵列、ID_REF 本身是 Entrez ID，Core 折叠不进 symbol/ENSG，coverage 0.6666 < 0.80 → 判不发布。**新框架条目**：gene-required 闸门对"原生基因型探针平台"无折叠路径（K-编号 2 见下）。
+5. **EGFR per-sample 状态 → 从"不可知"变"已证不可达"**（质变）：gz preview 已能开卷，但 SOFT 解码 153MB 的 `!Sample_characteristics` 区块在 ~21MB 之后，**preview 固定 head window 无随机寻址** → 模型判三条路（exec 被拒/preview 窗口/PDF 抓取无工具）全封，**明确拒绝引用记忆中的 BATTLE 名单造替换行**。新框架条目：大文件中段读取缺口（链 1 最后一段）。
+
+| # | 卡点 | 归类 | 证据 | 建议 |
+| - | ---- | ---- | ---- | ---- |
+| M1 | gene-level 覆盖率闸门不认"Entrez-ID 即探针"平台（GPL6244 类），0.6666<0.80 连坐拒发 | 框架 | `probe_coverage_required_gene_level` failed 详情（终答原文） | 折叠规则加 Entrez→symbol 通道或此类平台 floor 特判 |
+| M2 | preview head 固定窗口，无 offset/分块——大 SOFT/matrix 中段字段（正是题面所需）读不到 | 框架（链 1 尾段） | 终答"三条读取途径均被封死"②；153,415,533 B 载体 | preview_core_asset 支持 offset/length 分块读（workspace_read 已有，移植即可） |
+
+**行为面记功**：`search_xena`×4 含控制查询（TCGA LUAD）全 0 → 判"本环境 provider 无响应"且**不再重试**（对上案 I4"单点判死"的完全反向修正）；样本分组宁缺不造。
+**与上案对照**：46min/6.96M ≈ 40min/7.67M（耗时持平、错误减半、交付同档但验证深度质变——上案 probe 表发出去没读回，本案逐行抽样）。规范偏差记录：本次 supervisor 挂账成功（无 500 事件），但两次停审仍需人工；`data/gold/gold2_*/` 目录未建，本段即 runs-log 素材。
+
 ## gold3 @ qwen3.8-flash（2026-08-30，main@2c511efc5080，task_ts_307966b1-4398-4600-94c8-6c6886290b39）
 
 > 身份断言通过。终态 **succeeded_publication（1/5 交付）**：`pub_egfr_uniprot_target_cefd96a001558066`（target_evidence 族，UniProt P00533 蛋白身份 + 3 supporting 表，7 artifacts）。题面五类数据：UniProt ✔ 正式；ClinVar 变异 ✘；COSMIC ✘（源边界，合理）；临床试验 ✘；PDB 结构 ✘；药物信息 ✘。
@@ -159,6 +168,17 @@
 - **正样本**：6 次 execute 失败每次只修一个具体输入事实（"Fixing only that fact"，对照 gold1-r1 的乱猜参数是质变）；拒绝臆造 VCV/NCT/asset；终答逐 blocker 标注路由判定+归因+求助清单，且明确区分"失败事实 vs 范围决策"。
 - 行为形态变化（三案对比）：gold1-r1=乱撞墙后幻觉时限放弃；gold1-r3=成功但发布后无界复核（79% token）；gold3=**未撞墙但提前收手**（工具在手不用）。C2 与 E3/E4 是两个方向的极端，提示词需要同时含"发布后收敛界"与"上交前穷尽界"。
 
+## gold3-r2 @ qwen3.8-flash（2026-08-31，main@d50dc190ee60，**规范版复测**，task_ts_31a55800-ac0c-40a5-b137-6d3b9e2bada8）
+
+> 规范流程：TOPIC 原文、1M 上下文、supervisor 全程挂账（本次无 500，journal 642 全量 + closure 自动产出，artifact 下载合计 ~28KB 无大文件问题）。**36 calls / 1.47M token / ~6 分钟**（上案 20 calls/0.78M 但只发 1 表）。终态 **succeeded_publication ×2**（上案 1/5，本案 2/5）：`pub_egfr-target-identity_…` + **`pub_egfr-structures_ec15d414651cd857`（PDB 2ITY 等复合物正式发表——上案宣称"PDB 需逐 ID 动态绑定、超合理轮次"而零尝试的那一类）**。
+
+**复验结论**：
+1. **上案 E3（发现工具全激活零调用）已修复**：`search_uniprot`/`search_pdb`/`lookup_dbsnp`/`lookup_clinvar_counts` 本 run 全部实际使用——`[System briefing]` 穷尽界条款活体生效。
+2. **上案 E4 的"想象复杂度"拿到反向证据**：PDB structures 走**静态 execute 即成功**（protein_structure 族），全程 0 次 prepare/submit。上案"动态绑定超出合理轮次"的判断不成立——路由认知错误，条目转正样本素材（briefing 生效后此类错误在本 run 未现）。
+3. **N1（新框架卡点，比 E1/E2 定位更准）**：ClinVar/ClinicalTrials 的 fixed provider **契约自相矛盾**——先报 `does not accept binding parameters; this is a fixed provider`，按注册源路径走又报 `ClinVar /result/uids must be a non-empty array`（ClinicalTrials 同款 `/studies must be a non-empty array`）。**没有哪种输入形态能同时满足两条** → 这两个 live 源从 agent 侧结构不可绑定（上案 E1/E2"缺发现工具"的表述可收窄为"fixed provider 参数契约死锁"）。
+4. **行为面成熟**：发现数据（ClinVar 4181/251、rs121434568 L858R、4WKQ/4I22/3UG2）全部标注"discovery only，never fabricated into rows"；drug-info 拒绝手编动态语义（信任规则引用准确）；COSMIC 边界一致；无 provisional（理由：可发的已发，未发的 blocker 真实）。
+5. execute×12 中 10 错为第二/三表参数迭代（每次错误形态不同，无同签名循环）；`lookup_clinvar_counts` 单次成功。
+
 ## gold4 @ qwen3.8-flash（2026-08-30，main@0b534ce30d5a，task_ts_7d6e45c2-e136-4cbf-80f5-4d32cc06d1f5）
 
 > 身份断言通过。**首次跑前安装 Playwright Chromium**（D1-④/E2 环境项消除；本 run 未依赖浏览器通道）。终态 **succeeded_publication ×2（2/4 交付）**：`pub_sarscov2-spike-ace2-structures_ef36631509d5bf32`（4 PDB 载体：6M0J/6LZG/6XM5/7JWY，含链/配体/pH 实验条件）+ `pub_sarscov2-spike-ace2-targets_edb3ace3986bf001`（Q9BYF1+P0DTC2），各 7 artifacts，走静态族路线。
@@ -180,14 +200,29 @@
 | G4 | **自检无界复发（C2 变种）**：对比 gold1-r3 有进步（最终主动 stop probing 并总结原因），但止损仍花了 58 调用；若提示词写明"回执通道不可用时，以 publication 事件+artifact roles 为核验终点"，可省 ~80% token | prompt | phase_split 比例 | 提示词加"发布后核验预算 ≤N 次；连续 2 次同类工具失败即停止该通道尝试" |
 
 - **正样本（本四案最强）**：载体甄别——search_pdb 假命中 5 件（7AN4 弯曲菌差向异构酶、6VN2 USP7、7NX3 ALK…）**全部剔除且给出物种/蛋白理由**；保留结构逐条带分辨率+PMID；"载体获取失败 ≠ 文献不存在"的区分；拒绝臆造变异行；Dynamic 变异构建给出完整方案后请求范围确认（对比 gold3-E4 的"要清单但工具在手不用"，这次的确认请求附了具体 provider/位点方案，属合理边界）。
-- 四案纵向（同模型同 Host）：gold1-r3 24min/60calls/5.71M → gold2 40min/69calls/7.67M → gold3 2.3min/20calls/0.78M（提前收手）→ gold4 5.9min/79calls/4.49M（构建高效+死墙实证）。行为方差极大，提示词需要"穷尽界+收敛界"双向约束。
+
+## gold4-r2 @ qwen3.8-flash（2026-08-31，main@d3375f88ca70，**规范版复测**，task_ts_ca7f8e47-06df-43e5-8d49-ef532afef3f3）
+
+> supervisor 全程无 500（journal 767 全量+自动 closure）。**36 calls / 303s / 2.13M token / 峰值 59k**——对比上案（79 calls/1864s/4.49M/148k）：**墙钟 -84%、token -53%**。终态 **succeeded_publication ×2**（与上案同档）：structures（RBD/ACE2+链+配体+实验条件）+ target identity（ACE2）。0 压缩/0 停审/0 HIL。
+
+**G1 黑洞销案确认（活体）**：上案"发布后 58 calls/81% token 找回执通道"→ 本次 post-pub 仅 20 calls/151s 且**全部有效**（inspect_source_coverage 验证+终稿），`navigate_page` 从 23 次降到 **0**（载体直接 acquire_core_carrier）。回执读取通道打开后自检行为回归正常——G1/G4 两条在 gold4 上关闭。
+
+| # | 卡点（r2 新增/再证） | 归类 | 证据 | 建议 |
+| - | ---- | ---- | ---- | ---- |
+| O1 | **序列类数据无正式来源可达**：题面"病毒株 Spike 序列"三途全封——UniProt P0DTC2/P0DTD1 被工具面**明确 research-only 禁为 build 源**（政策正确但无替代）；NCBI Virus/GISAID 无 Core provider 也无发现工具 | 框架（覆盖面） | 终答交付表行 1 原文 | 序列域立项：NCBI Virus provider 或允许"已注册参考序列 accession"类绑定 |
+| G3-再证 | **Europe PMC fullTextXML `http_client_error` 第 2 案非重试性复现**：模型准确归因"host-side, not input-side"并建议 retry window——队友标注的"半修（NoFullTextError 已分型）"未覆盖 http_client_error 本体 | 框架（G3 保持开放） | 终答求助 3；execute@604/626 两次文献 build 失败 | 按 G3 立项复现 headers 对照 |
+| O2 | **`scaffold_dataset_profile` 新工具目的不可知**：模型两次调用均错（@291/@497）——cleaning proposal 套件无 guidance/skill 覆盖，工具描述不足以推断用法（D4 同族，新实例） | 框架（工具描述）+ prompt | errs 列表；终答未提及此工具 | cleaning 套件补 SKILL.md + get_research_data_guidance 主题；或工具 description 补最小示例 |
+| O3 | `lookup_dbsnp`/`lookup_gwas_catalog` 参数错误各 1 次（SARS 题面甚至试了 GWAS 目录——跨域检索式试探）| 提示词（轻，已自愈） | seq186/207 | briefing 已管住循环（一次即改），仅记行为面 |
+
+- **诚实面保持高水准**：三未达类全部给"确切阻塞原因+可达性判定"；拒绝 dbSNP placement 冒充 variant-assertion；无 provisional CSV（每条理由具体）；终答求助含可执行选项（GISAID 授权/retry window）。
+- 十案首个"发布后无失控"的动态+静态混合案，验证了链 1 修复的**行为转化**价值（不只是 token 省，是模型终于能做完它想做的验证）。
 
 ## gold5 @ qwen3.8-flash（2026-08-30，main@1a9c070dfb1b）
 
 ### r1（task_ts_9046f9e7，已取消）＝ stale-build 灾难样本（H3）
 
-Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，receipt 字段 `sandbox_backend`→`execution_backend`）；重启 Host 时只重编 server 没重编 contracts → **producer（server，新）生成的 receipt 被 consumer（contracts dist，旧）判 `Unknown field "execution_backend"`**。模型 146 轮/89 错/48% 错误率，prepare×22 / submit×23 全灭（错误分布：`$projection undefined`×10、`Unknown field execution_backend`×4、缺字段×3、receipt superseded×2、carrier provenance×2），峰值上下文 237k/256k 贴线挣扎后被操作员取消。证据保留于 `data/gold-runs/1a9c070dfb1b-gold5-qwen38flash-r1-stalebuild/`。
-**教训（运维纪律）**：`node dist/index.js --static` 裸启动绕过了 `prestart/build-contracts-if-needed` 钩子——重启 static Host 前必须 `pnpm build`（或至少 contracts+server 同批构建）。此错误分布本身即"撕裂版本"的铁证，不记为模型卡点。
+Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，receipt 字段 `sandbox_backend`→`execution_backend`）；重启 Host 时只重编 server 没重编 contracts → **producer（server，新）生成的 receipt 被 consumer（contracts dist，旧）判 `Unknown field "execution_backend"`**。模型 146 轮/89 错/48% 错误率，prepare×22 / submit×23 全灭，峰值上下文 237k/256k 贴线挣扎后被操作员取消。证据保留于 `data/gold-runs/1a9c070dfb1b-gold5-qwen38flash-r1-stalebuild/`。
+**运维纪律见 [triage.md](triage.md) B 类 H3**（重启 static Host 前必须 `pnpm build`；此错误分布即"撕裂版本"铁证，不记为模型卡点）。
 
 ### r2（task_ts_090c5c7c，全量重建后）＝ succeeded_publication（1/3 交付）
 
@@ -211,6 +246,37 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - **正样本（显著成长）**：发布后自检仅 9 轮即止损——逐一试探 4 种 ID 命名空间、**主动修正自己上一条的 overstatement**（"Correction: … 那言过其实了"）、明确"没有读取路径我就不声称读过"；突变体处理给出专业判断（L858R/T790M 应为 assay 的 variant_context 列而非独立 target ID，并请用户确认口径）；候选药物 CID/InChIKey 全部真值留档不冒充已发布。
 
+## gold5-r2 @ qwen3.8-flash（2026-08-31，main@99da5a351fa9，**规范版复测 + 首个 HIL 全链案**，task_ts_3067996b-26d1-4ba4-aa98-76ce1bde1017）
+
+> supervisor 全程（journal 716=全量事件、自动 closure、`run_usage` 由协议自动产出）。**54 calls / ~21min / 4.12M token（output 68k）**；峰值 211k/1M（1M 下无压缩）。终态 **blocked_no_publication**——但这是**评测批次首个走到 `publication_acceptance` HIL 门的 run**：动态 prepare→submit 成功、candidate 8 表+8 关系+provenance/confidence 全绑定、B3 124 checks 0 失败，停在人审；operator 审后 **reject**（chart_points 派生表=0 行、activities 仅 4 行 vs 题面千级）——门真实拦下了过早发布。
+
+**里程碑级复验结论**：
+1. **wire `$projection` 修复全案闭环（第 6 动态案）**：submit 直达业务校验（"table 'chart_series' must not be empty"）并进入 HIL，全程 0 次 `$projection`。此前 5/5 全中的死结确认消失。**triage wire 行销案。**
+2. **H1 再证且精化**：ChEMBL 死锁被模型总结为"单 target-ID vs 1-32 compound-IDs 二律背反"（静态 entities 要单 target、fixed provider 要化合物列表）；终答明确该 dichotomy 需修复或授权导出资产。
+3. **P1（新框架条目）：HIL reject 的 reason 不透传工具返回**——`submit` 收到的 toolResult 只有 `dynamic publication review was not accepted: reject`；详细理由实际在事件流 `user_input_resumed.detail.reason` 但模型看不到 → 终答不得不请求 "the reviewer statement behind the reject verdict"。**"寻求人类建议后修正"加分项被这个最后一公里卡住的活案例**：reject 后模型正确地没有盲改重交，但也无力做定向修正，转写状态笔记诚实收尾。
+4. **reject 后行为=合格样本**：不重试伪装、写 `notes/egfr_chembl_pubchem_build_status.md` 结构化存档、覆盖对账（0 正式发布/失败分类/发现级 ID 全列）、指出 PubChem 无活性数据须回 ChEMBL（题面核心判断准确）。
+5. **O2 再证**：`scaffold_dataset_profile` 又 2 次误用（@291/@497），新工具无引导持续付税。
+
+| 阶段 | 调用 | input | output | cache_read | token |
+| --- | --- | --- | --- | --- | --- |
+| 全程（HIL 前构建；发布后 0——reject 即终） | 54 | 658,537 | 68,170 | 3,394,944 | 4,121,651 |
+
+- 合规：TOPIC 原文 ✓、1M ✓、supervisor 协议 ✓（首次含 HIL resume 全流程：human-review.jsonl → --resume 投递）。**运维注记：--adopt 路径不持久化 run_id，HIL 后 --resume 报 "requires supervisor state with run_id"，需手工补 state 才能续**（supervisor adopt 小缺陷，登记）。
+
+## gold6-r3 @ qwen3.8-flash（2026-08-31，main@e680d4232531，**唯一规范版复测·终**，task_ts_b6741a6f-4050-41f0-97f6-a95e21b7d9c1）
+
+> TOPIC 原文（SHA-256 `f30ab310…c298`）、单 Host、supervisor `--adopt/--resume` 全链。49 model calls / 9.17M total tokens / 17,497 events；run 自然 completed，但 closure **`blocked_no_publication`**，0 Publication / 0 Artifact / 0 `publication_acceptance`。3 次 HIL 全是逐 request 的 VLM credential 批准。证据包：`data/gold-runs/e680d4232531-gold6-qwen38flash-r3-standard/`。
+>
+> 正面复验：9 个 Europe PMC XML/PDF/ZIP carrier 全由本 task Core acquisition 获取；三份 evidence carrier 均带 exact-byte `vlm_extraction` OperationResult provenance。输出总计 3 papers / 121 experiments / 221 activity values / 103 chart series / **0 chart points**；无点 series 全部降为 unclear，没有伪造坐标或将 provisional staging 冒充 Publication。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| P5 | **Supplementary member admission 两道 gate 互斥。** `literature_experiment_chart` publication validator 要求 Core-owned supplementary **member**；transform host 又要求所有 registered transform inputs 为 UTF-8/gzip-UTF-8。三篇官方 supplementary ZIP 的 37/20/21 个成员均为 PDF/JPG/GIF。只绑定 JSON evidence carrier 时 submit 报 `requires a Core-owned supplementary member asset`（seq 4901/7018/8532）；绑定真实 binary member 时报 `Registered transform input must contain UTF-8 text…`（seq 6227/13401）；只注册不绑定时 preflight 报 undeclared binding（seq 9244）。这是当前 Gold6 无合法动态闭包的直接框架根因 | 框架（准入契约） | 完整 events + `provisional/STATUS_AND_BLOCKER.md`；实现落点 `literature-experiment-chart/validation.ts:84` 与 `transform-host/in-process-unisolated.ts:471` | 将 binary member 作为 provenance-only、非 transform-text input 的显式绑定；或由 Core-owned parser 生成真实 UTF-8 derivative member，再由 OperationResult 绑定 parent/member bytes。不可把 PDF/JPG 冒充文本 |
+| Q1 | **明确 dynamic-route 锁后仍切 static route。** 冻结执行规则禁止同一语义 requirement 在 dynamic rejection 后转 static；模型却改 requirement id，把六表需求拆成 curated `bioactivity_measurement` 单表尝试。`validate_dataset_execution` valid 后仍执行 7 次，全部被 asset/path bridge 拒绝；没有 BuildResult/Publication，因此未污染正式结果，但消耗显著且终答把 static 称为第二条受治理路线，语义不准确 | 模型（路由纪律）+ 框架可执行性缺口 | execute ×7 全 error；最终 `current_publication_id=null`、Artifact API 0 件；Gold assertion 5 REJECT | 提示词已明确仍未约束住：可考虑把 task/run 的 semantic requirement route choice durable 化，由 Host 对同 requirement 的跨 route submit 直接拒绝；至少把“换 requirement_id 不改变语义 requirement”写入工具拒绝文案 |
+| Q2 | **103 条 chart series 仍为 0 points，且无 review IDs。** 有界纠错重试按设计运行，缺轴单位/图例后全部 fail-closed 降为 unclear；因此没有 `vlm_extraction` 数据审查可批准。该行为是诚实阻断，不是回归，但说明 Gold6 的核心剂量-反应坐标尚未取得 | 数据质量/源可读性 | 三 carrier row counts；`chart_series_pending_review.csv`；0 publication acceptance | 增加真实轴单位/图例解析证据或人工 point-correction 候选通道；只有非空 point evidence + durable review closure 才可重跑发布 |
+
+**终判：** R2 的 derived provenance、页面隔离、assert 分页、supervisor race 修复均获 live 正证；R3 新暴露的是 P5 准入契约死锁。修 P5 与 0-point closure 前不得启动 R4，也不得把 6 份 `provisional/` 文件算作 Gold 产物。
+
 ## gold7 @ qwen3.8-flash（2026-08-30，main@9e90eb252089，task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1）
 
 > 题面依据 gold789-case-chapter §5.2 重建（无 prompts 文件）。历史死点（"GWAS family/Core provider 缺失，只能 workspace staging"）本次被**动态 Family 路线突破**：`pub_ad_gwas_risk_map_e76103f1b9751ace`（risk_loci 89 行正式发表，逐行 association_id+source_url 可溯）。
@@ -233,6 +299,25 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - **正样本（继续保持高水准）**：`_embedded.associations` 嵌套路径探测失败后写出**根因说明**（顶层键探测→0 行）供后续复用；明确拒绝"从未可读出的压缩包臆测 75 位点"；终答自带**证据分级提示**（"勿据已发布表宣称复现分阶段结果"）；发布后 7 轮即收。
 - 提交侧错误谱（18 次 submit 全记录在 assistant-messages/closure）：$projection×3（wire 缺陷，见上）→ digest drifted×2 → transform 只读赋值错误 → OUTPUT_BYTES_MISMATCH → 空表×4 → TS 语法 → receipt superseded → 成功。形态=有效学习曲线，与 gold5-r1 的平线 thrash 形成对照（那次是撕裂构建，这次错误每轮变化）。
+
+## gold7-r2 @ qwen3.8-flash（2026-08-31，main@4be9e3d51ab3，**规范版复测·终**，task_ts_a19e74b7-097f-4e88-ab48-68d7c8c9330a）
+
+> **终态 blocked_no_publication——但这是全部十案中最重要的一次"失败"**：模型两次把真实 GWAS 载体（GWAS Catalog JSON、HGNC TSV、MOESM4 xlsx 解出的 Supplementary Table 5）喂进 `prepare_dynamic_family_publication` 且**均成功过 preflight**（wire 修复铁证生效），**然后发现动态路线的 topology 是 Core 写死的六表 bioactivity-chart 模板**（`activity_value_records` primary + chart_series/points 强制要求 image-bbox VLM locators 与人审）——"Topology is Core-owned and non-authorable"。要把 stage-wise OR/p 发出去，唯一办法是**把真实统计值伪装进 assay 单位和假 figure 坐标**。模型**拒绝**："Mapping stage-wise ORs into fabricated assay units/figure coordinates would corrupt provenance, so I refused that path rather than force it."
+> **对比 r1**：r1 发的是 383 字节探针（同样塞不进真数据）；r2 看清模板强加后宁 0 发布。两案同一病灶：**动态路对 GWAS 类拓扑是假通路——能过 preflight，不能装真产品**。这是十案修复迭代后**新暴露的一层**（wire 不通时看不见它）。
+>
+> **成本：177 calls / ~3h / 41.69M token（十案之最，此前最高 7.94M 的 5.2 倍；r1 的 6.4 倍）/ cache_read 占 95.5% / 峰值上下文 366,708**。成本结构：1M 窗口 + 高密度自审（89/89 rsID 逐个坐标核验、每个 staging 行 workspace_search 复核、MOESM4 Table 5 解析后全表通读）。**不是空转**（每轮有实证产出），是 1M 规范下"验证密度无预算上限"+ P2/P3 死锁前的穷尽试探叠加。终答 122,928 字符（单条 4 万 token，自身也是成本项）。
+>
+> 数据成果（全部真值可溯、未发布）：`output/ad_gwas_study.csv` 1 行、`ad_gwas_risk_loci.csv` 15 行（75 位点中最高显著度，stage1/2/12 OR+CI+异质性+GRCh38+75 集标记）、`ad_gwas_variant_gene_map.csv` 17 行；89/89 rsID dbSNP 坐标核验，`rs60755019` 显式标"未核验"。模型自判 "No NO_DATA applies — the data was reached and cross-checked; only deterministic publication is blocked."
+
+### 卡点终判
+| # | 卡点 | 归类 | 证据 | 状态 |
+| - | ---- | ---- | ---- | ---- |
+| P2 | `source_files` 绑定契约三向死锁（上节已详） | 框架 | execute×8 终判 + mapping_files/workflow_recipe 均 non-retryable | **终判坐实，开放** |
+| **P3** | **动态 Family 拓扑不可定制**：`prepare_dynamic_family_publication` 的闭包拓扑由 Core 写死为 bioactivity-chart 六表（`activity_value_records`+chart bbox/人审），任何非生物活性拓扑（GWAS 三表、名册、临床分组）要么塞假模板（模型正确拒绝），要么 0 发布。**r1"探针发布"与 r2"零发布"是同一病灶的两种症状**——此前被 wire 死锁遮蔽，修复后立即现形。这是"动态族"叙事的核心承诺（表达任意拓扑）未兑现 | 框架（**架构级**，十案总根因） | 终答 "Why publication is structurally closed" 节：两次 prepare 成功、identical six-table closure、"non-authorable" | **开放，最高优先——gold 系列（GWAS/名册/临床表）能否发布全卡在此** |
+| P4 | 1M 规范下自审密度无成本闸：177 调用 95% 是 cache_read；12 万字符终答单条 4 万 token | 框架（预算）+ prompt | usage 结构 | 开放：给"发布前证据核对"设预算/摘要化终答 |
+
+### 行为面终评（正面为主）
+`inspect_source_coverage` 16 连败被模型正确因果归因并切源（"closed by source switch, not repetition"）；navigate 404→换端点；"Tool not found"→激活后完成；假命中表名（Table 3→5）自纠；**P3 的拒绝伪造 provenance 是全批次最重要的一次模型守界行为——它证明了信任规则在模型侧生效，反衬产品侧没有兑现合法出口**。求助清单精确（gwas_* profile / 注册 JSON 载体 / 授权扩 75 行）。
 
 ## gold8 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_304c82c8-7dfe-4372-8479-d99efa121e0a）
 
@@ -279,7 +364,6 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 | K5 | **G1 依旧**：发布物 5 件 artifact 全部读不回（"ID-form gate + Core storage isolation"），verification limits 段如实画界 | 框架（链 1） | 终答 verification limits | 链 1 |
 
 - **正样本（九案诚实度峰值）**：**自我收回两个结论**（"Orphanet 空载体"撤回并归因自身换行 bug；"583=pathogenic+likely" 改标 "pathogenic-only，total 1158"）；对 42 失败做逐类别对账；探针发布不作产品宣称；T2/T3 宁空不造；ClinVar 复核 ADA/CARD11/RAG1 与 Table4 逐值一致后才写报告。
-- 提示词面唯一改进：从首次 MISMATCH 到定位换行 bug 用了 ~15 轮——"同一错误签名连续 3 次即最小化单变量复现"的调试纪律可以教（它最终是自己找到的，教学可压缩成本）。
 
 ## gold10 @ qwen3.8-flash（2026-08-30，main@1a8161cd，task_ts_6da1b112-27e9-4a7b-9416-84140379da5e）
 

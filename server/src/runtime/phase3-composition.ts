@@ -430,7 +430,6 @@ export async function createPhase3Runtime(
       options.resolveModel ?? null,
     ),
     adapter: options.adapter ?? new PiAgentAdapter({
-      environment: process.env,
       resolveModel: options.resolveModel,
     }),
     workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent, mode }) => {
@@ -438,13 +437,13 @@ export async function createPhase3Runtime(
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
       let currentPublicationId: string | null = null;
-      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator({
-        statePath: path.join(options.tasksRoot, taskId, "state", "dynamic-family-preflight.json"),
-      });
       // Agent-owned directory: data/workspaces/<taskId> (plan §2.1).
       const workspaceRoot = await workspaceManager.ensure(taskId);
       // Framework-owned output: data/output/tasks/<taskId> (plan §3.2).
       const taskRoot = path.join(options.tasksRoot, taskId);
+      const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator({
+        stateFile: path.join(taskRoot, "state", "dynamic-family-preflight.json"),
+      });
       // Permission control plane: persistent user settings + per-task broker.
       const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
         path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
@@ -605,7 +604,7 @@ export async function createPhase3Runtime(
             options.dynamicFamilySeams?.resolveProductRequirements
             ?? resolveCoreProductTopologyRequirements
           )(submission.family_spec.assessment_policy_ref);
-          const preparation = dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
+          const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
             requirementId: submission.execution_proposal.requirement_id,
@@ -615,7 +614,7 @@ export async function createPhase3Runtime(
             runtimeLimits: limits,
             planAcquisition: (planning) => planCoreAcquisition(submission, planning),
           });
-          dynamicFamilyPreflight.commitPrepare(
+          await dynamicFamilyPreflight.commitPrepare(
             preparation,
             receipt,
             dynamicFamilyPreflightSubmissionDigest(submission),
@@ -625,9 +624,18 @@ export async function createPhase3Runtime(
         },
       });
       const dynamicFamilyTool = createDynamicFamilyPublicationTool({
+        // The coordinator stores the JSON wire form returned by prepare. The
+        // submit path needs the derived `.projection` (and digest-bound parsed
+        // facts), so the stored wire is re-parsed here instead of trusting a
+        // closure variable: the wire is the authoritative prepared_submission
+        // copy and its digest chain is anchored by the receipt, so re-parsing
+        // is byte-safe. Without this, a fresh closure (task resume, run
+        // recovery, rebuilt workspace) resolves a wire with `.projection ===
+        // undefined` and the submission chain throws `Expected object at
+        // $projection` (model-blockers wire row, 5/5 dynamic gold runs).
         resolveSubmission: async (preflightReceipt) =>
           parseDynamicFamilyPublicationSubmission(
-            dynamicFamilyPreflight.resolveSubmission(preflightReceipt),
+            await dynamicFamilyPreflight.resolveSubmission(preflightReceipt),
           ),
         submit: async (submission, signal, _context, preflightReceipt) => {
           if (preflightReceipt === undefined) {
@@ -657,9 +665,9 @@ export async function createPhase3Runtime(
             const seam = options.dynamicFamilySeams?.assertExecutionLockOwned;
             return seam === undefined ? executionLock.assertOwned() : seam(() => executionLock.assertOwned());
           };
-          let reservation: ReturnType<typeof dynamicFamilyPreflight.reserve> | null = null;
+          let reservation: Awaited<ReturnType<typeof dynamicFamilyPreflight.reserve>> | null = null;
           try {
-            reservation = dynamicFamilyPreflight.reserve(
+            reservation = await dynamicFamilyPreflight.reserve(
               preflightReceipt,
               dynamicFamilyPreflightSubmissionDigest(submission),
             );
@@ -795,18 +803,20 @@ export async function createPhase3Runtime(
             security_boundary: false,
           };
           } finally {
-            if (reservation !== null) dynamicFamilyPreflight.complete(reservation);
+            if (reservation !== null) await dynamicFamilyPreflight.complete(reservation);
             await executionLock.release();
           }
         },
       });
       const coreAssetTools = createCoreAssetTools({
+        taskId,
         sourceAssetRegistry,
         sourceAssetsRoot: taskRoot,
       });
       const datasetTools = createDatasetExecutionTools({
         client: service,
         familyRegistry: createDefaultDatasetFamilyRegistry(),
+        sourceAssetRegistry,
         taskId,
         taskRoot,
         runId: () => currentRunId,

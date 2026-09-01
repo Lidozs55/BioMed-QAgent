@@ -1,4 +1,4 @@
-import { deflateRawSync } from "node:zlib";
+import { deflateRawSync, gzipSync } from "node:zlib";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -73,7 +73,13 @@ async function createFixture(): Promise<{
     relativePath: "source_assets/supplement.zip",
     mediaType: "application/zip",
   });
-  const tools = createCoreAssetTools({ sourceAssetRegistry: registry, sourceAssetsRoot: root });
+  await registry.registerCoreAcquisitionProvenance(receipt, {
+    provider_id: "fixture.provider",
+    implementation_digest: "a".repeat(64),
+    request_identity_digest: "b".repeat(64),
+    canonical_accession: "supplement.zip",
+  });
+  const tools = createCoreAssetTools({ taskId: "task_fixture", sourceAssetRegistry: registry, sourceAssetsRoot: root });
   return { root, registry, tools, zipAssetId: receipt.asset_ref.asset_id };
 }
 
@@ -117,7 +123,22 @@ describe("core asset preview/extract tools", () => {
 
     const resolved = await registry.resolveAny(body.asset_id);
     expect(resolved.registration_receipt.media_type).toBe("text/csv");
-  });
+    const closure = await registry.resolveFormalProvenanceClosure(body.asset_id);
+    expect(closure).toHaveLength(2);
+    const derived = closure.find((item) => "operation_kind" in item);
+    expect(derived).toMatchObject({
+      operation_kind: "archive_member_extraction",
+      parent_asset_ids: [zipAssetId],
+    });
+    const operationResult = await registry.resolveDerivedOperationResult(
+      (derived as { operation_result_id: string }).operation_result_id,
+    );
+    expect(operationResult.commit.state).toBe("committed");
+    expect(operationResult.output_files).toEqual([expect.objectContaining({
+      relative_path: resolved.registration_receipt.relative_path,
+      sha256: resolved.registration_receipt.sha256,
+      size_bytes: resolved.registration_receipt.size_bytes,
+    })]);  });
 
   it("registers extracted members with their true media types (case-insensitive, nested paths, extension-only)", async () => {
     const { root, registry, tools } = await createFixture();
@@ -140,6 +161,12 @@ describe("core asset preview/extract tools", () => {
       sourceId: "typed_fixture",
       relativePath: "source_assets/typed.zip",
       mediaType: "application/zip",
+    });
+    await registry.registerCoreAcquisitionProvenance(typedReceipt, {
+      provider_id: "fixture.provider",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "d".repeat(64),
+      canonical_accession: "typed.zip",
     });
     const [, extract] = tools;
     const cases: ReadonlyArray<readonly [member: string, expectedMediaType: string]> = [
@@ -178,5 +205,74 @@ describe("core asset preview/extract tools", () => {
     expect(missing.isError).toBe(true);
     const unsafe = await extract.execute({ asset_id: zipAssetId, member: "../escape.csv" });
     expect(unsafe.isError).toBe(true);
+  });
+
+  it("previews a gzip asset as decoded text and extracts it with its true media type", async () => {
+    const { root, registry, tools } = await createFixture();
+    const gz = gzipSync(Buffer.from("record_id,value\nr1,1\nr2,2\n", "utf8"));
+    await writeFile(path.join(root, "source_assets", "GPL96.annot.csv.gz"), gz);
+    const receipt = await registry.register({
+      sourceId: "gzip_fixture",
+      relativePath: "source_assets/GPL96.annot.csv.gz",
+      mediaType: "application/gzip",
+    });
+    await registry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "fixture.provider",
+      implementation_digest: "a".repeat(64),
+      request_identity_digest: "c".repeat(64),
+      canonical_accession: "GPL96.annot.csv.gz",
+    });
+    const [preview, extract] = tools;
+
+    // Preview decodes the stream instead of surfacing gzip binary (the
+    // gold1/gold4 failure shape: ".gz preview returns binary").
+    const head = await preview.execute({ asset_id: receipt.asset_ref.asset_id });
+    expect(head.isError).not.toBe(true);
+    const headBody = JSON.parse(head.content) as {
+      ok: boolean;
+      is_gzip: boolean;
+      decoded_size_bytes: number;
+      media_type: string;
+      head: string;
+    };
+    expect(headBody.ok).toBe(true);
+    expect(headBody.is_gzip).toBe(true);
+    expect(headBody.decoded_size_bytes).toBe(26);
+    expect(headBody.media_type).toBe("text/csv");
+    expect(headBody.head).toBe("record_id,value\nr1,1\nr2,2\n");
+
+    // Extract decodes the whole stream into a text/csv registered asset.
+    const extracted = await extract.execute({ asset_id: receipt.asset_ref.asset_id });
+    expect(extracted.isError).not.toBe(true);
+    const body = JSON.parse(extracted.content) as { ok: boolean; asset_id: string; media_type: string; member: string | null };
+    expect(body.ok).toBe(true);
+    expect(body.member).toBeNull();
+    expect(body.media_type).toBe("text/csv");
+    expect(body.asset_id).toMatch(/^asset_[0-9a-f]{64}$/);
+    const resolved = await registry.resolveAny(body.asset_id);
+    expect(resolved.registration_receipt.media_type).toBe("text/csv");
+    expect(resolved.registration_receipt.relative_path).toMatch(/\/extract\/[^/]+\/[^/]+\.csv$/);
+
+    // A non-gzip file simply previews as its plain text (no magic bytes); a
+    // file whose extension claims gzip but is neither zip nor gzip fails
+    // closed on extraction instead of surfacing raw bytes or hanging.
+    await writeFile(path.join(root, "source_assets", "broken.csv.gz"), Buffer.from("not gzip bytes"));
+    const brokenReceipt = await registry.register({
+      sourceId: "broken_fixture",
+      relativePath: "source_assets/broken.csv.gz",
+      mediaType: "application/gzip",
+    });
+    const brokenHead = await preview.execute({ asset_id: brokenReceipt.asset_ref.asset_id });
+    expect(brokenHead.isError).not.toBe(true);
+    const brokenHeadBody = JSON.parse(brokenHead.content) as { ok: boolean; is_gzip?: boolean; head: string };
+    expect(brokenHeadBody.ok).toBe(true);
+    expect(brokenHeadBody.is_gzip).toBeUndefined();
+    expect(brokenHeadBody.head).toContain("not gzip bytes");
+    const brokenExtract = await extract.execute({ asset_id: brokenReceipt.asset_ref.asset_id });
+    expect(brokenExtract.isError).toBe(true);
+    expect(JSON.parse(brokenExtract.content)).toMatchObject({
+      ok: false,
+      error: { code: "core_archive_extract_rejected" },
+    });
   });
 });

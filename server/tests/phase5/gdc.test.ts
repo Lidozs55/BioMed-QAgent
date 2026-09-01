@@ -256,6 +256,22 @@ describe("search_gdc", () => {
     expect(result.records).toHaveLength(1);
   });
 
+  it("ranks token-dense, field-relevant hits before API order (B6 regression)", async () => {
+    // "breast cancer TCGA" previously surfaced TCGA-LUAD first because the
+    // Boolean OR matched "TCGA" in its project_id and API order won; the
+    // scoring fix must put TCGA-BRCA (all tokens, disease/site/name matches)
+    // first.
+    const payload = JSON.parse(await readFile(fixture("projects.json"), "utf8")) as unknown;
+    const server = await jsonServer(payload);
+    const result = await searchGdc({ term: "breast cancer TCGA", max_results: 20 }, deps(server.port));
+    // TCGA-PAAD also contains the "TCGA" token, so all three match; the
+    // scoring fix must put the token-dense, field-relevant TCGA-BRCA first
+    // and keep it ahead of the mere-"TCGA"-id matches.
+    expect(result.records.length).toBeGreaterThanOrEqual(2);
+    expect(result.project_ids[0]).toBe("TCGA-BRCA");
+    expect(result.project_ids.indexOf("TCGA-BRCA")).toBeLessThan(result.project_ids.indexOf("TCGA-LUAD"));
+  });
+
   it("keeps exact substring matching for single-token terms", async () => {
     const payload = JSON.parse(await readFile(fixture("projects.json"), "utf8")) as unknown;
     const server = await jsonServer(payload);

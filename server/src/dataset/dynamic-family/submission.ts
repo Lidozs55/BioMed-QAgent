@@ -40,6 +40,43 @@ import {
 } from "./execution.js";
 import type { CoreProductTopologyRequirements } from "./product-requirements.js";
 
+const BINARY_CARRIER_MEDIA_TYPES = new Set([
+  "application/zip",
+  "application/gzip",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+
+function hasMagic(bytes: Uint8Array, ...values: number[]): boolean {
+  return values.every((value, index) => bytes[index] === value);
+}
+
+function assertDeclaredInputKind(
+  declaredMediaType: string,
+  actualMediaType: string,
+  bytes: Uint8Array,
+  bindingId: string,
+): void {
+  const declared = declaredMediaType.toLowerCase();
+  const actual = actualMediaType.toLowerCase();
+  const isZip = hasMagic(bytes, 0x50, 0x4b, 0x03, 0x04)
+    || hasMagic(bytes, 0x50, 0x4b, 0x05, 0x06)
+    || hasMagic(bytes, 0x50, 0x4b, 0x07, 0x08);
+  const isGzip = hasMagic(bytes, 0x1f, 0x8b);
+  const isPdf = hasMagic(bytes, 0x25, 0x50, 0x44, 0x46);
+  const binaryCarrier = BINARY_CARRIER_MEDIA_TYPES.has(actual) || isZip || isGzip || isPdf;
+  if (binaryCarrier && (declared.startsWith("text/") || declared === "application/json")) {
+    throw new TypeError(
+      `dynamic input '${bindingId}' is a binary/archive carrier (${actual}); extract and bind a parser-derived ${declaredMediaType} asset`,
+    );
+  }
+  if (actual.startsWith("text/") && !declared.startsWith("text/")) {
+    throw new TypeError(
+      `dynamic input '${bindingId}' media type mismatch: declared ${declaredMediaType}, registered ${actualMediaType}`,
+    );
+  }
+}
+
 export interface SubmitDynamicFamilyPublicationInput {
   readonly taskId: string;
   readonly runId: string;
@@ -216,6 +253,7 @@ export async function submitDynamicFamilyPublication(
     );
     const bytes = await collectBytes(resolved.content, 512 * 1024 * 1024);
     const registration = resolved.registration_receipt;
+    assertDeclaredInputKind(declared.media_type, registration.media_type, bytes, binding.binding_id);
     if (resolved.acquisition_provenance !== null) {
       sourceAcquisitionProvenance.push(resolved.acquisition_provenance);
       sourceInputProvenance.push(resolved.acquisition_provenance);
