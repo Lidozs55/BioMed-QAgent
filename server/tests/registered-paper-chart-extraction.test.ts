@@ -469,6 +469,87 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("uses registered XML metadata when a page image carries no paper title", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      expect(rowsOf(carrier, "paper_records")[0]?.title).toBe(
+        "Quantitative inhibition of EGFR signaling",
+      );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("allows a per-paper carrier without a supplement while preserving the final publication gate", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence({
+        ...baseRequest(fixture),
+        supplementary_asset_ids: [],
+      }, {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      expect(result.rows.supplementary_asset_records).toBe(0);
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      const paperRows = {
+        paper_records: rowsOf(carrier, "paper_records"),
+        experiment_records: rowsOf(carrier, "experiment_records"),
+        activity_value_records: rowsOf(carrier, "activity_value_records"),
+        supplementary_asset_records: rowsOf(carrier, "supplementary_asset_records"),
+      } as unknown as PaperEvidenceRows;
+      expect(() => assertPaperEvidenceRows(paperRows, new Set([
+        fixture.assets.xmlReceipt.asset_ref.asset_id,
+        fixture.assets.pdfReceipt.asset_ref.asset_id,
+      ]))).toThrow(/supplementary_asset_records must not be empty/);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("registers a no-point carrier as formal without granting provenance to pending estimates", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null, points: [] }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      expect(result.rows.chart_points).toBe(0);
+      expect(result.reviewed_carrier).toBeUndefined();
+      await expect(fixture.registry.resolveCoreAcquired(result.carrier.asset_id)).resolves.toMatchObject({
+        acquisition_provenance: {
+          provider_id: "registered_paper_chart_extraction.v1",
+          canonical_accession: "31234567",
+        },
+      });
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      expect(rowsOf(carrier, "chart_series")[0]?.human_review_status).toBe("not_required");
+
+      const pending = await makeFixture(makeVlmResponse());
+      try {
+        const pendingResult = await extractRegisteredPaperChartEvidence(baseRequest(pending), {
+          taskRoot: pending.taskRoot,
+          sourceAssetRegistry: pending.registry,
+          ...pending.depsDefaults,
+        });
+        await expect(pending.registry.resolveCoreAcquired(pendingResult.carrier.asset_id))
+          .rejects.toThrow(/lacks exact Core acquisition provenance/);
+      } finally {
+        await Promise.all(pending.roots.map((root) => rm(root, { recursive: true, force: true })));
+      }
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("preserves mixed-content order in authoritative registered JATS metadata", async () => {
     const fixture = await makeFixture(makeVlmResponse({ paper: null }));
     try {
@@ -606,7 +687,7 @@ describe("registered paper chart evidence extraction", () => {
         .toBe(1);
       expect(result.warnings.some((warning) => warning.includes("page 1") && warning.includes("schema")))
         .toBe(true);
-      expect(result.warnings.some((warning) => warning.includes("experiment protein"))).toBe(true);
+       expect(result.warnings.some((warning) => warning.includes("experiment protein"))).toBe(true);
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }

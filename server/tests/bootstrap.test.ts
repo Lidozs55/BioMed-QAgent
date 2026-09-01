@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { describe, expect, test, vi } from "vitest";
 
-import { createBootstrapOptions } from "../src/bootstrap.js";
+import { createBootstrapOptions, resolveProductCommit } from "../src/bootstrap.js";
 import { parseHostConfig } from "../src/config.js";
 import { NodeBrowserPool } from "../src/external/browser/pool.js";
 import { DatabaseClient } from "../src/persistence/db-client.js";
@@ -32,6 +32,16 @@ function services() {
 }
 
 describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
+  test("uses an explicit validated product commit when the checkout is unavailable", () => {
+    const commit = "a".repeat(40);
+    expect(resolveProductCommit(path.resolve("missing-repository"), {
+      BIOMED_PRODUCT_COMMIT: commit,
+    })).toBe(commit);
+    expect(() => resolveProductCommit(path.resolve("missing-repository"), {
+      BIOMED_PRODUCT_COMMIT: "not-a-commit",
+    })).toThrow(/BIOMED_PRODUCT_COMMIT/);
+  });
+
   test("provisions the native services and always wires the formal TS runtime", async () => {
     const shared = services();
     const createFormalRuntime = vi.fn(async (runtimeOptions: Phase3RuntimeOptions) => {

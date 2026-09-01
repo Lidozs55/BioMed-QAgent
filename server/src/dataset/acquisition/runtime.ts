@@ -269,6 +269,7 @@ export class CoreAcquisitionRuntime {
   readonly #registry: CoreAcquisitionRegistry;
   readonly #maxAttempts: number;
   readonly #registrar: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+  #attemptAppendQueue: Promise<void> = Promise.resolve();
 
   constructor(options: CoreAcquisitionRuntimeOptions) {
     this.#taskId = options.taskId;
@@ -491,11 +492,16 @@ export class CoreAcquisitionRuntime {
   }
 
   async #appendAttempt(attempt: CoreDownloadAttempt): Promise<void> {
-    const file = path.join(this.#taskRoot, ATTEMPTS_FILE);
-    const existing = await readJsonFileOrNull<unknown>(file);
-    const attempts = existing === null ? [] : existing;
-    if (!Array.isArray(attempts)) throw new TypeError("core acquisition attempts must be an array");
-    await writeJsonAtomic(file, [...attempts, attempt]);
+    const append = async (): Promise<void> => {
+      const file = path.join(this.#taskRoot, ATTEMPTS_FILE);
+      const existing = await readJsonFileOrNull<unknown>(file);
+      const attempts = existing === null ? [] : existing;
+      if (!Array.isArray(attempts)) throw new TypeError("core acquisition attempts must be an array");
+      await writeJsonAtomic(file, [...attempts, attempt]);
+    };
+    const pending = this.#attemptAppendQueue.then(append, append);
+    this.#attemptAppendQueue = pending.catch(() => undefined);
+    await pending;
   }
 }
 

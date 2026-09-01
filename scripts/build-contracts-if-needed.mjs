@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -55,6 +58,31 @@ export function outputsAreReusable(outputFiles, stampPath, inputDigest) {
   } catch {
     return false;
   }
+}
+
+export function syncInstalledContracts(root) {
+  const sourceRoot = join(root, "packages", "contracts");
+  const sourceRealPath = realpathSync(sourceRoot);
+  const installedRoots = [
+    join(root, "node_modules", "@biomed", "contracts"),
+    join(root, "frontend", "node_modules", "@biomed", "contracts"),
+    join(root, "server", "node_modules", "@biomed", "contracts"),
+  ];
+  const synced = [];
+  for (const installedRoot of installedRoots) {
+    if (!existsSync(installedRoot)) continue;
+    if (lstatSync(installedRoot).isSymbolicLink() || realpathSync(installedRoot) === sourceRealPath) {
+      continue;
+    }
+    for (const entry of ["package.json", "src", "dist"]) {
+      cpSync(join(sourceRoot, entry), join(installedRoot, entry), {
+        recursive: true,
+        force: true,
+      });
+    }
+    synced.push(installedRoot);
+  }
+  return synced;
 }
 
 export function contractBuildState(root) {
@@ -172,6 +200,7 @@ function runContractsBuild(state, root) {
 export function ensureContractsBuilt(root = defaultRoot) {
   let state = contractBuildState(root);
   if (outputsAreReusable(state.outputFiles, state.stampPath, state.inputDigest)) {
+    syncInstalledContracts(root);
     console.log("@biomed/contracts build is up to date; reusing dist.");
     return "reused";
   }
@@ -182,6 +211,7 @@ export function ensureContractsBuilt(root = defaultRoot) {
   try {
     state = contractBuildState(root);
     if (outputsAreReusable(state.outputFiles, state.stampPath, state.inputDigest)) {
+      syncInstalledContracts(root);
       console.log("@biomed/contracts build completed by another process; reusing dist.");
       return "reused";
     }
@@ -194,6 +224,7 @@ export function ensureContractsBuilt(root = defaultRoot) {
       if (!outputsExist) throw new Error("@biomed/contracts build completed without all expected outputs");
       if (beforeBuild.inputDigest === afterBuild.inputDigest) {
         writeFileSync(afterBuild.stampPath, `${afterBuild.inputDigest}\n`, "utf8");
+        syncInstalledContracts(root);
         return "built";
       }
     }

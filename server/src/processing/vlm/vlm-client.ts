@@ -13,6 +13,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import {
+  classifyTransportFailure,
+  isAbortError,
+  UnsafeUrlError,
+} from "../../external/network/errors.js";
 import { ChartExtractionError } from "./chart-json.js";
 
 /** Visual model name (Python ``VL_MODEL_NAME``). */
@@ -71,6 +76,35 @@ export interface VlmClient {
   callWithMeta(imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult>;
 }
 
+export interface VlmClientOptions {
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+}
+
+const MAX_VLM_ATTEMPTS = 3;
+const TRANSIENT_TRANSPORT_CODES = new Set([
+  "dns_failure",
+  "connect_refused",
+  "connect_timeout",
+  "connection_reset",
+]);
+
+class TransientVlmError extends ChartExtractionError {}
+
+function defaultSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 interface ChatCompletionResponse {
   model?: unknown;
   choices?: Array<{ message?: { content?: unknown } }>;
@@ -84,8 +118,9 @@ interface ChatCompletionResponse {
 export function createVlmClient(
   config: VlmConfig,
   httpClient: PublicHttpClient,
+  options: VlmClientOptions = {},
 ): VlmClient {
-  const callWithMeta = async (imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult> => {
+  const callOnce = async (imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult> => {
     if (config.apiKey.trim() === "") {
       throw new ChartExtractionError(
         `DASHSCOPE_API_KEY (VLM credential) is missing; cannot call ${config.model}`,
@@ -124,6 +159,11 @@ export function createVlmClient(
     });
     if (response.status < 200 || response.status >= 300) {
       await response.discard();
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        throw new TransientVlmError(
+          `${config.model} call failed for ${imagePath}: HTTP ${response.status}`,
+        );
+      }
       throw new ChartExtractionError(
         `${config.model} call failed for ${imagePath}: HTTP ${response.status}`,
       );
@@ -146,6 +186,36 @@ export function createVlmClient(
       content,
       model: typeof parsed.model === "string" && parsed.model.trim() !== "" ? parsed.model : null,
     };
+  };
+  const sleep = options.sleep ?? defaultSleep;
+  const callWithMeta = async (
+    imagePath: string,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<VlmCallResult> => {
+    for (let attempt = 1; attempt <= MAX_VLM_ATTEMPTS; attempt += 1) {
+      try {
+        return await callOnce(imagePath, prompt, signal);
+      } catch (error) {
+        if (signal?.aborted === true) throw error;
+        const transportCode = classifyTransportFailure(error);
+        const retryable = error instanceof TransientVlmError ||
+          isAbortError(error) ||
+          (error instanceof UnsafeUrlError && error.message.startsWith("URL hostname could not be resolved:")) ||
+          (transportCode !== null && TRANSIENT_TRANSPORT_CODES.has(transportCode));
+        if (!retryable) throw error;
+        if (attempt === MAX_VLM_ATTEMPTS) {
+          throw error instanceof ChartExtractionError
+            ? error
+            : new ChartExtractionError(
+                `${config.model} call failed for ${imagePath} after ${MAX_VLM_ATTEMPTS} attempts: ` +
+                  `${error instanceof Error ? error.message : String(error)}`,
+              );
+        }
+        await sleep(attempt * 1_000, signal);
+      }
+    }
+    throw new ChartExtractionError(`${config.model} call exhausted retries for ${imagePath}`);
   };
   return {
     call: async (imagePath, prompt, signal) => (await callWithMeta(imagePath, prompt, signal)).content,

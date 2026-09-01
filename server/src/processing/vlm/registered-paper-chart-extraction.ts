@@ -45,7 +45,7 @@ import {
   type ChartTransformStep,
 } from "../../dataset/families/bioactivity-measurement/chart-evidence/index.js";
 import {
-  assertPaperEvidenceRows,
+  assertPaperEvidenceCarrierRows,
   derivePaperCanonicalIdentities,
   PAPER_ID_ABSENT,
   type ActivityValueRecordInput,
@@ -65,7 +65,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.2.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.5.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v3";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -1010,6 +1010,20 @@ function extractionReliability(confidence: ChartConfidenceLevel): ChartReliabili
   return confidence === "low" ? "low" : "medium";
 }
 
+function experimentSemanticDigest(candidate: ParsedExperimentCandidate): string {
+  return canonicalDigest({
+    protein: candidate.protein,
+    variant: candidate.variant,
+    construct: candidate.construct,
+    ligand: candidate.ligand,
+    assay_type: candidate.assay_type,
+    cell_line_or_system: candidate.cell_line_or_system,
+    temperature: candidate.temperature,
+    buffer: candidate.buffer,
+    incubation_time: candidate.incubation_time,
+  });
+}
+
 /**
  * Run the governed extraction and register the evidence carrier atomically.
  * All registered-asset, media-type, and identity gates run BEFORE any model
@@ -1185,6 +1199,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   const experimentCandidates: Array<{ page: PageExtraction; candidate: ParsedExperimentCandidate }> = [];
   const experimentIds = new Set<string>();
+  const experimentById = new Map<string, { page: PageExtraction; candidate: ParsedExperimentCandidate }>();
   const activityCandidates: Array<{ page: PageExtraction; candidate: ParsedActivityCandidate }> = [];
   const activityKeys = new Set<string>();
   const seriesCandidates: Array<{ page: PageExtraction; candidate: ParsedSeriesCandidate }> = [];
@@ -1192,11 +1207,21 @@ export async function extractRegisteredPaperChartEvidence(
   const pointCandidates: Array<{ page: PageExtraction; candidate: ParsedPointCandidate }> = [];
   for (const page of pages) {
     for (const candidate of page.parsed.experiments) {
-      if (experimentIds.has(candidate.experiment_id)) {
-        fail(`duplicate experiment_id ${candidate.experiment_id}`);
+      const existing = experimentById.get(candidate.experiment_id);
+      if (existing !== undefined) {
+        if (experimentSemanticDigest(existing.candidate) !== experimentSemanticDigest(candidate)) {
+          fail(`conflicting duplicate experiment_id ${candidate.experiment_id}`);
+        }
+        warnings.push(
+          `experiment ${candidate.experiment_id} repeated on page ${page.pageNumber} with matching semantics; ` +
+            `kept page ${existing.page.pageNumber} locator`,
+        );
+        continue;
       }
       experimentIds.add(candidate.experiment_id);
-      experimentCandidates.push({ page, candidate });
+      const entry = { page, candidate };
+      experimentById.set(candidate.experiment_id, entry);
+      experimentCandidates.push(entry);
     }
     for (const candidate of page.parsed.activities) {
       if (activityKeys.has(candidate.activity_key)) {
@@ -1516,6 +1541,9 @@ export async function extractRegisteredPaperChartEvidence(
       warnings.push(`series ${chartSeriesId} admitted no points and was marked unclear`);
     }
   }
+  if (pointRows.length === 0) {
+    for (const series of seriesRows) series.human_review_status = "not_required";
+  }
 
   const chartPapers: ChartPaperInput[] = [{
     paper_id: paperId,
@@ -1567,7 +1595,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   // -- 7. Hostile validation against the formal table contracts.
   try {
-    assertPaperEvidenceRows(paperRows, registeredIds);
+    assertPaperEvidenceCarrierRows(paperRows, registeredIds);
   } catch (error) {
     throw new ChartExtractionError(
       `paper evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
@@ -1580,6 +1608,15 @@ export async function extractRegisteredPaperChartEvidence(
     throw new ChartExtractionError(
       `chart evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+  if (pointRows.length === 0) {
+    try {
+      assertChartEvidenceRows(chartRows, derivedActivityIds);
+    } catch (error) {
+      throw new ChartExtractionError(
+        `no-point publication rows rejected: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   // -- 8. Serialize with stable key order, write, and register atomically.
@@ -1640,6 +1677,23 @@ export async function extractRegisteredPaperChartEvidence(
       output_sha256: digest,
     },
   });
+  if (pointRows.length === 0) {
+    const implementationDigest = sha256(Buffer.from(
+      `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+      "utf8",
+    ));
+    const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
+      carrier_asset_id: receipt.asset_ref.asset_id,
+      review_action: "not_required",
+    }), "utf8"));
+    await deps.sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "registered_paper_chart_extraction.v1",
+      implementation_digest: implementationDigest,
+      request_identity_digest: requestIdentityDigest,
+      canonical_accession: paperId,
+      provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+    });
+  }
 
   // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
   let carrierReview: RegisteredPaperChartCarrierReview | null = null;

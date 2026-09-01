@@ -337,6 +337,69 @@ describe("createVlmClient L1 tier", () => {
     );
     await expect(client.call(imagePath, VLM_PROMPT)).rejects.toThrow(/DASHSCOPE_API_KEY/);
   });
+
+  it("retries a transient connection reset and returns the next valid response", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const imagePath = path.join(taskRoot, "chart.png");
+    await writeFile(imagePath, tinyPng());
+    let calls = 0;
+    const client = createVlmClient(
+      { apiKey: "test-key", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: async () => {
+          calls += 1;
+          if (calls === 1) throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+          return {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: (async function* (): AsyncIterable<Buffer> {
+              yield Buffer.from(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
+            })(),
+          };
+        },
+      }),
+      { sleep: async () => undefined },
+    );
+
+    await expect(client.call(imagePath, VLM_PROMPT)).resolves.toBe(GOOD_VLM_JSON);
+    expect(calls).toBe(2);
+  });
+
+  it("retries a transient DNS resolution failure without retrying unsafe targets", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const imagePath = path.join(taskRoot, "chart.png");
+    await writeFile(imagePath, tinyPng());
+    let resolutions = 0;
+    let requests = 0;
+    const client = createVlmClient(
+      { apiKey: "test-key", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      new PublicHttpClient({
+        resolve: async () => {
+          resolutions += 1;
+          if (resolutions === 1) throw new Error("temporary DNS outage");
+          return [PUBLIC_IP];
+        },
+        executor: async () => {
+          requests += 1;
+          return {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            body: (async function* (): AsyncIterable<Buffer> {
+              yield Buffer.from(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
+            })(),
+          };
+        },
+      }),
+      { sleep: async () => undefined },
+    );
+
+    await expect(client.call(imagePath, VLM_PROMPT)).resolves.toBe(GOOD_VLM_JSON);
+    expect(resolutions).toBeGreaterThanOrEqual(2);
+    expect(requests).toBe(1);
+  });
 });
 
 describe("extract_chart_data_vlm tool", () => {

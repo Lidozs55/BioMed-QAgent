@@ -26,6 +26,7 @@ export interface ProductApiOptions {
   cacheDir: string;
   settingsDir: string;
   database: ProductDatabaseClient;
+  productCommit?: string | null;
 }
 
 interface Personalization {
@@ -134,6 +135,7 @@ export async function createProductApi(options: ProductApiOptions): Promise<{
         app_host: "ts",
         agent_runtime: "pi",
         dataset_core: "ts",
+        product_commit: options.productCommit ?? null,
       });
       return;
     }
