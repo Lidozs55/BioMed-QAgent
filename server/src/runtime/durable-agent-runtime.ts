@@ -1091,49 +1091,6 @@ export async function createDurableAgentRuntime(
       throw new HILConflictError("request_id does not match the pending HIL request");
     }
 
-    if (storedRequest === null && pendingRequest === null) {
-      if (body.evidence_digest !== undefined || typeof body.decision === "object") {
-        throw new ReferenceError("HIL request not found");
-      }
-      if (body.decision !== "approve" && body.decision !== "reject") {
-        throw new TypeError("decision must be approve or reject");
-      }
-      if (run.status !== "awaiting_user_input") {
-        throw new DurableTaskConflictError("active_run", "Run is not awaiting user input");
-      }
-      const afterSequence = Math.max(0, snapshot.task.latest_sequence - 1_000);
-      const events = await repository.listEvents(taskId, afterSequence, 1_000);
-      const resumed = new Set<string>();
-      let unresolvedRequestId: string | null = null;
-      for (const event of [...events].reverse()) {
-        if (event.run_id !== runId) continue;
-        if (event.payload.type === "user_input_resumed") {
-          resumed.add(event.payload.request_id);
-          continue;
-        }
-        if (
-          event.payload.type === "user_input_required"
-          && !resumed.has(event.payload.request_id)
-        ) {
-          unresolvedRequestId = event.payload.request_id;
-          break;
-        }
-      }
-      if (unresolvedRequestId === null || unresolvedRequestId !== requestId) {
-        throw new HILConflictError("request_id does not match the unresolved user input request");
-      }
-      const detail = body.detail;
-      await repository.appendRunEvent(taskId, runId, {
-        type: "user_input_resumed",
-        request_id: requestId,
-        decision: body.decision,
-        detail: detail !== null && typeof detail === "object" && !Array.isArray(detail)
-          ? detail as Record<string, JsonValue>
-          : {},
-      });
-      return repository.getSnapshot(taskId);
-    }
-
     let input: ResumeHILInput;
     try {
       input = parseResumeHILInput({

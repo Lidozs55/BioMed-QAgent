@@ -613,7 +613,7 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     expect(broker.hasPending("run_ts_1")).toBe(false);
   });
 
-  test("persistence failure while resolving settles the original tool call", async () => {
+  test("persistence failure while resolving keeps the request pending and retryable", async () => {
     const base = await mkdtemp(path.join(os.tmpdir(), "biomed-perm-fail2-"));
     roots.push(base);
     const workspaceRoot = path.join(base, "workspaces", "task_ts_1");
@@ -652,8 +652,16 @@ describe("PermissionBroker suspend/resume (P1)", () => {
     await expect(broker.resolve("run_ts_1", requestId, "allow", "once")).rejects.toThrow(
       "event stream unwritable",
     );
-    // The original tool call must settle with the failure, never hang.
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    // The request must not be lost: the entry stays pending so the HTTP caller
+    // can retry; the tool call stays suspended (approval is not done yet).
+    expect(broker.hasPending("run_ts_1")).toBe(true);
+    // Once the event stream recovers, the SAME approval lands and settles the
+    // original tool call — the retry path the fix enables.
+    (broker as unknown as { recordRunEvent: BrokerOptions["recordRunEvent"] }).recordRunEvent = async (payload) => {
+      events.push(payload as { type: string; request_id?: string });
+    };
+    await expect(broker.resolve("run_ts_1", requestId, "allow", "once")).resolves.toBe(true);
+    await expect(requested).resolves.toMatchObject({ decision: "allow" });
     expect(broker.hasPending("run_ts_1")).toBe(false);
   });
 
@@ -948,23 +956,25 @@ describe("round-3 audit: broker rollback (transactional grants)", () => {
   }
 
   test("run grant is rolled back when the resolve event write fails", async () => {
-    const { broker, grants, requested, requestId } = await failingBroker({ grantScope: "run" });
+    const { broker, grants, requestId } = await failingBroker({ grantScope: "run" });
     await expect(broker.resolve("run_ts_1", requestId, "allow", "run")).rejects.toThrow("event stream unwritable");
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    // The entry stays pending so the HTTP caller can retry; the tool call stays suspended.
+    expect(broker.hasPending("run_ts_1")).toBe(true);
     expect(grants.list()).toHaveLength(0);
   });
 
   test("task grant is rolled back when the resolve event write fails", async () => {
-    const { broker, grants, requested, requestId } = await failingBroker({ grantScope: "task" });
+    const { broker, grants, requestId } = await failingBroker({ grantScope: "task" });
     await expect(broker.resolve("run_ts_1", requestId, "allow", "task")).rejects.toThrow("event stream unwritable");
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(broker.hasPending("run_ts_1")).toBe(true);
     expect(grants.list()).toHaveLength(0);
   });
 
   test("persistent file rule is rolled back when the resolve event write fails", async () => {
-    const { broker, policyStore, requested, requestId, resource } = await failingBroker({ grantScope: "persistent" });
+    const { broker, policyStore, requestId, resource } = await failingBroker({ grantScope: "persistent" });
     await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    // The entry stays pending so the HTTP caller can retry; the tool call stays suspended.
+    expect(broker.hasPending("run_ts_1")).toBe(true);
     const settings = await policyStore.getSettings();
     expect(settings.rules).toHaveLength(0);
     // The path must not be auto-allowed afterwards.
@@ -986,17 +996,17 @@ describe("round-3 audit: broker rollback (transactional grants)", () => {
   });
 
   test("persistent exec approval is rolled back when the resolve event write fails", async () => {
-    const { broker, policyStore, requested, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
+    const { broker, policyStore, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
     await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(broker.hasPending("run_ts_1")).toBe(true);
     expect((await policyStore.getSettings()).persistent_exec_allow).toBe(false);
   });
 
   test("a pre-existing exec approval is restored, not clobbered, on rollback", async () => {
-    const { broker, policyStore, requested, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
+    const { broker, policyStore, requestId } = await failingBroker({ grantScope: "persistent", capability: "process.exec" });
     await policyStore.setPersistentExecAllow(true);
     await expect(broker.resolve("run_ts_1", requestId, "allow", "persistent")).rejects.toThrow("event stream unwritable");
-    await expect(requested).rejects.toThrow("event stream unwritable");
+    expect(broker.hasPending("run_ts_1")).toBe(true);
     expect((await policyStore.getSettings()).persistent_exec_allow).toBe(true);
   });
 });

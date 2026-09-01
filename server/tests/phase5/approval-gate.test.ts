@@ -452,66 +452,6 @@ describe("HIL resume route (durable runtime)", () => {
     await runtime.close();
   });
 
-  it("resumes legacy runtime prompts only when the unresolved request id matches", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "p5-legacy-hil-"));
-    roots.push(root);
-    const repository = new DurableTaskRepository(root);
-    const accepted = await repository.createTask({
-      requestId: "legacy_prompt",
-      input: "x",
-      databases: [],
-      mode: "agent",
-    });
-    const runtime = await createDurableAgentRuntime({
-      tasksRoot: root,
-      repository,
-      adapter: { async createSession() { throw new Error("unused"); } },
-      workspaceFactory: async () => ({
-        root: path.join(root, "workspace"),
-        tools: [],
-        dispose: async () => undefined,
-      }),
-    });
-    await repository.appendRunEvent(accepted.task_id, accepted.run_id, {
-      type: "user_input_required",
-      request_id: "legacy_request_1",
-      prompt_kind: "no_progress",
-      summary: "continue?",
-      expires_at: null,
-      fixture_exempt: false,
-      detail: {},
-    });
-    const base = await startServer((request, response) => {
-      void runtime.handle(request, response);
-    });
-
-    const stale = await fetch(
-      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/resume`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ request_id: "legacy_request_stale", decision: "approve" }),
-      },
-    );
-    expect(stale.status).toBe(409);
-
-    const resumed = await fetch(
-      `${base}/api/v1/tasks/${accepted.task_id}/runs/${accepted.run_id}/resume`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          request_id: "legacy_request_1",
-          decision: "approve",
-          detail: { reason: "continue" },
-        }),
-      },
-    );
-    expect(resumed.status).toBe(200);
-    expect((await repository.getSnapshot(accepted.task_id))?.runs[0]?.status).toBe("running");
-    await runtime.close();
-  });
-
   it("preserves pending HIL across host restart and reconstructs the run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "p5-hil-restart-"));
     roots.push(root);
