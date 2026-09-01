@@ -290,6 +290,7 @@ if (liveTask && manifestJson !== null) {
 if (rejections.length > 0) {
   for (const message of rejections) console.error(`[gold-v1] REJECT: ${message}`);
   console.error(`[gold-v1] run ${taskId} rejected with ${rejections.length} problem(s)`);
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log(`[gold-v1] run ${taskId} (commit ${currentCommit}) passes current-commit Gold6 closure assertions`);
 }
-console.log(`[gold-v1] run ${taskId} (commit ${currentCommit}) passes current-commit Gold6 closure assertions`);
