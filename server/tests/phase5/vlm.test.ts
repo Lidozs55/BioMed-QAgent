@@ -856,18 +856,24 @@ describe("extract_chart_data_vlm tool", () => {
     };
     expect(parsed.formal_status).toBe("core_registered");
     expect(parsed.prompt_digest).toMatch(/^[0-9a-f]{64}$/);
+    // Only the reviewed TERMINAL asset is exposed as formal evidence.
     expect(parsed.formal_evidence_assets).toHaveLength(1);
     expect(parsed.operation_result).toMatchObject({
-      operation_kind: "parse",
-      output_kind: "source_asset",
+      operation_kind: "derive",
+      output_kind: "derived_evidence",
     });
     await expect(registry.resolveDerivedOperationResult(parsed.operation_result.result_manifest_id))
-      .resolves.toMatchObject({ output_kind: "source_asset" });
+      .resolves.toMatchObject({ output_kind: "derived_evidence" });
+    // The terminal reviewed manifest re-registers as vlm_extraction with
+    // DIRECT parents [candidate carrier, review_evidence HIL record].
     expect(parsed.formal_evidence_assets[0]).toMatchObject({
       provenance: {
         operation_kind: "vlm_extraction",
-        parent_asset_ids: [source.asset_ref.asset_id],
         evidence: {
+          candidate_carrier_asset_id: expect.stringMatching(/^asset_[0-9a-f]{64}$/),
+          review_evidence_asset_id: expect.stringMatching(/^asset_[0-9a-f]{64}$/),
+          review_id: "review_formal_vlm",
+          review_action: "accept",
           model_version: "qwen-vl-max",
           manifest: {
             points: [
@@ -881,6 +887,21 @@ describe("extract_chart_data_vlm tool", () => {
         },
       },
     });
+    // Full candidate -> review_evidence -> reviewed closure resolves with
+    // committed OperationResults at every edge.
+    const closure = await registry.resolveFormalProvenanceClosure(
+      parsed.formal_evidence_assets[0]!.asset_id,
+    );
+    const closureKinds = closure.flatMap((item) =>
+      "operation_kind" in item ? [item.operation_kind] : []);
+    expect(closureKinds.filter((kind) => kind === "vlm_extraction")).toHaveLength(2);
+    expect(closureKinds).toContain("review_evidence");
+    const terminalParents = parsed.formal_evidence_assets[0]!.provenance.parent_asset_ids;
+    expect(terminalParents).toHaveLength(2);
+    for (const parentId of terminalParents) {
+      await expect(registry.resolveFormalInput(parentId))
+        .resolves.toMatchObject({ acquisition_provenance: null });
+    }
     await expect(registry.resolveFormalInput(parsed.formal_evidence_assets[0]!.asset_id))
       .resolves.toMatchObject({ acquisition_provenance: null });
   }, 60_000);

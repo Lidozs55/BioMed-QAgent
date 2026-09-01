@@ -46,4 +46,21 @@ describe("Core derived SourceAsset provenance contract", () => {
     })).toThrow(/unique/);
     expect(() => parseCoreDerivedAssetProvenance({ ...provenance(), operation_kind: "workspace_copy" })).toThrow();
   });
+
+  it("parses the review_evidence HIL record kind and rejects other unsupported kinds", () => {
+    const reviewEvidence = parseCoreDerivedAssetProvenance({
+      ...provenance(),
+      operation_kind: "review_evidence",
+    });
+    expect(reviewEvidence.operation_kind).toBe("review_evidence");
+    // The kind must stay distinct from vlm_extraction: only vlm_extraction is
+    // a manifest-carrying VLM carrier for downstream provenance matching.
+    expect(reviewEvidence.operation_kind).not.toBe("vlm_extraction");
+    for (const unsupported of ["human_correction", "review", "vlm_extraction_extra"]) {
+      expect(() => parseCoreDerivedAssetProvenance({
+        ...provenance(),
+        operation_kind: unsupported,
+      })).toThrow(/Unsupported operation kind/);
+    }
+  });
 });

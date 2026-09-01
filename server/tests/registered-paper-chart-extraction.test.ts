@@ -322,9 +322,12 @@ function responseWithoutExperimentProtein(): string {
   return JSON.stringify(body);
 }
 
-async function readCarrier(fixture: Fixture, relativePath: string): Promise<Record<string, unknown>> {
+async function readCarrier(fixture: Fixture, relativePath: string): Promise<{
+  extraction: Record<string, unknown>;
+  [key: string]: unknown;
+}> {
   const bytes = await readFile(path.join(fixture.taskRoot, relativePath), "utf8");
-  return JSON.parse(bytes) as Record<string, unknown>;
+  return JSON.parse(bytes) as { extraction: Record<string, unknown>; [key: string]: unknown };
 }
 
 function rowsOf(carrier: Record<string, unknown>, tableId: string): Record<string, unknown>[] {
@@ -450,6 +453,9 @@ describe("registered paper chart evidence extraction", () => {
         legend: "Erlotinib",
         extracted_at: FIXED_NOW.toISOString(),
         model_name: RESOLVED_MODEL,
+        model_version: PROVIDER_MODEL_VERSION,
+        prompt_digest: expectedPromptDigest,
+        figure_id: "Figure_2A",
         source_label: "Erlotinib",
         page_number: "1",
         bbox: "40,60,560,400",
@@ -474,6 +480,14 @@ describe("registered paper chart evidence extraction", () => {
         review_reason: "",
         original_x_value: point.original_x_value ?? "",
         original_y_value: point.original_y_value ?? "",
+        point_type: point.point_type,
+        // Exact point locator and row-level page identity, projected by the
+        // producer into the manifest for each point.
+        page_number: "1",
+        figure_id: "Figure_2A",
+        bbox: (point.pixel_or_coordinate_locator as { bbox: number[] }).bbox.join(","),
+        model_version: PROVIDER_MODEL_VERSION,
+        prompt_digest: expectedPromptDigest,
       })));
       expect(carrier.extraction.prompt_digest).toBe(expectedPromptDigest);
 
@@ -859,6 +873,13 @@ describe("registered paper chart evidence extraction", () => {
         legend: "Erlotinib",
         extracted_at: FIXED_NOW.toISOString(),
         model_name: RESOLVED_MODEL,
+        model_version: PROVIDER_MODEL_VERSION,
+        // Row-level identity: this page survived a corrective retry, so the
+        // manifest prompt digest is the digest of the ACTUAL surviving retry
+        // prompt (self-consistent with the series row identity).
+        prompt_digest: (rowsOf(carrier, "chart_series")[0] as { prompt_digest: string })
+          .prompt_digest,
+        figure_id: "Figure_2A",
         source_label: "Erlotinib",
         page_number: "1",
         bbox: "40,60,560,400",
@@ -894,8 +915,10 @@ describe("registered paper chart evidence extraction", () => {
         extraction: { prompt_digest: string; evidence_manifest: unknown };
       };
       const provenance = await fixture.registry.resolveDerivedProvenance(result.carrier.asset_id);
-      expect(provenance.evidence.manifest).toEqual(json.extraction.evidence_manifest);
-      expect(provenance.evidence.prompt_digest).toBe(json.extraction.prompt_digest);
+      expect(provenance.evidence).toMatchObject({
+        manifest: json.extraction.evidence_manifest,
+        prompt_digest: json.extraction.prompt_digest,
+      });
     } finally {
       await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
     }
@@ -1039,9 +1062,9 @@ describe("registered paper chart evidence extraction", () => {
         prompt_digest: candidateCarrierJson.extraction.prompt_digest,
         manifest: candidateCarrierJson.extraction.evidence_manifest,
       });
-      expect(candidateProvenance.evidence.manifest).toEqual(
-        candidateCarrierJson.extraction.evidence_manifest,
-      );
+      expect(candidateProvenance.evidence).toMatchObject({
+        manifest: candidateCarrierJson.extraction.evidence_manifest,
+      });
 
       const candidateResult = await fixture.registry.resolveDerivedOperationResult(
         candidateProvenance.operation_result_id,
@@ -1086,9 +1109,9 @@ describe("registered paper chart evidence extraction", () => {
         prompt_digest: reviewedCarrierJson.extraction.prompt_digest,
         manifest: reviewedCarrierJson.extraction.evidence_manifest,
       });
-      expect(reviewedProvenance.evidence.manifest).toEqual(
-        reviewedCarrierJson.extraction.evidence_manifest,
-      );
+      expect(reviewedProvenance.evidence).toMatchObject({
+        manifest: reviewedCarrierJson.extraction.evidence_manifest,
+      });
 
       const reviewedResult = await fixture.registry.resolveDerivedOperationResult(
         reviewedProvenance.operation_result_id,

@@ -253,6 +253,13 @@ export async function publishDynamicFamily(
       profileRef: input.productRequirements.profile_ref,
       stagedTablePaths,
       sourceInputProvenance: transformExecution?.sourceInputProvenance ?? [],
+      // The terminal transform inputs ARE the selection: VLM manifest matching
+      // is restricted to the admitted input receipts (the selected reviewed
+      // carrier in a candidate+reviewed closure), never inferred from point
+      // review state.
+      selectedInputAssetIds: transformExecution?.receipt.input_asset_receipts.map(
+        (receipt) => receipt.asset_id,
+      ),
       signal: input.signal,
     });
   } catch (error) {
