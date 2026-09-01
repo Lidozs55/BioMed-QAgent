@@ -15,6 +15,7 @@ import type {
 import { stableTaskExecutionContextJson } from "@biomed/contracts";
 
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
+import { initializeSemanticRouteState } from "./semantic-route-fence.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
 import {
   SourceAssetRegistry,
@@ -239,6 +240,10 @@ export class DurableTaskRepository {
     };
     const taskRoot = this.taskRoot(taskId);
     await mkdir(path.join(taskRoot, "state"), { recursive: true });
+    await initializeSemanticRouteState({
+      taskRoot,
+      stateFile: path.join(taskRoot, "state", "semantic-route.json"),
+    });
     await this.writeMetadata(taskId, metadata);
     await this.append(taskId, null, { type: "task_created", topic: metadata.title });
     await this.appendRunEvent(taskId, runId, {
