@@ -94,7 +94,11 @@ Core trust boundary as every other family:
   so partial carriers cannot weaken the final profile. Repeated experiment IDs
   across rendered pages are deduplicated only when their biomedical semantics
   match exactly; conflicting duplicates remain a hard rejection, while the
-  first page locator is retained deterministically.
+  first page locator is retained deterministically. A carrier with no admitted
+  chart points is marked `not_required`, rechecked against the publication-stage
+  chart gate, and may receive deterministic extraction provenance directly;
+  any carrier containing estimated points remains non-formal until human review
+  produces a separate review-closed carrier.
 - **Provenance retention.** The formal publication keeps, per series and per
   point: source asset, page/bbox locator, extraction model name and pinned
   version, every transform step (`vlm_extract`, `coordinate_transform`,

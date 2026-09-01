@@ -465,6 +465,42 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("registers a no-point carrier as formal without granting provenance to pending estimates", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null, points: [] }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      expect(result.rows.chart_points).toBe(0);
+      expect(result.reviewed_carrier).toBeUndefined();
+      await expect(fixture.registry.resolveCoreAcquired(result.carrier.asset_id)).resolves.toMatchObject({
+        acquisition_provenance: {
+          provider_id: "registered_paper_chart_extraction.v1",
+          canonical_accession: "31234567",
+        },
+      });
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      expect(rowsOf(carrier, "chart_series")[0]?.human_review_status).toBe("not_required");
+
+      const pending = await makeFixture(makeVlmResponse());
+      try {
+        const pendingResult = await extractRegisteredPaperChartEvidence(baseRequest(pending), {
+          taskRoot: pending.taskRoot,
+          sourceAssetRegistry: pending.registry,
+          ...pending.depsDefaults,
+        });
+        await expect(pending.registry.resolveCoreAcquired(pendingResult.carrier.asset_id))
+          .rejects.toThrow(/lacks exact Core acquisition provenance/);
+      } finally {
+        await Promise.all(pending.roots.map((root) => rm(root, { recursive: true, force: true })));
+      }
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("preserves mixed-content order in authoritative registered JATS metadata", async () => {
     const fixture = await makeFixture(makeVlmResponse({ paper: null }));
     try {

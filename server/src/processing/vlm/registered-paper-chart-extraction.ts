@@ -60,7 +60,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.4.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.5.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -1255,6 +1255,9 @@ export async function extractRegisteredPaperChartEvidence(
       warnings.push(`series ${chartSeriesId} admitted no points and was marked unclear`);
     }
   }
+  if (pointRows.length === 0) {
+    for (const series of seriesRows) series.human_review_status = "not_required";
+  }
 
   const chartPapers: ChartPaperInput[] = [{
     paper_id: paperId,
@@ -1320,6 +1323,15 @@ export async function extractRegisteredPaperChartEvidence(
       `chart evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  if (pointRows.length === 0) {
+    try {
+      assertChartEvidenceRows(chartRows, derivedActivityIds);
+    } catch (error) {
+      throw new ChartExtractionError(
+        `no-point publication rows rejected: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   // -- 8. Serialize with stable key order, write, and register atomically.
   const carrier = {
@@ -1361,6 +1373,23 @@ export async function extractRegisteredPaperChartEvidence(
     role: "carrier",
     mediaType: "application/json",
   });
+  if (pointRows.length === 0) {
+    const implementationDigest = sha256(Buffer.from(
+      `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+      "utf8",
+    ));
+    const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
+      carrier_asset_id: receipt.asset_ref.asset_id,
+      review_action: "not_required",
+    }), "utf8"));
+    await deps.sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "registered_paper_chart_extraction.v1",
+      implementation_digest: implementationDigest,
+      request_identity_digest: requestIdentityDigest,
+      canonical_accession: paperId,
+      provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+    });
+  }
 
   // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
   let carrierReview: RegisteredPaperChartCarrierReview | null = null;
