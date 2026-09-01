@@ -90,6 +90,7 @@ import {
 import {
   archiveCommittedDynamicTablesAsUntrustedArtifacts,
 } from "./dynamic-family-untrusted-fallback.js";
+import { createSemanticRouteFence } from "./semantic-route-fence.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
@@ -452,6 +453,12 @@ export async function createPhase3Runtime(
       const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator({
         stateFile: path.join(taskRoot, "state", "dynamic-family-preflight.json"),
       });
+      // Host-owned one-way route fence: once a run commits to Dynamic Family,
+      // static validate/execute stay fenced for the whole task, across
+      // restart, regardless of requirement_id changes or dynamic rejections.
+      const semanticRouteFence = createSemanticRouteFence({
+        stateFile: path.join(taskRoot, "state", "semantic-route.json"),
+      });
       // Permission control plane: persistent user settings + per-task broker.
       const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
         path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
@@ -613,6 +620,10 @@ export async function createPhase3Runtime(
             ?? resolveCoreProductTopologyRequirements
           )(submission.family_spec.assessment_policy_ref);
           const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
+          // Commit the one-way route fence before any prepare side effect so
+          // a changed requirement_id can never take the static route after
+          // the first formal dynamic prepare/scaffold boundary.
+          await semanticRouteFence.commitDynamicRoute();
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
             requirementId: submission.execution_proposal.requirement_id,
@@ -892,6 +903,7 @@ export async function createPhase3Runtime(
         taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
+        semanticRouteFence,
         discoveryLedger: () => toolHooks.discoveryLedger?.() ?? null,
         onDiagnostic: (diagnostic) => {
           console.info("tool.dataset_execution", diagnostic);
