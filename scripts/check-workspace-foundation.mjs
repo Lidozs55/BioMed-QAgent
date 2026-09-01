@@ -64,6 +64,14 @@ const workspace = readFileSync(pathFromRoot("pnpm-workspace.yaml"), "utf8");
 for (const packagePath of ["frontend", "server", "packages/*"]) {
   assert.match(workspace, new RegExp(`^\\s*- ${packagePath.replace("*", "\\*")}\\s*$`, "m"));
 }
+for (const setting of [
+  "nodeLinker: hoisted",
+  "packageImportMethod: copy",
+  "injectWorkspacePackages: true",
+  "dedupeInjectedDeps: false",
+]) {
+  assert.match(workspace, new RegExp(`^${setting}$`, "m"), `Missing exFAT-safe pnpm setting: ${setting}`);
+}
 
 requireFile("pnpm-lock.yaml");
 requireAbsent("frontend/pnpm-lock.yaml");
@@ -87,6 +95,8 @@ assert.equal(
 
 const frontendPackage = readJson("frontend/package.json");
 assert.equal(frontendPackage.name, "@biomed/frontend");
+assert.equal(frontendPackage.dependencies?.["@biomed/contracts"], "file:../packages/contracts");
+assert.equal(frontendPackage.dependenciesMeta?.["@biomed/contracts"]?.injected, true);
 assert.equal(frontendPackage.packageManager, undefined);
 assert.equal(frontendPackage.scripts?.dev, "vite", "Frontend dev behavior must remain Vite");
 assert.equal(typeof frontendPackage.scripts?.typecheck, "string");
@@ -105,6 +115,8 @@ for (const config of ["tsconfig.json", "tsconfig.app.json", "tsconfig.node.json"
 
 const serverPackage = readJson("server/package.json");
 assert.equal(serverPackage.name, "@biomed/server");
+assert.equal(serverPackage.dependencies?.["@biomed/contracts"], "file:../packages/contracts");
+assert.equal(serverPackage.dependenciesMeta?.["@biomed/contracts"]?.injected, true);
 assert.equal(serverPackage.packageManager, undefined);
 for (const script of ["predev", "pretest", "prestart"]) {
   assert.equal(

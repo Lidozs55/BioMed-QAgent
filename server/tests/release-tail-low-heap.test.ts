@@ -11,8 +11,8 @@
  * process: validation, confidence, provenance, and publish.
  */
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const VITE_NODE_ENTRY = createRequire(import.meta.url).resolve("vite-node/vite-node.mjs");
 const CHILD = path.join(REPO_ROOT, "server", "tests", "phase5", "fixtures", "tail-heap-child.mts");
 
 const roots: string[] = [];
@@ -33,24 +34,10 @@ function runTailChild(
   rowCount: number,
   heapMb: number,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const pnpmDir = path.join(REPO_ROOT, "node_modules", ".pnpm");
-  const viteNodeVersions = readdirSync(pnpmDir)
-    .filter((name) => name.startsWith("vite-node@"))
-    .sort();
-  if (viteNodeVersions.length === 0) {
-    throw new Error("vite-node not found in node_modules/.pnpm");
-  }
-  const viteNodeEntry = path.join(
-    pnpmDir,
-    viteNodeVersions[viteNodeVersions.length - 1]!,
-    "node_modules",
-    "vite-node",
-    "vite-node.mjs",
-  );
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["--no-warnings", `--max-old-space-size=${heapMb}`, viteNodeEntry, CHILD, workRoot, String(rowCount)],
+      ["--no-warnings", `--max-old-space-size=${heapMb}`, VITE_NODE_ENTRY, CHILD, workRoot, String(rowCount)],
       { stdio: "pipe" },
     );
     let stdout = "";

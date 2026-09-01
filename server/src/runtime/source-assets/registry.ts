@@ -141,6 +141,7 @@ export class SourceAssetRegistry {
   private readonly coreAcquisitions = new Map<string, CoreAcquisitionProvenance>();
   private readonly derivedAssets = new Map<string, CoreDerivedAssetProvenance>();
   private loaded = false;
+  private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly taskId: string,
@@ -202,16 +203,25 @@ export class SourceAssetRegistry {
     this.loaded = true;
   }
 
-  private async persist(): Promise<void> {
-    await writeJsonAtomic(path.join(this.root, REGISTRY_FILE), [...this.registrations.values()]);
+  private enqueuePersist(write: () => Promise<void>): Promise<void> {
+    const pending = this.persistQueue.then(write, write);
+    this.persistQueue = pending.catch(() => undefined);
+    return pending;
   }
 
-  private async persistCoreAcquisitions(): Promise<void> {
-    await writeJsonAtomic(path.join(this.root, CORE_ACQUISITION_FILE), [...this.coreAcquisitions.values()]);
+  private persist(): Promise<void> {
+    return this.enqueuePersist(() =>
+      writeJsonAtomic(path.join(this.root, REGISTRY_FILE), [...this.registrations.values()]));
   }
 
-  private async persistDerivedAssets(): Promise<void> {
-    await writeJsonAtomic(path.join(this.root, DERIVED_ASSET_FILE), [...this.derivedAssets.values()]);
+  private persistCoreAcquisitions(): Promise<void> {
+    return this.enqueuePersist(() =>
+      writeJsonAtomic(path.join(this.root, CORE_ACQUISITION_FILE), [...this.coreAcquisitions.values()]));
+  }
+
+  private persistDerivedAssets(): Promise<void> {
+    return this.enqueuePersist(() =>
+      writeJsonAtomic(path.join(this.root, DERIVED_ASSET_FILE), [...this.derivedAssets.values()]));
   }
 
   async register(input: RegisterSourceAssetInput): Promise<SourceAssetRegistrationReceipt> {

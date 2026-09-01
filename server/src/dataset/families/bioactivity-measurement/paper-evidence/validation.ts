@@ -128,14 +128,17 @@ function activityKey(record: ActivityValueRecordInput): string {
   ].join("\u001f");
 }
 
-export function assertPaperEvidenceRows(
+function assertPaperEvidenceRowsInternal(
   rows: PaperEvidenceRows,
   registeredAssetIds: ReadonlySet<string>,
+  requireSupplementary: boolean,
 ): void {
   if (rows.paper_records.length === 0) fail("paper_records must not be empty");
   if (rows.experiment_records.length === 0) fail("experiment_records must not be empty");
   if (rows.activity_value_records.length === 0) fail("activity_value_records must not be empty");
-  if (rows.supplementary_asset_records.length === 0) fail("supplementary_asset_records must not be empty");
+  if (requireSupplementary && rows.supplementary_asset_records.length === 0) {
+    fail("supplementary_asset_records must not be empty");
+  }
 
   const papers = new Set<string>();
   for (const paper of rows.paper_records) {
@@ -250,6 +253,22 @@ export function assertPaperEvidenceRows(
     if (assets.has(key)) fail(`duplicate supplementary asset ${asset.asset_name}`);
     assets.add(key);
   }
+}
+
+/** Final publication gate: every paper-evidence table must be non-empty. */
+export function assertPaperEvidenceRows(
+  rows: PaperEvidenceRows,
+  registeredAssetIds: ReadonlySet<string>,
+): void {
+  assertPaperEvidenceRowsInternal(rows, registeredAssetIds, true);
+}
+
+/** Partial carrier gate: one paper may legitimately have no supplementary asset. */
+export function assertPaperEvidenceCarrierRows(
+  rows: PaperEvidenceRows,
+  registeredAssetIds: ReadonlySet<string>,
+): void {
+  assertPaperEvidenceRowsInternal(rows, registeredAssetIds, false);
 }
 
 export function evaluatePaperEvidencePublication(

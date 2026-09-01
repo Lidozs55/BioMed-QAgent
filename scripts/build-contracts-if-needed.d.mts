@@ -13,6 +13,8 @@ export function outputsAreReusable(
   inputDigest: string,
 ): boolean;
 
+export function syncInstalledContracts(root: string): string[];
+
 export interface ContractBuildState {
   contractsRoot: string;
   inputDigest: string;

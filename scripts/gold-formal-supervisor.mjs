@@ -380,6 +380,38 @@ export function createApiClient(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, fetchIm
   return Object.freeze({ root, request, download });
 }
 
+/** Read a complete task event stream without exceeding the API's 1,000-row page cap. */
+export async function fetchAllTaskEvents(
+  baseUrl,
+  taskId,
+  fetchImpl = globalThis.fetch,
+) {
+  const base = normalizedBaseUrl(baseUrl);
+  const events = [];
+  let afterSequence = 0;
+  for (;;) {
+    const response = await fetchImpl(
+      `${base}/api/v1/tasks/${encodeURIComponent(taskId)}/events?after_sequence=${afterSequence}&limit=1000`,
+    );
+    if (!response.ok) {
+      throw new Error(`task event page failed: HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (!isRecord(payload) || !Array.isArray(payload.events)) {
+      throw new Error("task event page response is invalid");
+    }
+    if (payload.events.length === 0) return events;
+    for (const event of payload.events) {
+      if (!isRecord(event) || !Number.isSafeInteger(event.sequence) || event.sequence !== afterSequence + 1) {
+        throw new Error("task event page is not contiguous");
+      }
+      events.push(event);
+      afterSequence = event.sequence;
+    }
+    if (payload.events.length < 1_000) return events;
+  }
+}
+
 /** Parse the formal event page shape. */
 export function parseEventPage(body) {
   if (!isRecord(body) || !Array.isArray(body.events)) throw new SupervisorError("protocol", "event page must contain events[]");
@@ -768,7 +800,8 @@ function observedCommit(...values) {
 function checkExpectedCommit(expected, ...values) {
   if (expected === null || expected === undefined) return null;
   const observed = observedCommit(...values);
-  if (observed !== null && observed !== expected) throw new SupervisorError("health", "Host product commit does not match expected commit");
+  if (observed === null) throw new SupervisorError("health", "Host product commit evidence is missing");
+  if (observed !== expected) throw new SupervisorError("health", "Host product commit does not match expected commit");
   return observed;
 }
 
@@ -1045,7 +1078,7 @@ if (now() > deadline) throw new SupervisorError("timeout", "supervisor timeout e
     } else {
       terminal = classifyTerminal({ run, publication: boundPublication });
     }
-    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail);
+    const observedFinalCommit = checkExpectedCommit(options.expectedCommit, snapshot, publicationDetail, health);
     if (terminal.classification !== "succeeded_publication") {
       await atomicWrite(path.join(options.evidenceDir, "closure.json"), `${JSON.stringify(redacted({ schema_version: "1.0", case_label: options.caseLabel, task_id: options.taskId, run_id: runId, expected_commit: options.expectedCommit ?? null, observed_commit: observedFinalCommit ?? healthCommit, health, terminal, run_usage: run.summary?.usage ?? null }), null, 2)}\n`);
       throw errorForTerminal(terminal);

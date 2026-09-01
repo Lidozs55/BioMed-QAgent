@@ -45,7 +45,7 @@ import {
   type ChartTransformStep,
 } from "../../dataset/families/bioactivity-measurement/chart-evidence/index.js";
 import {
-  assertPaperEvidenceRows,
+  assertPaperEvidenceCarrierRows,
   derivePaperCanonicalIdentities,
   PAPER_ID_ABSENT,
   type ActivityValueRecordInput,
@@ -65,7 +65,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.3.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.5.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v3";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -473,7 +473,6 @@ interface PageExtraction {
   parsed: RegisteredPaperChartResponse;
   inputDigest: string;
   outputDigest: string;
-  promptDigest: string;
   providerModel: string | null;
 }
 
@@ -527,22 +526,7 @@ function hasUsablePointCandidate(
   );
 }
 
-function retryDeficits(
-  response: RegisteredPaperChartResponse,
-  focus?: {
-    seriesKey: string;
-    figureId: string | null;
-    bbox: [number, number, number, number] | null;
-    xAxisName: string;
-    xAxisUnit: string | null;
-    yAxisName: string;
-    yAxisUnit: string | null;
-    xScale: string;
-    yScale: string;
-    legendText: string | null;
-    activityKeys: readonly string[];
-  },
-): string[] {
+function retryDeficits(response: RegisteredPaperChartResponse): string[] {
   const candidates = response.series.filter((series) =>
     hasClearSeriesEvidence(series) && isDoseResponseCandidate(series, response),
   );
@@ -550,19 +534,9 @@ function retryDeficits(
   for (const series of candidates) {
     if (hasUsablePointCandidate(response, series)) continue;
     const seriesPoints = response.points.filter((point) => point.series_key === series.series_key);
-    const focusNote = focus !== undefined && focus.seriesKey === series.series_key
-      ? ` [validated: figure ${focus.figureId ?? "unknown"}, bbox ${focus.bbox === null
-        ? "unknown"
-        : `[${focus.bbox.join(", ")}]`}, x=${focus.xAxisName}${focus.xAxisUnit === null
-          ? ""
-          : ` (${focus.xAxisUnit})`} ${focus.xScale}, y=${focus.yAxisName}${focus.yAxisUnit === null
-            ? ""
-            : ` (${focus.yAxisUnit})`} ${focus.yScale}, legend=${focus.legendText ?? "absent"}, ` +
-        `legal activity_keys: ${focus.activityKeys.length > 0 ? focus.activityKeys.join(", ") : "none"}]`
-      : "";
     deficits.push(seriesPoints.length === 0
-      ? `series ${series.series_key}: no usable chart points were returned${focusNote}`
-      : `series ${series.series_key}: point candidates failed finite-coordinate, locator, confidence, or activity-reference validation${focusNote}`);
+      ? `series ${series.series_key}: no usable chart points were returned`
+      : `series ${series.series_key}: point candidates failed finite-coordinate, locator, confidence, or activity-reference validation`);
   }
   return deficits.slice(0, MAX_RETRY_DEFICITS);
 }
@@ -575,9 +549,7 @@ Corrective retry on the same rendered page. Validation deficits only:
 ${boundedDeficits.map((deficit) => `- ${deficit}`).join("\n")}
 
 Re-check the image and return the complete JSON object required above. Recover
-only values visibly supported by this page. The validated context above is
-trusted producer state: points may only reference the listed legal activity_keys
-for the deficit series. Do not guess, infer, interpolate,
+only values visibly supported by this page. Do not guess, infer, interpolate,
 or fabricate coordinates, units, protein identity, figure identity, axis or
 legend semantics, or any other field. If a value remains unclear, leave it
 empty and mark the relevant series unclear; do not emit a point.`;
@@ -595,77 +567,6 @@ function pageWarning(pageNumber: number, code: string, detail: string): string {
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-/**
- * Deterministic charts/points manifest projected from the exact validated
- * carrier rows (R5 evidence-manifest contract), in the validator's native
- * ChartRow/ChartPointRow vocabulary. The literature-experiment-chart profile
- * validator requires ``evidence.manifest`` on the consuming ``vlm_extraction``
- * provenance and cross-checks every admitted series and point against it. This
- * projection is a pure function of the rows that already passed the chart row
- * gate: it never accepts a model-authored manifest and carries no locators
- * (the canonical row locator stays authoritative in the carrier).
- */
-interface ManifestChartState {
-  page_number: string;
-  bbox: string;
-}
-
-function projectEvidenceManifest(options: {
-  seriesRows: readonly ChartSeriesInput[];
-  pointRows: readonly ChartPointInput[];
-  chartStates: ReadonlyMap<string, ManifestChartState>;
-  extractedAt: string;
-}): { manifest: JsonValue; servedSeries: Map<string, ChartSeriesInput> } {
-  const servedSeries = new Map<string, ChartSeriesInput>(
-    options.seriesRows.map((row) => [row.chart_series_id, { ...row }]),
-  );
-  const charts = options.seriesRows.map((row) => {
-    const state = options.chartStates.get(row.chart_series_id);
-    return {
-      chart_id: row.chart_series_id,
-      source_asset_id: row.source_asset_id,
-      chart_type: "line",
-      title: row.series_label,
-      x_label: row.x_axis_name,
-      x_unit: row.x_axis_unit,
-      x_scale: row.x_scale,
-      y_label: row.y_axis_name,
-      y_unit: row.y_axis_unit,
-      y_scale: row.y_scale,
-      data_point_count: options.pointRows.filter((point) =>
-        point.chart_series_id === row.chart_series_id).length,
-      legend: row.legend_text,
-      extracted_at: options.extractedAt,
-      model_name: row.model_name,
-      source_label: row.series_label,
-      page_number: state?.page_number ?? "",
-      bbox: state?.bbox ?? "",
-      extraction_tier: "L1_vlm",
-    };
-  });
-  const points = options.pointRows.map((point) => ({
-    point_id: point.point_id,
-    chart_id: point.chart_series_id,
-    x_value: point.x_value,
-    y_value: point.y_value,
-    series_label: servedSeries.get(point.chart_series_id)?.series_label ?? "",
-    confidence_level: point.extraction_confidence,
-    confidence_reason: point.confidence_reason,
-    human_review_state: point.review_status,
-    review_id: point.review_id ?? "",
-    review_evidence_digest: point.transform_provenance.review?.evidence_digest ?? "",
-    review_reviewer: point.transform_provenance.review?.reviewer ?? "",
-    reviewed_at: point.transform_provenance.review?.reviewed_at ?? "",
-    review_reason: point.transform_provenance.review?.reason ?? "",
-    original_x_value: point.original_x_value ?? "",
-    original_y_value: point.original_y_value ?? "",
-  }));
-  return {
-    manifest: JSON.parse(JSON.stringify({ charts, points })) as JsonValue,
-    servedSeries,
-  };
 }
 
 async function registerDerivedJsonAsset(options: {
@@ -1109,6 +1010,20 @@ function extractionReliability(confidence: ChartConfidenceLevel): ChartReliabili
   return confidence === "low" ? "low" : "medium";
 }
 
+function experimentSemanticDigest(candidate: ParsedExperimentCandidate): string {
+  return canonicalDigest({
+    protein: candidate.protein,
+    variant: candidate.variant,
+    construct: candidate.construct,
+    ligand: candidate.ligand,
+    assay_type: candidate.assay_type,
+    cell_line_or_system: candidate.cell_line_or_system,
+    temperature: candidate.temperature,
+    buffer: candidate.buffer,
+    incubation_time: candidate.incubation_time,
+  });
+}
+
 /**
  * Run the governed extraction and register the evidence carrier atomically.
  * All registered-asset, media-type, and identity gates run BEFORE any model
@@ -1222,29 +1137,7 @@ export async function extractRegisteredPaperChartEvidence(
     }
 
     if (parsed !== null) {
-      const admitted = parsed;
-      const focusSeries = admitted.series.find((series) =>
-        hasClearSeriesEvidence(series) && isDoseResponseCandidate(series, admitted)
-        && !hasUsablePointCandidate(admitted, series)
-      );
-      const focusActivityKeys = focusSeries === undefined
-        ? []
-        : admitted.activities.map((activity) => activity.activity_key)
-            .filter((key, index, all) => all.indexOf(key) === index)
-            .slice(0, MAX_RETRY_DEFICITS);
-      deficits = retryDeficits(admitted, focusSeries === undefined ? undefined : {
-        seriesKey: focusSeries.series_key,
-        figureId: focusSeries.figure_id,
-        bbox: focusSeries.bbox,
-        xAxisName: focusSeries.x_axis_name,
-        xAxisUnit: focusSeries.x_axis_unit,
-        yAxisName: focusSeries.y_axis_name,
-        yAxisUnit: focusSeries.y_axis_unit,
-        xScale: focusSeries.x_scale,
-        yScale: focusSeries.y_scale,
-        legendText: focusSeries.legend_text,
-        activityKeys: focusActivityKeys,
-      });
+      deficits = retryDeficits(parsed);
     }
     if (deficits.length > 0) {
       warnings.push(pageWarning(image.pageIndex, "retry", deficits.join("; ")));
@@ -1290,7 +1183,6 @@ export async function extractRegisteredPaperChartEvidence(
       parsed,
       inputDigest,
       outputDigest: sha256(Buffer.from(content, "utf8")),
-      promptDigest: sha256(Buffer.from(REGISTERED_PAPER_CHART_PROMPT, "utf8")),
       providerModel,
     });
   }
@@ -1307,6 +1199,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   const experimentCandidates: Array<{ page: PageExtraction; candidate: ParsedExperimentCandidate }> = [];
   const experimentIds = new Set<string>();
+  const experimentById = new Map<string, { page: PageExtraction; candidate: ParsedExperimentCandidate }>();
   const activityCandidates: Array<{ page: PageExtraction; candidate: ParsedActivityCandidate }> = [];
   const activityKeys = new Set<string>();
   const seriesCandidates: Array<{ page: PageExtraction; candidate: ParsedSeriesCandidate }> = [];
@@ -1314,11 +1207,21 @@ export async function extractRegisteredPaperChartEvidence(
   const pointCandidates: Array<{ page: PageExtraction; candidate: ParsedPointCandidate }> = [];
   for (const page of pages) {
     for (const candidate of page.parsed.experiments) {
-      if (experimentIds.has(candidate.experiment_id)) {
-        fail(`duplicate experiment_id ${candidate.experiment_id}`);
+      const existing = experimentById.get(candidate.experiment_id);
+      if (existing !== undefined) {
+        if (experimentSemanticDigest(existing.candidate) !== experimentSemanticDigest(candidate)) {
+          fail(`conflicting duplicate experiment_id ${candidate.experiment_id}`);
+        }
+        warnings.push(
+          `experiment ${candidate.experiment_id} repeated on page ${page.pageNumber} with matching semantics; ` +
+            `kept page ${existing.page.pageNumber} locator`,
+        );
+        continue;
       }
       experimentIds.add(candidate.experiment_id);
-      experimentCandidates.push({ page, candidate });
+      const entry = { page, candidate };
+      experimentById.set(candidate.experiment_id, entry);
+      experimentCandidates.push(entry);
     }
     for (const candidate of page.parsed.activities) {
       if (activityKeys.has(candidate.activity_key)) {
@@ -1480,9 +1383,7 @@ export async function extractRegisteredPaperChartEvidence(
   const seriesRows: ChartSeriesInput[] = [];
   const pointRows: ChartPointInput[] = [];
   const pointIds: string[] = [];
-  const manifestChartStates = new Map<string, ManifestChartState>();
   for (const { page, candidate } of seriesCandidates) {
-    const pagePromptDigest = page.promptDigest;
     const step = transformStep({
       stepId: `vlm_extract_p${page.pageNumber}_${candidate.series_key}`,
       pageNumber: page.pageNumber,
@@ -1513,10 +1414,6 @@ export async function extractRegisteredPaperChartEvidence(
 
     const chartSeriesId = `series_${candidate.series_key}`;
     const confidence = candidate.extraction_confidence ?? "low";
-    manifestChartStates.set(chartSeriesId, {
-      page_number: String(page.pageNumber),
-      bbox: (candidate.bbox ?? [0, 0, 1, 1]).join(","),
-    });
     seriesRows.push({
       chart_series_id: chartSeriesId,
       paper_id: paperId,
@@ -1547,7 +1444,6 @@ export async function extractRegisteredPaperChartEvidence(
       }),
       model_name: config.model,
       model_version: modelVersion,
-      prompt_digest: pagePromptDigest,
       extraction_method: "vlm",
       extraction_confidence: confidence,
       source_reliability: "medium",
@@ -1645,6 +1541,9 @@ export async function extractRegisteredPaperChartEvidence(
       warnings.push(`series ${chartSeriesId} admitted no points and was marked unclear`);
     }
   }
+  if (pointRows.length === 0) {
+    for (const series of seriesRows) series.human_review_status = "not_required";
+  }
 
   const chartPapers: ChartPaperInput[] = [{
     paper_id: paperId,
@@ -1656,25 +1555,6 @@ export async function extractRegisteredPaperChartEvidence(
     source_url: paperMeta.source_url,
     source_id: xmlSourceId,
   }];
-  // R5 evidence-manifest contract: project the canonical charts/points
-  // manifest deterministically from the exact validated carrier rows. The
-  // review-corrected representation is served for the publication manifest so
-  // the manifest that ships with the reviewed carrier matches its own bytes.
-  const evidenceProjection = projectEvidenceManifest({
-    seriesRows,
-    pointRows,
-    chartStates: manifestChartStates,
-    extractedAt: retrievedAt,
-  });
-  const evidenceManifest = evidenceProjection.manifest;
-  const servedSeries = evidenceProjection.servedSeries;
-  // The candidate carrier serves the exact rows the manifest was projected
-  // from, so candidate bytes and candidate manifest can never drift apart.
-  for (const [index, row] of seriesRows.entries()) {
-    const served = servedSeries.get(row.chart_series_id);
-    if (served !== undefined) seriesRows[index] = served;
-  }
-  const servedPromptDigest = sha256(Buffer.from(REGISTERED_PAPER_CHART_PROMPT, "utf8"));
   const chartSources: ChartSourceInput[] = [{
     source_id: xmlSourceId,
     source_database: "paper_full_text",
@@ -1715,7 +1595,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   // -- 7. Hostile validation against the formal table contracts.
   try {
-    assertPaperEvidenceRows(paperRows, registeredIds);
+    assertPaperEvidenceCarrierRows(paperRows, registeredIds);
   } catch (error) {
     throw new ChartExtractionError(
       `paper evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
@@ -1729,6 +1609,15 @@ export async function extractRegisteredPaperChartEvidence(
       `chart evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  if (pointRows.length === 0) {
+    try {
+      assertChartEvidenceRows(chartRows, derivedActivityIds);
+    } catch (error) {
+      throw new ChartExtractionError(
+        `no-point publication rows rejected: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   // -- 8. Serialize with stable key order, write, and register atomically.
   const carrier = {
@@ -1741,8 +1630,6 @@ export async function extractRegisteredPaperChartEvidence(
       implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       model: { provider: providerHost, model: config.model, model_version: modelVersion },
-      prompt_digest: servedPromptDigest,
-      evidence_manifest: evidenceManifest,
       source_assets: {
         paper_xml_asset_id: xmlAssetId,
         paper_pdf_asset_id: pdfAssetId,
@@ -1767,7 +1654,6 @@ export async function extractRegisteredPaperChartEvidence(
     prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
     model_name: config.model,
     model_version: modelVersion,
-    prompt_digest: servedPromptDigest,
   });
   const receipt = await registerDerivedJsonAsset({
     taskRoot: deps.taskRoot,
@@ -1788,11 +1674,26 @@ export async function extractRegisteredPaperChartEvidence(
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       model_name: config.model,
       model_version: modelVersion,
-      prompt_digest: servedPromptDigest,
-      manifest: evidenceManifest,
       output_sha256: digest,
     },
   });
+  if (pointRows.length === 0) {
+    const implementationDigest = sha256(Buffer.from(
+      `${REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION}@${REGISTERED_PAPER_CHART_EXTRACTION_VERSION}`,
+      "utf8",
+    ));
+    const requestIdentityDigest = sha256(Buffer.from(canonicalDigest({
+      carrier_asset_id: receipt.asset_ref.asset_id,
+      review_action: "not_required",
+    }), "utf8"));
+    await deps.sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
+      provider_id: "registered_paper_chart_extraction.v1",
+      implementation_digest: implementationDigest,
+      request_identity_digest: requestIdentityDigest,
+      canonical_accession: paperId,
+      provider_snapshot_identity: "registered_paper_chart_extraction.v1:governed",
+    });
+  }
 
   // -- 9. ONE evidence-bound review batch for ALL pending carrier estimates.
   let carrierReview: RegisteredPaperChartCarrierReview | null = null;
@@ -1893,8 +1794,6 @@ export async function extractRegisteredPaperChartEvidence(
           implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
           prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
           model: { provider: providerHost, model: config.model, model_version: modelVersion },
-          prompt_digest: servedPromptDigest,
-          evidence_manifest: evidenceManifest,
           source_assets: {
             paper_xml_asset_id: xmlAssetId,
             paper_pdf_asset_id: pdfAssetId,
@@ -1914,7 +1813,6 @@ export async function extractRegisteredPaperChartEvidence(
       seriesRows,
       pointRows,
       derivedActivityIds,
-      promptDigest: servedPromptDigest,
       review: {
         request_id: carrierReview.request_id,
         review_id: carrierReview.review_id,
@@ -1980,7 +1878,6 @@ async function registerReviewedPublicationCarrier(options: {
   seriesRows: ChartSeriesInput[];
   pointRows: ChartPointInput[];
   derivedActivityIds: ReadonlySet<string>;
-  promptDigest: string;
   review: RegisteredPaperChartCarrierReview;
   sourceAssetRegistry: SourceAssetRegistry;
 }): Promise<RegisteredPaperChartCarrierSummary> {
@@ -2137,35 +2034,9 @@ async function registerReviewedPublicationCarrier(options: {
     },
   });
 
-  // Re-project the manifest from the review-corrected representation so the
-  // reviewed carrier's own bytes, its embedded manifest, and its registered
-  // provenance evidence all agree point-for-point.
-  const candidateManifest = ((options.candidateCarrier.extraction as {
-    evidence_manifest?: { charts?: Array<Record<string, JsonValue>> };
-  }).evidence_manifest ?? { charts: [] });
-  const candidateCharts = candidateManifest.charts ?? [];
-  const reviewedProjection = projectEvidenceManifest({
-    seriesRows: options.seriesRows,
-    pointRows: reviewedPoints,
-    chartStates: new Map(
-      options.seriesRows.map((row) => {
-        const candidateChart = candidateCharts.find((chart) =>
-          chart.chart_id === row.chart_series_id);
-        return [row.chart_series_id, {
-          page_number: String(candidateChart?.page_number ?? ""),
-          bbox: String(candidateChart?.bbox ?? ""),
-        }];
-      }),
-    ),
-    extractedAt: String(candidateCharts[0]?.extracted_at ?? options.retrievedAt),
-  });
   const reviewedCarrier = {
     ...options.candidateCarrier,
     chart_points: reviewedPoints,
-    extraction: {
-      ...(options.candidateCarrier.extraction as Record<string, JsonValue>),
-      evidence_manifest: reviewedProjection.manifest,
-    },
   };
   const reviewedBytes = Buffer.from(JSON.stringify(reviewedCarrier), "utf8");
   const reviewedDigest = sha256(reviewedBytes);
@@ -2192,21 +2063,10 @@ async function registerReviewedPublicationCarrier(options: {
     stage: "reviewed",
     parametersDigest: reviewedParametersDigest,
     evidence: {
-      carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
       candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
       review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
       review_id: review.review_id,
       review_action: review.action,
-      model_name: String(
-        (options.candidateCarrier.extraction as { model?: { model?: JsonValue } }).model?.model
-          ?? "",
-      ),
-      model_version: String(
-        (options.candidateCarrier.extraction as { model?: { model_version?: JsonValue } }).model
-          ?.model_version ?? "",
-      ),
-      prompt_digest: options.promptDigest,
-      manifest: reviewedProjection.manifest,
       output_sha256: reviewedDigest,
     },
   });

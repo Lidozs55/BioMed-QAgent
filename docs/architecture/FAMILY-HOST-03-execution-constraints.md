@@ -64,9 +64,12 @@ restart 的 publication continuation 未持久化完整 committed OperationResul
 `ua_*`。
 
 receipt-only submit（`submit_dynamic_family_publication` 只回传 `preflight_receipt`）
-依赖 Host 进程内 preflight coordinator 保存的 prepared submission
-（`server/src/runtime/dynamic-family-preflight-coordinator.ts`）；这不是跨重启
-durable prepared-submission store，Host 重启后必须重新 prepare。
+依赖 task-owned preflight coordinator 保存的 prepared submission
+（`server/src/runtime/dynamic-family-preflight-coordinator.ts`）。未消费 receipt 与精确
+submission 以原子 JSON 状态持久化在 `<task>/state/dynamic-family-preflight.json`，Host
+重启后可继续 receipt-only submit；reserve 在任何 acquisition 副作用前持久化 consumed，
+重启后的 in-flight receipt 因无 reservation token 而 fail closed。新 prepare 仍同步提升
+generation 并使旧 receipt 失效，成功或失败完成后清除 active entry。
 
 ## 未来isolated backend
 

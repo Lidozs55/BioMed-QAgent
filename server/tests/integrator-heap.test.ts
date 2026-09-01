@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,23 +91,14 @@ function makeCanonicalResults(
 }
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const VITE_NODE_ROOT = path.join(REPO_ROOT, "node_modules", ".pnpm");
+const VITE_NODE_ENTRY = createRequire(import.meta.url).resolve("vite-node/vite-node.mjs");
 const HEAP_CHILD = path.join(REPO_ROOT, "server", "tests", "phase5", "fixtures", "integrator-heap-child.mts");
-
-function viteNodeEntry(): string {
-  const version = readdirSync(VITE_NODE_ROOT)
-    .filter((name) => name.startsWith("vite-node@"))
-    .sort()
-    .at(-1);
-  if (version === undefined) throw new Error("vite-node not found in node_modules/.pnpm");
-  return path.join(VITE_NODE_ROOT, version, "node_modules", "vite-node", "vite-node.mjs");
-}
 
 function runHeapChild(workRoot: string, rowCount: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ["--expose-gc", viteNodeEntry(), HEAP_CHILD, workRoot, String(rowCount)],
+      ["--expose-gc", VITE_NODE_ENTRY, HEAP_CHILD, workRoot, String(rowCount)],
       { stdio: "pipe" },
     );
     let stdout = "";

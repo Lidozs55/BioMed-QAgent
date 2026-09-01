@@ -8,6 +8,7 @@ import {
   computeInputDigest,
   expectedContractOutputs,
   outputsAreReusable,
+  syncInstalledContracts,
 } from "../../scripts/build-contracts-if-needed.mjs";
 
 const roots: string[] = [];
@@ -17,6 +18,28 @@ afterEach(async () => {
 });
 
 describe("contracts build cache", () => {
+  test("refreshes physical installed contract copies after a source build", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "contracts-sync-"));
+    roots.push(root);
+    const sourceRoot = path.join(root, "packages", "contracts");
+    const installedRoot = path.join(root, "node_modules", "@biomed", "contracts");
+    for (const base of [sourceRoot, installedRoot]) {
+      await mkdir(path.join(base, "src"), { recursive: true });
+      await mkdir(path.join(base, "dist"), { recursive: true });
+    }
+    await writeFile(path.join(sourceRoot, "package.json"), '{"name":"@biomed/contracts","version":"new"}\n');
+    await writeFile(path.join(sourceRoot, "src", "index.ts"), "export const value = 'new';\n");
+    await writeFile(path.join(sourceRoot, "dist", "index.js"), "export const value = 'new';\n");
+    await writeFile(path.join(installedRoot, "package.json"), '{"name":"@biomed/contracts","version":"old"}\n');
+    await writeFile(path.join(installedRoot, "src", "index.ts"), "export const value = 'old';\n");
+    await writeFile(path.join(installedRoot, "dist", "index.js"), "export const value = 'old';\n");
+
+    expect(syncInstalledContracts(root)).toEqual([installedRoot]);
+    expect(await readFile(path.join(installedRoot, "package.json"), "utf8")).toContain('"version":"new"');
+    expect(await readFile(path.join(installedRoot, "src", "index.ts"), "utf8")).toContain("'new'");
+    expect(await readFile(path.join(installedRoot, "dist", "index.js"), "utf8")).toContain("'new'");
+  });
+
   test("reuses only when every JavaScript/declaration output matches the input digest", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "contracts-cache-"));
     roots.push(root);

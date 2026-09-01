@@ -29,3 +29,4 @@
 - 运行方式遵循 `docs/gold-formal-rerun.md`（formal rerun supervisor，fail-closed 协议）
 - 每次 run 的记录追加到 `data/gold/<case>/runs-log.md`
 - 评测中发现的问题：仅记录现象与分析（写入 `runs-log.md` 或 `docs/evaluation/`），不做修复
+- 若有多个 gold 需要同时评测，可以并发以提高效率

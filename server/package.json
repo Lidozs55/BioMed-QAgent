@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "@biomed/contracts": "workspace:*",
+    "@biomed/contracts": "file:../packages/contracts",
     "@earendil-works/pi-coding-agent": "0.82.1",
     "@napi-rs/canvas": "1.0.5",
     "cheerio": "^1.2.0",
@@ -27,6 +27,11 @@
     "vite": "^5.4.11",
     "ws": "^8.18.3",
     "xlsx": "^0.18.5"
+  },
+  "dependenciesMeta": {
+    "@biomed/contracts": {
+      "injected": true
+    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
