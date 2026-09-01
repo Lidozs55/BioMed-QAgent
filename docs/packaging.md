@@ -24,13 +24,12 @@ pnpm run pack -- --keep-temp                 # 保留中间构建目录（调试
 
 ```
 target/biomed-qagent-<version>-<win|linux|macos>/
-├── start.bat / start.sh     启动器（首跑自动从 .env.example 生成 .env）
+├── start.bat / start.sh     启动器（模型与 API key 在 Web 设置中配置）
 ├── README.txt               目标机使用说明
 ├── server/                  编译后的 Application Host + pnpm deploy 剪枝的生产依赖
 ├── frontend/dist/           前端产物（host 以 --static 托管）
 ├── database/                Python 持久化桥（纯标准库）
 ├── .pi/                     agent skills
-├── .env.example             配置模板
 └── runtime/
     ├── node/                内嵌 Node.js 便携版
     └── python/              内嵌 CPython（python-build-standalone）
@@ -41,7 +40,7 @@ target/biomed-qagent-<version>-<win|linux|macos>/
 
 Python 解释器解析链在 `server/src/persistence/db-client.ts` 的 `probePythonBin()`：`BIOMED_PYTHON_BIN` 环境变量 → 仓库根 `.venv` → PATH。启动器把 `BIOMED_PYTHON_BIN` 指到 `runtime/python`，这是唯一的集成点。`database/bridge.py` 是纯标准库实现（`pyproject.toml` 无运行时依赖），因此只需解释器本身，不需要 uv、不需要 pip 安装。
 
-前端托管走既有 `--static` 分支（`server/src/dev/static-middleware.ts`），`pnpm start` 的生产形态与 bundle 启动器等价。
+前端托管走既有 `--static` 分支（`server/src/dev/static-middleware.ts`），`pnpm start` 的生产形态与 bundle 启动器等价。首次启动后通过 Web 的 **设置 → 模型** 添加 Provider/API key、激活主模型并按需选择视觉模型；模型凭据不从环境变量自动引导。若需要覆盖 `PORT` 等 Host 参数，可在 bundle 根目录自行创建可选 `.env`。
 
 ## 运行时版本
 

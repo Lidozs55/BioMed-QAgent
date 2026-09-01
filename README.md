@@ -69,29 +69,19 @@ call scripts\utf8-init.cmd
 
 脚本设置 code page 65001、`PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`、`LANG/LC_ALL=C.UTF-8`。`pnpm dev` 本身仍使用 Node UTF-8 API；服务端还会拒绝包含 U+FFFD 或非法 surrogate 的 task/steer 文本，防止损坏指令继续执行。
 
-在完成上述初始化后，在项目根目录复制环境变量模板，然后编辑根 `.env`；正常 `pnpm dev` 会读取它，由 TS Host 与 Pi 消费：
-
-**Windows PowerShell**：
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-```
-
-**macOS / Linux / Git Bash**：
+完成上述初始化后直接安装并启动：
 
 ```bash
 git clone <repository-url>
 cd BioMedQAgent
-copy .env.example .env       # Windows
-# cp .env.example .env       # POSIX
-
 pnpm install --frozen-lockfile
 uv sync
 pnpm dev
 ```
 
-在 `.env` 中至少配置可用的模型 API key。Host 首选 `http://127.0.0.1:5173`；若端口已被占用，则由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
+首次打开页面后，在右上角 **设置 → 模型** 中添加 Provider 和 API key、添加并激活主模型，并为 Gold6 等视觉任务选择具备图像能力的视觉模型。模型配置只写入本机 `data/settings/model-registry.json` 与权限收紧的 `data/settings/model-auth.json`，不会从环境变量自动引导；不要提交这两个运行期文件或打印其中凭据。
+
+Host 首选 `http://127.0.0.1:5173`；若端口已被占用，则由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。根 `.env` 不是必需项，只用于 `HOST`、`PORT`、`BIOMED_PYTHON_BIN` 等可选部署覆盖，不用于模型凭据。`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
 
 生产构建与启动：
 

@@ -13,9 +13,11 @@
 
 - Tools: Node.js 22.19+, pnpm, Python 3.12+, uv, Git. Use the versions pinned in
   `package.json` / `pyproject.toml`.
-- API keys: load from environment variables or a local untracked `.env`; never
-  commit real secrets. The settings API masks keys — do not log or expose raw
-  credentials.
+- Model API keys: configure them through Web **Settings → Models**; they are
+  persisted locally under `data/settings/` and never bootstrapped from env.
+  Other tool/deployment secrets may use process env or an untracked `.env`.
+  Never commit real secrets; the settings API masks keys — do not log or expose
+  raw credentials.
 - Package managers: **pnpm** for TypeScript (never `npm`); **uv** for Python,
   scoped to the root `pyproject.toml` / `uv.lock` for `database/` only.
 - All **npx**/`npm i -g` installs below are the single exception to the "no npm"
@@ -185,8 +187,9 @@ commonly login                     # interactive, once per machine
 bash scripts/commonly-up.sh        # scaffold (1st run) + run the agent; Ctrl+C to stop
 ```
 
-- **Pod ID**: `6a520e34f4baa9b280bba195`, from the project `.env` / `.env.example`
-  via `COMMONLY_POD_ID` (shared by all members; not secret).
+- **Pod ID**: `6a520e34f4baa9b280bba195`, supplied locally via
+  `COMMONLY_POD_ID` (for example in an untracked project `.env`; shared by all
+  members and not secret).
 - **Agent name**: registry `agentName` must match `^(@<scope>/)?[a-z0-9-]+$`
   (lowercase letters/digits/hyphens only — no quotes, no uppercase). Resolution
   precedence in `scripts/commonly-up.sh`: `$1` (> invocation arg) >
