@@ -360,7 +360,11 @@ export async function materializeDynamicFamilyCandidate(
     if (summary.column_count !== schema.fields.length) {
       throw new Error(`table '${definition.table_id}' result column count does not match FamilySpec fields`);
     }
-    if (summary.row_count === 0 && !projection.allow_empty.includes(definition.table_id)) {
+    if (
+      summary.row_count === 0
+      && definition.role === "primary"
+      && !projection.allow_empty.includes(definition.table_id)
+    ) {
       throw new Error(`table '${definition.table_id}' must not be empty in selected projection`);
     }
     const dataRef = exactDataRef(data, summary.primary_file_sha256);

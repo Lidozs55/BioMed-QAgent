@@ -64,9 +64,12 @@ import {
 import type { DynamicFamilyAcquisitionPlanningInput } from "../dataset/dynamic-family/preflight.js";
 import { publishDynamicFamily } from "../dataset/dynamic-family/publication.js";
 import {
-  resolveCoreProductTopologyRequirements,
+  tryResolveCoreProductTopologyRequirements,
 } from "../dataset/dynamic-family/product-requirement-registry.js";
-import type { CoreProductTopologyRequirements } from "../dataset/dynamic-family/product-requirements.js";
+import {
+  deriveCoreProductTopologyRequirements,
+  type CoreProductTopologyRequirements,
+} from "../dataset/dynamic-family/product-requirements.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { BrowserParserRecipeRegistry, createDefaultBrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -362,6 +365,45 @@ export interface Phase3RuntimeOptions {
 
 export type Phase3AcquisitionRuntime = Pick<CoreAcquisitionRuntime, "plan" | "acquire">;
 
+function authoredProductRequirements(
+  submission: ParsedDynamicFamilyPublicationSubmission,
+): CoreProductTopologyRequirements {
+  const spec = submission.family_spec;
+  const projection = submission.projection;
+  const definitionById = new Map(spec.table_definitions.map((table) => [table.table_id, table]));
+  const selected = [
+    ...projection.primary_tables,
+    ...projection.supporting_tables,
+    ...projection.derived_tables,
+  ];
+  return deriveCoreProductTopologyRequirements({
+    profile_ref: spec.assessment_policy_ref,
+    dataset_family: spec.family_spec_id,
+    tables: selected.map((tableId) => {
+      const definition = definitionById.get(tableId);
+      if (definition === undefined) {
+        throw new TypeError(`authored product topology references unknown table '${tableId}'`);
+      }
+      return {
+        table_id: tableId,
+        role: definition.role,
+        schema_ref: definition.schema_ref,
+        allow_empty: definition.allow_empty,
+      };
+    }),
+    relations: [...projection.relations],
+  });
+}
+
+function resolveOrDeriveProductRequirements(
+  submission: ParsedDynamicFamilyPublicationSubmission,
+  seam: ((profileRef: string) => CoreProductTopologyRequirements) | undefined,
+): CoreProductTopologyRequirements {
+  const profileRef = submission.family_spec.assessment_policy_ref;
+  if (seam !== undefined) return seam(profileRef);
+  return tryResolveCoreProductTopologyRequirements(profileRef) ?? authoredProductRequirements(submission);
+}
+
 export interface Phase3DynamicFamilySeams {
   readonly createAcquisitionRuntime?: (options: {
     taskId: string;
@@ -600,10 +642,10 @@ export async function createPhase3Runtime(
       });
       const dynamicFamilyPrepareTool = createPrepareDynamicFamilyPublicationTool({
         prepare: async (submission) => {
-          const productRequirements = (
-            options.dynamicFamilySeams?.resolveProductRequirements
-            ?? resolveCoreProductTopologyRequirements
-          )(submission.family_spec.assessment_policy_ref);
+          const productRequirements = resolveOrDeriveProductRequirements(
+            submission,
+            options.dynamicFamilySeams?.resolveProductRequirements,
+          );
           const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
@@ -641,10 +683,10 @@ export async function createPhase3Runtime(
           if (preflightReceipt === undefined) {
             throw new Error("submit_dynamic_family_publication requires a preflight receipt");
           }
-          const productRequirements = (
-            options.dynamicFamilySeams?.resolveProductRequirements
-            ?? resolveCoreProductTopologyRequirements
-          )(submission.family_spec.assessment_policy_ref);
+          const productRequirements = resolveOrDeriveProductRequirements(
+            submission,
+            options.dynamicFamilySeams?.resolveProductRequirements,
+          );
           await validateDynamicFamilyPreflightReceipt({
             receipt: preflightReceipt,
             submission,

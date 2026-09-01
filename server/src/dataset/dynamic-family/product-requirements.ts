@@ -86,6 +86,31 @@ export function coreProductTopologyDigest(
   return canonicalDigest(parseCoreProductTopologyRequirements(requirements));
 }
 
+export function deriveCoreProductTopologyRequirements(input: {
+  profile_ref: string;
+  dataset_family: string;
+  tables: readonly {
+    table_id: string;
+    role: TableDefinition["role"];
+    schema_ref: string;
+    allow_empty: boolean;
+  }[];
+  relations: readonly string[];
+}): CoreProductTopologyRequirements {
+  return parseCoreProductTopologyRequirements({
+    schema_version: "1.0",
+    profile_ref: input.profile_ref,
+    dataset_family: input.dataset_family,
+    tables: input.tables.map((table) => ({
+      table_id: table.table_id,
+      role: table.role,
+      schema_ref: table.schema_ref,
+      min_rows: table.allow_empty ? 0 : 1,
+    })),
+    relations: [...input.relations],
+  });
+}
+
 export function assertProductTopology(
   candidate: PublicationCandidate,
   value: CoreProductTopologyRequirements,
@@ -108,7 +133,7 @@ export function assertProductTopology(
     if (table.definition.schema_ref !== required.schema_ref) {
       throw new Error(`dynamic product table '${required.table_id}' has the wrong schema`);
     }
-    if (table.row_count < required.min_rows) {
+    if (required.role === "primary" && table.row_count < required.min_rows) {
       throw new Error(`dynamic product table '${required.table_id}' has fewer than ${required.min_rows} required rows`);
     }
   }
