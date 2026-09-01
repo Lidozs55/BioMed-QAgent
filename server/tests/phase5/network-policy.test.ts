@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultExecutor,
+  isRelaxableTlsChainError,
+  validateRelaxedTlsPeer,
   PublicHttpClient,
   UnsafeUrlError,
   resolvePublicHttpTarget,
@@ -43,6 +45,58 @@ describe("defaultExecutor connection timeout", () => {
     } finally {
       await fixture.close();
     }
+  });
+});
+
+describe("strict-first TLS chain fallback", () => {
+  const certificate = (overrides: Record<string, unknown> = {}) => ({
+    subject: { CN: "public.example" },
+    subjectaltname: "DNS:public.example",
+    valid_from: "Jan 01 2025 GMT",
+    valid_to: "Jan 01 2035 GMT",
+    ...overrides,
+  }) as Parameters<typeof validateRelaxedTlsPeer>[1];
+  const now = Date.UTC(2030, 0, 1);
+
+  it.each([
+    "CERT_UNTRUSTED",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ])("permits one retry only for CA-chain trust error %s", (code) => {
+    expect(isRelaxableTlsChainError(Object.assign(new Error(code), { code }))).toBe(true);
+  });
+
+  it.each([
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "CERT_HAS_EXPIRED",
+    "CERT_NOT_YET_VALID",
+    "ERR_SSL_WRONG_VERSION_NUMBER",
+    "ECONNRESET",
+  ])("does not relax non-chain TLS/network error %s", (code) => {
+    expect(isRelaxableTlsChainError(Object.assign(new Error(code), { code }))).toBe(false);
+  });
+
+  it("recognizes a nested CA-chain failure", () => {
+    const cause = Object.assign(new Error("unknown CA"), { code: "SELF_SIGNED_CERT_IN_CHAIN" });
+    expect(isRelaxableTlsChainError(new Error("request failed", { cause }))).toBe(true);
+  });
+
+  it("keeps hostname and validity checks on the relaxed connection", () => {
+    expect(() => validateRelaxedTlsPeer("public.example", certificate(), now)).not.toThrow();
+    expect(() => validateRelaxedTlsPeer("other.example", certificate(), now)).toThrow(/does not match/i);
+    expect(() => validateRelaxedTlsPeer(
+      "public.example",
+      certificate({ valid_to: "Jan 01 2029 GMT" }),
+      now,
+    )).toThrow(/expired/i);
+    expect(() => validateRelaxedTlsPeer(
+      "public.example",
+      certificate({ valid_from: "Jan 01 2031 GMT" }),
+      now,
+    )).toThrow(/not yet valid/i);
   });
 });
 
