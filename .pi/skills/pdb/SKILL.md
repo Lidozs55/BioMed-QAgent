@@ -14,7 +14,9 @@ Use `search_pdb` to find structures, `describe_pdb` to inspect metadata, and
 
 ## Constraints
 
-- **Research-only source.** PDB data is for investigation and evidence only —
-  never declare `pdb` as a dataset build source.
+- `search_pdb`/`describe_pdb`/`download_pdb` outputs are discovery evidence
+  and staging downloads, never themselves build carriers. For a formal Dynamic
+  Family input, reacquire one verified PDB ID per binding through Core provider
+  `pdb.files.v1` (protein structure carrier).
 - Downloads go to the task raw directory and are tracked in provenance; cite
   the PDB ID for every reported structure finding.

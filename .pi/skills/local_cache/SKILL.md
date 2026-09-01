@@ -5,8 +5,9 @@ description: Query the local cache for previously imported or cached datasets be
 
 # Local cache query
 
-The local cache stores cleaned 22-column long-format data (same schema as the
-build main table) from user imports and prior research-task artifacts.
+The local cache stores cleaned, schema-neutral long-format datasets (each
+cached dataset carries its own column manifest, recorded at import/caching
+time) from user imports and prior research-task artifacts.
 
 ## When to use
 
@@ -20,7 +21,8 @@ build main table) from user imports and prior research-task artifacts.
 
 - `search_local_cache` — keyword search over dataset manifests.
 - `describe_local_cache` — inspect one dataset by namespace and dataset id.
-- `get_cache_dataset` — read data rows in the 22-column long format.
+- `get_cache_dataset` — read data rows using the dataset's own recorded column
+  schema.
 
 ## Namespaces
 

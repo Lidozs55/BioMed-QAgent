@@ -22,6 +22,8 @@ pathway.
 
 ## Constraints
 
-- **Research-only source.** Reactome data is for investigation and evidence
-  only — never declare `reactome` as a dataset build source. Cite the pathway
-  stable ID for every reported pathway finding.
+- `search_reactome`/`get_pathway`/`download_reactome` outputs are discovery
+  evidence only and are never themselves build carriers. For a formal Dynamic
+  Family input, reacquire one verified stable pathway ID per binding through
+  Core provider `reactome.files.v1`. Cite the pathway stable ID for every
+  reported pathway finding.
