@@ -277,6 +277,21 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 **终判：** R2 的 derived provenance、页面隔离、assert 分页、supervisor race 修复均获 live 正证；R3 新暴露的是 P5 准入契约死锁。修 P5 与 0-point closure 前不得启动 R4，也不得把 6 份 `provisional/` 文件算作 Gold 产物。
 
+## gold6-r4 @ qwen3.8-flash（2026-09-01，产品提交 `42984ecb1c43`，**唯一 fresh R4**，task_ts_b41c545e-2375-4244-9305-103dc06f991a）
+
+> TOPIC 原文（SHA-256 `f30ab310…fc298`）、单 Host、supervisor 全链；用户明确要求跳过完整 workspace 门禁，冻结产品提交已有 focused 5 files / 48 tests、test TypeScript 与改动文件 ESLint 证据。62 model calls / 9.39M total tokens / 10,478 events（SHA-256 `97073ddd…b0ef`）；run 自然 completed，但 closure **`blocked_no_publication`**，0 Publication / 0 Artifact / 0 `publication_acceptance`。5 次 HIL 全是精确 task/run/request/evidence-digest 的 VLM credential 批准；越界 project `fs.read` 被 deny。证据包：`data/gold-runs/42984ecb1c43-gold6-qwen38flash-r4-standard/`。
+>
+> **P5 live 销案证据：** successful preflight 的 acquisition plan 是 3 个 JSON evidence carrier `transform_input` + 10 个 `provenance_only`（后续 generation 为 3+13）；`required_input_roles` 仅闭合 3 个 carrier。PMC5355725 的真实 JPEG member `asset_38428f…e9c4` 经 `archive_member_extraction` 从 ZIP 产生，以 `provenance_only` 绑定且不进入 Host，随后参与成功 VLM carrier `asset_4de014…90d4` 的父闭包。R3 的 binary/UTF-8/undeclared-binding 三角死锁已消失。
+
+| # | 卡点 | 归类 | 证据 | 建议修法（暂不执行） |
+| - | ---- | ---- | ---- | -------------------- |
+| R4-P1 | **VLM carrier producer 与 literature semantic validator 的 manifest 契约错位。** 生产 `registered-paper-chart-extraction.ts` v1.2.0 生成的三份 carrier 顶层没有 `evidence_manifest`，写入 `CoreDerivedAssetProvenance.evidence` 的字段也只有 carrier/paper/source/prompt/model/output digest；但 `literature-experiment-chart/validation.ts` 强制要求 `evidence.manifest` 并读取 `charts`/`points`。因此 5 个 committed 六表 candidate 均以 `Core VLM provenance requires an embedded evidence manifest` 被 typed semantic rejection；另 3 次把抽取回执误作 locator 的尝试被正确的 `OUTPUT_CLOSURE_MISMATCH` 拒绝 | 框架（producer/consumer 契约） | events seq 4168/5281/5743/6528/7422；`formal-state/core-derived-asset-provenance.json`；三份 carrier bytes；validator line 124 | 先用生产 extraction 输出增加 RED 回归；producer 将 canonical charts/points manifest 写入 bytes-bound derived provenance，或 validator 统一从同一 canonical carrier 字节读取。不得接受模型自报 manifest 或改写 Core output descriptor |
+| R4-P2 | **fallback 信任隔离 live 通过。** 5 次 typed semantic rejection 各归档 6 个 task quarantine 文件，共 30 个 `ua_*`；每件 bytes 的 size/SHA-256 重算一致，`authoritative=false`、`trust=untrusted`，工具仍 `isError:true`，正式事件/Publication/Artifact/current pointer 全为 0/null。3 次 control rejection 未触发 fallback | 正样本（框架） | `quarantine-summary.json` + 30× receipt/artifact；`event-counts.json` | 保留；`ua_*` 只做可回收 evidence，永不计作 Gold 或正式计数 |
+| R4-Q1 | **route lock 文字约束连续两轮失效。** Dynamic semantic requirement 已选定后，Agent 又调用 static validate 2 次、execute 6 次；全部 execute 失败且未污染正式状态，但更换 requirement_id 继续成为规避 route lock 的行为路径 | 模型 + 框架 | `route-audit.json`；0 formal events | 将 semantic requirement route choice 在 Host 持久化并 fail-closed 拒绝跨 route；不要只依赖 prompt |
+| R4-Q2 | **非空 chart point/review closure 仍为 0。** 最终三 carrier 合计 3 papers / 107 experiments / 185 activity values / 86 series / **0 points**；无 point review IDs、无 `vlm_extraction` data-review HIL | 数据质量/源可读性 | `carrier-summary.json`；Gold assertion 5 REJECT | 定向重抽取可见轴单位/图例，或提供人工 point-correction 候选；只有非空 points + durable review 才能进入 acceptance |
+
+**终判：** R4 只关闭 P5，并验证拒绝后 `ua_*` 的信任隔离；没有 Publication 就不是 Gold 成功。修 R4-P1 与 R4-Q2 前不得启动 R5。
+
 ## gold7 @ qwen3.8-flash（2026-08-30，main@9e90eb252089，task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1）
 
 > 题面依据 gold789-case-chapter §5.2 重建（无 prompts 文件）。历史死点（"GWAS family/Core provider 缺失，只能 workspace staging"）本次被**动态 Family 路线突破**：`pub_ad_gwas_risk_map_e76103f1b9751ace`（risk_loci 89 行正式发表，逐行 association_id+source_url 可溯）。

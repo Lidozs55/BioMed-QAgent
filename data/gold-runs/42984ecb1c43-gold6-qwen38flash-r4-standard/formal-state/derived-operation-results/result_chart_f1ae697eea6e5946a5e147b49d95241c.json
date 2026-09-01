@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "result_manifest_id": "result_chart_f1ae697eea6e5946a5e147b49d95241c",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "run_id": "core",
+  "requirement_id": "registered_paper_chart_candidate",
+  "operation_id": "result_chart_f1ae697eea6e5946a5e147b49d95241c",
+  "operation_kind": "derive",
+  "operation_attempt_id": "attempt_result_chart_f1ae697eea6e5946a5e147b49d95241c",
+  "attempt": 1,
+  "status": "succeeded",
+  "input_digest": "b84d6a9c24bb591f0da683dc9d0533616ce23d2eae67cb4b1fc3aec397829b0b",
+  "parameter_digest": "558a8a3f12db68083a57084a1f7074d102472190cefffc58458d3448c5169fb6",
+  "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744",
+  "output_digest": "3f467458bcc915dae3a3bff49f75e8d5b2f268f2ecec1524c8088569f74850bb",
+  "output_kind": "derived_evidence",
+  "output_summary": {
+    "stage": "candidate",
+    "asset_id": "asset_3f467458bcc915dae3a3bff49f75e8d5b2f268f2ecec1524c8088569f74850bb",
+    "sha256": "3f467458bcc915dae3a3bff49f75e8d5b2f268f2ecec1524c8088569f74850bb"
+  },
+  "output_files": [
+    {
+      "relative_path": "source_assets/paper_chart_evidence/evidence_3f467458bcc9.json",
+      "size_bytes": 82252,
+      "sha256": "3f467458bcc915dae3a3bff49f75e8d5b2f268f2ecec1524c8088569f74850bb"
+    }
+  ],
+  "dependency_closure": {
+    "input_asset_ids": [
+      "asset_7ccdaf88e6d55a19e9f5fb9c66bcbdfc6db66d6984053aa45228239d89bf7f00",
+      "asset_80a418ac0aba09c0c7ca9ba53eccf4614e36c5c8a996f59659dfeee1a5ca768b",
+      "asset_a0d0009b2acde6ffe58e476b4591a1a4c500adadfc2d1ae1420b44c3a9f3789a"
+    ],
+    "upstream_result_manifest_ids": [],
+    "parameter_digest": "558a8a3f12db68083a57084a1f7074d102472190cefffc58458d3448c5169fb6",
+    "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744"
+  },
+  "commit": {
+    "state": "committed",
+    "commit_id": "commit_result_chart_f1ae697eea6e5946a5e147b49d95241c",
+    "committed_at": "2026-08-31T23:15:16.837Z"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "run_id": "run_ts_7d68668d-13b0-4d20-a988-eed58f27484f",
+  "base_url": "http://127.0.0.1:5198",
+  "host_pid": 121408,
+  "host_pid_alive": false,
+  "supervisor_pid": 231842,
+  "supervisor_pid_alive": false,
+  "port_5198": "free",
+  "lease_path": ".host-lease.json",
+  "lease_present": false,
+  "closure_observed_after_terminal_run": true,
+  "restart_or_resume_after_closure": false,
+  "post_closure_post_requests": false,
+  "interpretation": "The sole R4 Host was stopped after the run reached its terminal event. No subsequent POST, restart, or resume was issued."
+}

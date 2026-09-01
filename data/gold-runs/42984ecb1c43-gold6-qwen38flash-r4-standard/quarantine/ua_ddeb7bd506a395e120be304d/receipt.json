@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "name": "experiment_records.csv",
+  "media_type": "text/csv",
+  "source_note": "Automatic untrusted-artifact fallback: the dynamic publication was formally rejected (coverage is partial; no formal Publication or Artifact was created). Rejection reason: Core VLM provenance requires an embedded evidence manifest. task=task_ts_b41c545e-2375-4244-9305-103dc06f991a run=run_ts_7d68668d-13b0-4d20-a988-eed58f27484f requirement=egfr_mutant_inhibition_chart_evidence_v1 operation_result=0439e49ce7ab86575a788d55d6755bac14edf30390beb94181442725403d437f",
+  "coverage_status": "partial",
+  "covered_scope": [
+    "table:experiment_records",
+    "schema:literature_experiment_chart.experiment.v1",
+    "operation_result:0439e49ce7ab86575a788d55d6755bac14edf30390beb94181442725403d437f"
+  ],
+  "missing_scope": [
+    "formal_publication",
+    "formal_artifact"
+  ],
+  "submission_id": "ua_ddeb7bd506a395e120be304d",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "authoritative": false,
+  "trust": "untrusted",
+  "size_bytes": 82478,
+  "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+  "submitted_at": "2026-09-01T00:22:14.958Z"
+}

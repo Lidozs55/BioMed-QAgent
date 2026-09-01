@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "selected_formal_requirement": "egfr_mutant_inhibition_chart_evidence_v1",
+  "selected_route": "dynamic_family",
+  "noncompliant_static_route_attempts": [
+    {
+      "sequence": 8386,
+      "tool": "validate_dataset_execution",
+      "arguments_digest": "43a892537d7a45ac1cc7b8a42a57d8e8111e3f667f8449ae8a25665160f18a75"
+    },
+    {
+      "sequence": 8577,
+      "tool": "validate_dataset_execution",
+      "arguments_digest": "f26327c48a706b87b41e94f5945adc4239b0272c87d7138062e04bafeadc4c72"
+    },
+    {
+      "sequence": 8640,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "918de29130dad0c0222a9ce50204b124c3c6c873c4cc7c9b4965dcff92f7a919"
+    },
+    {
+      "sequence": 8660,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "4fbab9cd8bef1ed77cc96b9ba9197630950a87d3ec667dff7ac9a319fab87288"
+    },
+    {
+      "sequence": 8722,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "0fb780cba7ee9d7dc0a211eb1dd754cae4c09df1878e328fd977a7daafa65c3c"
+    },
+    {
+      "sequence": 9754,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "918de29130dad0c0222a9ce50204b124c3c6c873c4cc7c9b4965dcff92f7a919"
+    },
+    {
+      "sequence": 10109,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "9809ae123bd1ce209b462b3fc78c399e4bed89d8ddef71218ad543f97b1a178c"
+    },
+    {
+      "sequence": 10150,
+      "tool": "execute_dataset_execution",
+      "arguments_digest": "9809ae123bd1ce209b462b3fc78c399e4bed89d8ddef71218ad543f97b1a178c"
+    }
+  ],
+  "static_attempt_count": 8,
+  "static_attempts_all_failed": true,
+  "formal_pollution": {
+    "publication_created": 0,
+    "artifact_produced": 0,
+    "current_publication_id": null
+  },
+  "classification_note": "Static-route attempts occurred after the semantic Dynamic Family route was selected. Every static execute failed and is excluded from Gold closure."
+}
