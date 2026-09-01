@@ -437,6 +437,34 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("allows a per-paper carrier without a supplement while preserving the final publication gate", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence({
+        ...baseRequest(fixture),
+        supplementary_asset_ids: [],
+      }, {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      expect(result.rows.supplementary_asset_records).toBe(0);
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      const paperRows = {
+        paper_records: rowsOf(carrier, "paper_records"),
+        experiment_records: rowsOf(carrier, "experiment_records"),
+        activity_value_records: rowsOf(carrier, "activity_value_records"),
+        supplementary_asset_records: rowsOf(carrier, "supplementary_asset_records"),
+      } as unknown as PaperEvidenceRows;
+      expect(() => assertPaperEvidenceRows(paperRows, new Set([
+        fixture.assets.xmlReceipt.asset_ref.asset_id,
+        fixture.assets.pdfReceipt.asset_ref.asset_id,
+      ]))).toThrow(/supplementary_asset_records must not be empty/);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("preserves mixed-content order in authoritative registered JATS metadata", async () => {
     const fixture = await makeFixture(makeVlmResponse({ paper: null }));
     try {

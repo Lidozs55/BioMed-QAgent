@@ -88,7 +88,10 @@ Core trust boundary as every other family:
   single-page model responses are audited and skipped; the extraction still
   fails closed unless the remaining pages satisfy the complete experiment/
   series/table contracts. Transient VLM transport failures use bounded retries
-  and never convert a failed page into fabricated evidence.
+  and never convert a failed page into fabricated evidence. A per-paper carrier
+  may omit supplementary rows when that paper has no acquired supplement; only
+  the combined publication gate may satisfy the six-table non-empty contract,
+  so partial carriers cannot weaken the final profile.
 - **Provenance retention.** The formal publication keeps, per series and per
   point: source asset, page/bbox locator, extraction model name and pinned
   version, every transform step (`vlm_extract`, `coordinate_transform`,

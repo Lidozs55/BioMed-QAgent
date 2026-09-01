@@ -39,7 +39,7 @@ import {
   type ChartTransformStep,
 } from "../../dataset/families/bioactivity-measurement/chart-evidence/index.js";
 import {
-  assertPaperEvidenceRows,
+  assertPaperEvidenceCarrierRows,
   derivePaperCanonicalIdentities,
   PAPER_ID_ABSENT,
   type ActivityValueRecordInput,
@@ -60,7 +60,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.2.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.3.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -1281,7 +1281,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   // -- 7. Hostile validation against the formal table contracts.
   try {
-    assertPaperEvidenceRows(paperRows, registeredIds);
+    assertPaperEvidenceCarrierRows(paperRows, registeredIds);
   } catch (error) {
     throw new ChartExtractionError(
       `paper evidence rows rejected: ${error instanceof Error ? error.message : String(error)}`,
