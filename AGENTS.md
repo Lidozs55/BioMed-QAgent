@@ -96,7 +96,7 @@ Before starting any task, consult:
 pnpm install --frozen-lockfile    # single workspace lockfile
 pnpm dev                          # TS Host + Pi + TS Core + Vite (only normal entry)
 pnpm test                         # full workspace tests (cross-cutting changes / CI parity)
-pnpm test:full                    # full-speed tests (fastest local run)
+pnpm test:full                    # alias of pnpm test (same suite)
 pnpm --filter @biomed/server test     # targeted: server/ changes only
 pnpm --filter @biomed/frontend test   # targeted: frontend/ changes only
 pnpm --filter @biomed/contracts test  # targeted: packages/contracts/ quick feedback
@@ -185,8 +185,9 @@ commonly login                     # interactive, once per machine
 bash scripts/commonly-up.sh        # scaffold (1st run) + run the agent; Ctrl+C to stop
 ```
 
-- **Pod ID**: `6a520e34f4baa9b280bba195`, from the project `.env` / `.env.example`
-  via `COMMONLY_POD_ID` (shared by all members; not secret).
+- **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
+  `.env` when present; `scripts/commonly-up.sh` falls back to this same default
+  value (shared by all members; not secret).
 - **Agent name**: registry `agentName` must match `^(@<scope>/)?[a-z0-9-]+$`
   (lowercase letters/digits/hyphens only — no quotes, no uppercase). Resolution
   precedence in `scripts/commonly-up.sh`: `$1` (> invocation arg) >

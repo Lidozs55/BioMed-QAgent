@@ -94,11 +94,11 @@ Treat only the resulting Publication as formal output.
    never use workspace search or process execution to locate or parse them.
    Browser/download/discovery registrations are rejected as formal carriers.
    Never pass paths or response bytes.
-   - Runtime inputs are ordered by source bindings and use handles in-0, in-1,
+   - Runtime inputs are ordered by source bindings and use handles in_0, in_1,
      …, not binding IDs. Every bracket element-access syntax is rejected,
      including array indexes and regex match indexes; use destructuring,
      forEach/map/find/shift, dot access, and named regex groups.
-   - deterministic output handles out-0, out-1, … in primary + supporting +
+   - deterministic output handles out_0, out_1, … in primary + supporting +
      derived projection order. Each output needs a non-empty registered input
      receipt ID as locator; multiple tables from one source may share it.
   - Preflight closure rules (each rejection tells you exactly what failed):
@@ -161,17 +161,14 @@ import { defineTransform } from "@biomed/transform-sdk/v1";
 export const transform = defineTransform({
   run(request) {
     const source = request.inputs.at(0);
-    const lines = source.text.split("
-").filter((line) => line !== "");
+    const lines = source.text.split("\n").filter((line) => line !== "");
     const rows = lines.slice(1).map((line) => {
       const [drug_name, pt, count] = line.split(",");
       return { drug_name, pt, count: Number(count) };
     });
-    const content = "drug_name,pt,count
-" + rows
+    const content = "drug_name,pt,count\n" + rows
       .map((row) => row.drug_name + "," + row.pt + "," + String(row.count))
-      .join("
-");
+      .join("\n");
     return {
       outputs: [{
         content,

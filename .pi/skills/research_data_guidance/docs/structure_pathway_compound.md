@@ -1,8 +1,8 @@
 # 结构、通路与化合物
 
-覆盖蛋白结构（PDB）、通路网络（Reactome）、化合物（PubChem）等 research-only 数据源
-的检索指导。**这些数据源不进入 V2 正式构建**（无对应 dataset family），仅用于 Agent
-调研与证据交叉引用。
+覆盖蛋白结构（PDB）、通路网络（Reactome）、化合物（PubChem）等数据源的检索指导。
+工具检索结果仅是调研/发现证据，本身不是构建载体；正式构建时每绑定通过 Core provider
+（`pdb.files.v1` / `reactome.files.v1` / `pubchem.files.v1`）重新获取并溯源绑定。
 
 ## 1. 基因→结构（PDB）
 
@@ -13,7 +13,8 @@
 ## 2. 基因/通路→网络（Reactome）
 
 - 用 `search_reactome` / `get_pathway` 检索通路成员与文献引用；
-- 用途：从差异基因列表出发做通路富集调研（Reactome 作为证据路径，不进正式构建）；
+- 用途：从差异基因列表出发做通路富集调研（工具检索结果作为证据路径，正式输入经
+  Core provider `reactome.files.v1` 重新获取）；
 - 通路网络分析：Reactome 通路成员调研 + GEO/GDC 表达构建并行，最后按 accession
   交叉引用。
 
@@ -31,6 +32,7 @@
 
 ## 5. 边界
 
-- 上述源返回的是调研证据，**不得伪装成正式 CSV 产物**；正式产物仅由
-  `execute_dataset_execution` 生成；
+- 上述源的工具检索结果是调研证据，**不得伪装成正式 CSV 产物**；正式产物仅由
+  Dataset Core（动态发布或 `execute_dataset_execution`）经 Core provider 重新
+  获取后生成；
 - 结构/通路/化合物结果用于佐证假设，不作为差异分析主证据。

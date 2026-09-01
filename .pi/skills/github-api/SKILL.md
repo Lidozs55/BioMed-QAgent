@@ -32,10 +32,11 @@ raw + REST. Never treat GitHub as the default source.
 1. Fetch JSON listings with a download-style tool (`download_from_page`)
    rather than a browser navigation tool; `api.github.com` returns JSON
    that renders poorly in a browser view.
-2. Always send a User-Agent header (for example `user-agent: toolname/1.0`);
-   GitHub returns 403 otherwise. Unauthenticated limits are 60 requests
-   per hour for the core API and 10 requests per minute for the search
-   API; throttle batch probing and never hammer the search endpoint to
+2. The governed tools already send real browser headers (User-Agent included)
+   on every request — GitHub's UA requirement is satisfied automatically; you
+   cannot and must not try to add custom headers. Unauthenticated limits are
+   60 requests per hour for the core API and 10 requests per minute for the
+   search API; throttle batch probing and never hammer the search endpoint to
    enumerate repositories.
 3. To fetch a file: first list `contents/` to confirm the exact path and
    ref (branch or tag), then use the returned download url. If that raw
@@ -48,7 +49,8 @@ raw + REST. Never treat GitHub as the default source.
 
 ## Failure handling
 
-- 403: missing User-Agent or rate limit; add the header, retry once, then stop.
+- 403: rate limit (the User-Agent requirement is already handled by the
+  governed tools); back off, retry once, then stop.
 - 404: wrong path or ref; confirm via the search or contents API, fix once, retry.
 - Network failure (fetch failed / ETIMEDOUT): environment constraint; do not
   loop across mirrors.

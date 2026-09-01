@@ -20,8 +20,9 @@ publication-quality visualizations on CSV datasets.
 
 ## Constraints
 
-- Outputs (PNGs, CSVs) go to the task artifacts directory as analysis
-  material; formal dataset publications still come only from
+- Outputs (PNGs, CSVs) go under the task staging directory
+  (`staging/analysis/`) as preparation material — never into artifacts/ or
+  publications; formal dataset publications still come only from
   `execute_dataset_execution`.
 - Verify input row counts and group assignments before running; report the
   statistical method and adjustment used with every result.

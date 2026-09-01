@@ -209,11 +209,6 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/declare the matching semantic family, projection, and row granularity/i);
   });
 
-  test("marks an approved max-turn continuation explicitly", () => {
-    expect(PHASE1_SYSTEM_PROMPT).toContain("[MAX_TURNS_REACHED]");
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/after an approved max-turn interruption/i);
-  });
-
   test("guides adjusted-parameter retries before switching source or reporting NO_DATA", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /retry the same route after adjusting the parameters/i,

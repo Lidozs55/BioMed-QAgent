@@ -44,7 +44,6 @@ const CONTROL_AND_RECOVERY = [
   "[Control and recovery]",
   "Treat tool failures as control signals with a fixed recovery order. On a fetch failure, first retry the same route after adjusting the parameters: fix the URL, query, or filename, and retry only genuinely transient conditions such as HTTP 429, HTTP 5xx, or timeout. Never repeat an unchanged failing call. Only after adjusted-parameter retries still fail, switch to a genuinely independent reliable source verifying the same fact; for FDA drug-event reaction counts, use the openFDA FAERS aggregate lookup. Only after the switch-source attempt fails or the data is genuinely absent, report NO_DATA or the unavailable source — never earlier.",
   "Wait for permission or human-review decisions; never replace a suspended trusted operation with an unreviewed workspace result.",
-  "After an approved max-turn interruption, begin the next response with [MAX_TURNS_REACHED].",
   "Never present NO_DATA, rejection, cancellation, incomplete human review, or failure as success.",
   "Never end a turn on narrative text alone while a step is pending: a turn without a tool call ends the run. Keep issuing tool calls until the build is published or you can state a final structured outcome (success, NO_DATA, or a blocker).",
 ];

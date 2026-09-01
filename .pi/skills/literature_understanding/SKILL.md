@@ -17,6 +17,7 @@ targets.
 ## How to use
 
 - Pass only paper title strings — never abstracts or other fields.
-- Supported source contexts: PubMed, CrossRef, arXiv.
+- Recognized database/accession patterns include GEO (GSE/GSM/GPL), TCGA, GDC,
+  Xena, PDB, SRA, EGA, dbGaP, ArrayExpress, PRIDE, and MetaboLights.
 - Feed the resulting database/accession pairs into the matching acquisition
   skills (e.g. `search_geo` for a GSE accession).

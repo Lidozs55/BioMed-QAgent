@@ -1,6 +1,6 @@
 ---
 name: uniprot
-description: Search the UniProt knowledgebase for protein entries (research-only; findings never route into dataset builds).
+description: Search the UniProt knowledgebase for protein entries (discovery evidence; formal input reacquires through Core provider uniprot.files.v1).
 ---
 
 # UniProt discovery
@@ -14,7 +14,8 @@ Query UniProt with `search_uniprot` using a free-text search string.
 
 ## Constraints
 
-- **Research-only source.** UniProt findings are for investigation and
-  evidence only — never declare `uniprot` as a dataset build source, and never
-  route its results into `execute_dataset_execution`.
+- `search_uniprot` output is discovery evidence only and is never itself a
+  build carrier. For a formal Dynamic Family input, reacquire one verified
+  accession per binding through Core provider `uniprot.files.v1` (target
+  evidence).
 - Cite the UniProt accession or URL for every reported finding.
