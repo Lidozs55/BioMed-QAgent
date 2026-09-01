@@ -19,6 +19,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { HILSubject, JsonValue, SourceLocatorV2 } from "@biomed/contracts";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 import type { CoreResolvedRegisteredAsset } from "../../dataset/adapters/registered/types.js";
 import { canonicalDigest } from "../../dataset/adapters/identity.js";
@@ -48,17 +49,19 @@ import {
   type SupplementaryAssetRecordInput,
 } from "../../dataset/families/bioactivity-measurement/paper-evidence/index.js";
 import { parseMeasurementRelation } from "../../dataset/schema/common/index.js";
+import { MAX_XML_CARRIER_BYTES } from "../../dataset/runtime/provider-limits.js";
 import { PublicHttpClient } from "../../external/network/http-client.js";
 import type { SourceAssetRegistrationReceipt } from "@biomed/contracts";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { parseVlmJsonObject, ChartExtractionError } from "./chart-json.js";
-import { extractPdfImages, type PdfImageExtraction } from "./pdf-images.js";
+import type { PdfPageRaster } from "./pdf-images.js";
+import { renderPdfPagesFromBytes } from "./pdf-pages.js";
 import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js";
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.0.0";
-export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v1";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.1.0";
+export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v2";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
@@ -70,13 +73,13 @@ const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
 const CLARITY_STATUSES = ["clear", "unclear"] as const;
 const MAX_WARNINGS = 20;
 const MAX_REVIEW_IDS = 100;
+export const REGISTERED_PAPER_RENDER_DPI = 216;
 
 export const REGISTERED_PAPER_CHART_PROMPT = `You are a governed biomedical paper chart evidence extractor. Analyze the
 figure content of this paper page image and return ONLY a JSON object (no
 markdown fences, no prose) with this exact schema:
 
 {
-  "paper": {"title": "<paper title>", "journal": "<journal or empty>", "publication_date": "<YYYY-MM-DD or empty>", "authors": ["<name>", ...], "source_url": "<URL or empty>"},
   "experiments": [
     {"experiment_id": "<stable id>", "protein": "<protein or gene>", "variant": "<variant or empty>", "construct": "<construct or empty>", "ligand": "<ligand or empty>", "assay_type": "<assay type>", "cell_line_or_system": "<system or empty>", "temperature": "<value or empty>", "buffer": "<buffer or empty>", "incubation_time": "<value or empty>", "figure_id": "<Figure_2A or empty>", "table_id": "<Table_1 or empty>", "locator_evidence": "<verbatim caption or sentence locating the experiment>"}
   ],
@@ -92,6 +95,7 @@ markdown fences, no prose) with this exact schema:
 }
 
 Rules:
+- Paper metadata is supplied separately from byte-verified JATS XML. Do not infer or repeat it.
 - bbox arrays are pixel coordinates in THIS page image, ordered x0 < x1, y0 < y1.
 - Omit a section as an empty array when nothing of that kind is on the page.
 - Never guess figure identity, axis units, or legend semantics: use "unclear"
@@ -116,8 +120,13 @@ export interface RegisteredPaperChartExtractionDeps {
   httpClient?: PublicHttpClient;
   /** Test seam: build the VLM client from the resolved config. */
   vlmClientFactory?: (config: VlmConfig) => VlmClient;
-  /** Test seam: extract page raster images from the registered PDF. */
-  extractPageImages?: (pdfPath: string, destDir: string) => Promise<PdfImageExtraction>;
+  /** Test seam: render complete page rasters from the registered PDF bytes. */
+  extractPageImages?: (
+    pdfBytes: Buffer,
+    sourceLabel: string,
+    destDir: string,
+    options: { hint: string; signal?: AbortSignal },
+  ) => Promise<{ images: PdfPageRaster[]; skippedPages: number }>;
   /**
    * Durable review gate. When present, ALL pending VLM point estimates of
    * the registered carrier are batched into ONE evidence-bound
@@ -337,8 +346,9 @@ export function parseRegisteredPaperChartResponse(
   const record = parseVlmJsonObject(raw, sourceLabel, []);
 
   const paperRecord = asRecord(record.paper);
-  const paper = paperRecord === null ? null : {
-    title: requiredText(paperRecord.title, `${sourceLabel} paper title`),
+  const modelPaperTitle = paperRecord === null ? null : optionalText(paperRecord.title);
+  const paper = paperRecord === null || modelPaperTitle === null ? null : {
+    title: modelPaperTitle,
     journal: optionalText(paperRecord.journal),
     publication_date: optionalText(paperRecord.publication_date),
     authors: optionalAuthors(paperRecord.authors),
@@ -519,8 +529,178 @@ function assertSupplementaryMediaType(receipt: SourceAssetRegistrationReceipt): 
   rejectBrowserMedia(receipt.media_type, receipt.asset_ref.asset_id);
 }
 
-function defaultExtractPageImages(pdfPath: string, destDir: string): Promise<PdfImageExtraction> {
-  return extractPdfImages(pdfPath, destDir);
+function defaultExtractPageImages(
+  pdfBytes: Buffer,
+  sourceLabel: string,
+  destDir: string,
+  options: { hint: string; signal?: AbortSignal },
+): Promise<{ images: PdfPageRaster[]; skippedPages: number }> {
+  return renderPdfPagesFromBytes(pdfBytes, sourceLabel, destDir, {
+    ...options,
+    dpi: REGISTERED_PAPER_RENDER_DPI,
+  }).then((rendering) => ({ images: rendering.pages, skippedPages: rendering.skippedPages }));
+}
+
+type XmlRecord = Record<string, unknown>;
+
+function xmlAttributes(node: unknown): XmlRecord {
+  if (typeof node !== "object" || node === null || Array.isArray(node)) return {};
+  const attributes = (node as XmlRecord)[":@"];
+  return typeof attributes === "object" && attributes !== null && !Array.isArray(attributes)
+    ? attributes as XmlRecord
+    : {};
+}
+
+function xmlChildren(node: unknown, name: string): unknown[] {
+  const values: unknown[] = [];
+  for (const entry of Array.isArray(node) ? node : [node]) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const value = (entry as XmlRecord)[name];
+    if (value !== undefined) values.push(...(Array.isArray(value) ? value : [value]));
+  }
+  return values;
+}
+
+function xmlDescendants(node: unknown, name: string): unknown[] {
+  const values: unknown[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === ":@" || key.startsWith("@_")) continue;
+      if (key === name) {
+        values.push({
+          "#children": Array.isArray(child) ? child : [child],
+          ":@": xmlAttributes(value),
+        });
+      }
+      visit(child);
+    }
+  };
+  visit(node);
+  return values;
+}
+
+function xmlText(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(xmlText).join(" ").replace(/\s+/g, " ").trim();
+  if (typeof node !== "object" || node === null) return "";
+  return Object.entries(node)
+    .filter(([key]) => key !== ":@" && !key.startsWith("@_"))
+    .map(([, value]) => xmlText(value))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([([])\s+/g, "$1")
+    .replace(/\s+([)\]])/g, "$1")
+    .trim();
+}
+
+function firstXmlText(node: unknown, name: string): string | null {
+  const value = xmlText(xmlDescendants(node, name)[0]);
+  return value === "" ? null : value;
+}
+
+function parseJatsDate(article: unknown): string | null {
+  const dates = xmlDescendants(article, "pub-date");
+  const preferred = dates.find((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+    const type = xmlAttributes(value)["@_pub-type"];
+    return type === "epub" || type === "ppub";
+  }) ?? dates[0];
+  if (preferred === undefined) return null;
+  const year = firstXmlText(preferred, "year");
+  const month = firstXmlText(preferred, "month");
+  const day = firstXmlText(preferred, "day");
+  if (year === null || month === null || day === null ||
+      !/^\d{4}$/.test(year) || !/^\d{1,2}$/.test(month) || !/^\d{1,2}$/.test(day)) return null;
+  const normalized = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  return Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== normalized
+    ? null
+    : normalized;
+}
+
+function parseJatsAuthor(contributor: unknown): string | null {
+  const given = firstXmlText(contributor, "given-names");
+  const surname = firstXmlText(contributor, "surname");
+  const name = [given, surname].filter((value): value is string => value !== null).join(" ").trim();
+  return name !== "" ? name : firstXmlText(contributor, "collab");
+}
+
+/** Authoritative paper metadata from the byte-verified registered JATS XML. */
+export function parseRegisteredJatsPaperMeta(
+  bytes: Buffer,
+  expectedIdentity?: { paperId: string; paperNamespace: string },
+): ParsedPaperMetaCandidate {
+  if (bytes.length > MAX_XML_CARRIER_BYTES) {
+    throw new ChartExtractionError(
+      `registered paper XML exceeded ${MAX_XML_CARRIER_BYTES} byte parse limit (${bytes.length} bytes)`,
+    );
+  }
+  const xml = bytes.toString("utf8");
+  if (XMLValidator.validate(xml) !== true) throw new ChartExtractionError("registered paper XML is malformed");
+  const root = new XMLParser({
+    ignoreAttributes: false,
+    parseTagValue: false,
+    trimValues: false,
+    processEntities: true,
+    preserveOrder: true,
+  }).parse(xml) as unknown;
+  const article = xmlChildren(root, "article")[0];
+  if (article === undefined) throw new ChartExtractionError("registered paper XML has no JATS article element");
+  const title = firstXmlText(article, "article-title");
+  if (title === null) throw new ChartExtractionError("registered paper XML has no JATS article title");
+
+  if (expectedIdentity !== undefined) {
+    const expectedType = expectedIdentity.paperNamespace === "pubmed"
+      ? "pmid"
+      : expectedIdentity.paperNamespace === "pmc" ? "pmc" : "doi";
+    const matchingIds = xmlDescendants(article, "article-id")
+      .filter((value) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+        const type = xmlAttributes(value)["@_pub-id-type"];
+        return type === expectedType || (expectedType === "pmc" && type === "pmcid");
+      })
+      .map(xmlText);
+    if (matchingIds.length === 0) {
+      throw new ChartExtractionError(
+        `registered paper XML has no ${expectedIdentity.paperNamespace} identity for requested paper_id`,
+      );
+    }
+    const normalizeIdentity = (value: string): string => {
+      const trimmed = value.trim();
+      if (expectedType === "pmc") {
+        return trimmed.toUpperCase().startsWith("PMC") ? trimmed.toUpperCase() : `PMC${trimmed}`;
+      }
+      return expectedType === "doi" ? trimmed.toLowerCase() : trimmed;
+    };
+    if (!matchingIds.map(normalizeIdentity).includes(normalizeIdentity(expectedIdentity.paperId))) {
+      throw new ChartExtractionError(
+        `registered paper XML ${expectedIdentity.paperNamespace} identity does not match requested paper_id`,
+      );
+    }
+  }
+
+  const authors = xmlDescendants(article, "contrib")
+    .filter((contributor) => {
+      if (typeof contributor !== "object" || contributor === null || Array.isArray(contributor)) return false;
+      const type = xmlAttributes(contributor)["@_contrib-type"];
+      return type === undefined || type === "author";
+    })
+    .map(parseJatsAuthor)
+    .filter((author): author is string => author !== null);
+  return {
+    title,
+    journal: firstXmlText(article, "journal-title"),
+    publication_date: parseJatsDate(article),
+    authors: authors.length === 0 ? null : authors,
+    source_url: null,
+    open_access_status: null,
+  };
 }
 
 function safeToken(value: string, fallbackPrefix: string): string {
@@ -658,13 +838,18 @@ export async function extractRegisteredPaperChartEvidence(
     ...supplementIds,
   ]);
 
-  // -- 3. Page raster extraction (deterministic pdfjs, outside source_assets).
-  const pdfPath = path.join(deps.taskRoot, ...pdf.receipt.relative_path.split("/"));
+  // -- 3. Authoritative metadata + complete page raster extraction.
+  const paperMeta = parseRegisteredJatsPaperMeta(xml.bytes, { paperId, paperNamespace });
   const destDir = path.join(deps.taskRoot, "download_tmp", "paper_chart_evidence");
-  const pageImages = await (deps.extractPageImages ?? defaultExtractPageImages)(pdfPath, destDir);
+  const pageImages = await (deps.extractPageImages ?? defaultExtractPageImages)(
+    pdf.bytes,
+    pdf.receipt.relative_path,
+    destDir,
+    { hint: paperMeta.title, signal },
+  );
   if (pageImages.images.length === 0) {
     throw new ChartExtractionError(
-      `no page images could be extracted from registered PDF asset ${pdfAssetId}`,
+      `no complete page images could be rendered from registered PDF asset ${pdfAssetId}`,
     );
   }
 
@@ -699,11 +884,18 @@ export async function extractRegisteredPaperChartEvidence(
 
   // -- 5. Merge page responses into merged candidates (with page context).
   const warnings: string[] = [];
-  let paperMeta: ParsedPaperMetaCandidate | null = null;
-  for (const page of pages) {
-    if (paperMeta === null && page.parsed.paper !== null) paperMeta = page.parsed.paper;
+  if (pageImages.skippedPages > 0) {
+    warnings.push(
+      `${pageImages.skippedPages} additional PDF page candidate(s) were not rendered because of the page cap`,
+    );
   }
-  if (paperMeta === null) fail("paper title is required: no page response carried paper metadata");
+  for (const page of pages) {
+    if (page.parsed.paper !== null && page.parsed.paper.title !== paperMeta.title) {
+      warnings.push(
+        `page ${page.pageNumber} model paper title differed from registered JATS metadata and was ignored`,
+      );
+    }
+  }
 
   const experimentCandidates: Array<{ page: PageExtraction; candidate: ParsedExperimentCandidate }> = [];
   const experimentIds = new Set<string>();

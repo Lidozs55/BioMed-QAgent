@@ -77,6 +77,21 @@ export interface OpenPdf {
   close(): Promise<void>;
 }
 
+interface PdfObjectStore {
+  get(name: string, callback?: (value: unknown) => void): unknown;
+}
+
+/** Wait for pdf.js worker-owned objects instead of calling the throwing sync form. */
+export function resolvePdfObject<T>(objects: PdfObjectStore, name: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    try {
+      objects.get(name, (value: unknown) => resolve(value as T));
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
 interface InternalPageExtract {
   items: readonly TextItemPosition[];
   lines: readonly Line2D[];
@@ -272,7 +287,7 @@ export async function openPdf(bytes: Uint8Array): Promise<OpenPdf> {
     },
     getImage: async (pageNumber, name) => {
       const page = await doc.getPage(pageNumber);
-      const image = await page.objs.get(name);
+      const image = await resolvePdfObject<Parameters<typeof toRgbaRaster>[1]>(page.objs, name);
       const raster = toRgbaRaster(name, image);
       if (raster === null) {
         throw new Error(`image object ${name} has no raster data`);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +33,7 @@ const API_KEY = "secret-fixture-key-do-not-leak";
 const RESOLVED_MODEL = "fixture-vlm-model";
 const PROVIDER_MODEL_VERSION = "fixture-vlm-model-2026-08-01";
 const FIXED_NOW = new Date("2026-08-30T10:00:00Z");
+const VECTOR_PDF_FIXTURE = path.resolve("tests/phase5/fixtures/pdf/vector-dose-response.pdf");
 
 interface FakeClientCall {
   imagePath: string;
@@ -147,13 +148,17 @@ interface FixtureAssets {
 
 interface FakePageImageExtraction {
   images: { path: string; pageIndex: number; bbox: string }[];
-  skippedExtra: number;
+  skippedPages: number;
 }
 
 interface FixtureDeps {
   resolveVlmConfig: () => Promise<VlmConfig>;
   vlmClientFactory: () => VlmClient;
-  extractPageImages: (pdfPath: string, destDir: string) => Promise<FakePageImageExtraction>;
+  extractPageImages: (
+    pdfBytes: Buffer,
+    sourceLabel: string,
+    destDir: string,
+  ) => Promise<FakePageImageExtraction>;
   now: () => Date;
 }
 
@@ -191,7 +196,17 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
   const taskRoot = await mkdtemp(path.join(os.tmpdir(), "registered-paper-chart-"));
   roots.push(taskRoot);
   const registry = new SourceAssetRegistry("task_gold6_t5", taskRoot, { now: () => FIXED_NOW });
-  const xml = Buffer.from("<article><front><article-title>EGFR study</article-title></front></article>", "utf8");
+  const xml = Buffer.from(
+    "<article><front><journal-meta><journal-title>Open Kinase Methods</journal-title></journal-meta>" +
+      "<article-meta><article-id pub-id-type=\"pmid\">31234567</article-id>" +
+      "<title-group><article-title>Quantitative inhibition of EGFR signaling</article-title></title-group>" +
+      "<contrib-group><contrib contrib-type=\"author\"><name><surname>Researcher</surname>" +
+      "<given-names>A.</given-names></name></contrib><contrib contrib-type=\"author\"><name>" +
+      "<surname>Scientist</surname><given-names>B.</given-names></name></contrib></contrib-group>" +
+      "<pub-date pub-type=\"epub\"><day>3</day><month>4</month><year>2020</year></pub-date>" +
+      "</article-meta></front></article>",
+    "utf8",
+  );
   const pdf = Buffer.from("%PDF-1.4 fixture bytes for registered paper chart extraction\n", "utf8");
   const supplement = Buffer.from("compound,value\nErlotinib,12.5\n", "utf8");
   const screenshot = Buffer.from("fake browser screenshot bytes", "utf8");
@@ -228,13 +243,13 @@ async function makeFixture(responseContent: string): Promise<Fixture> {
         model: RESOLVED_MODEL,
       }),
       vlmClientFactory: () => fakeClient,
-      extractPageImages: async (_pdfPath: string, destDir: string) => {
+      extractPageImages: async (_pdfBytes: Buffer, _sourceLabel: string, destDir: string) => {
         await mkdir(destDir, { recursive: true });
         const pagePath = path.join(destDir, "paper_p1_img0.png");
         await writeFile(pagePath, pageImage);
         return {
           images: [{ path: pagePath, pageIndex: 1, bbox: "0,0,612,792" }],
-          skippedExtra: 0,
+          skippedPages: 0,
         };
       },
       now: () => FIXED_NOW,
@@ -405,6 +420,79 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("uses registered XML metadata when a page image carries no paper title", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null }));
+    try {
+      const result = await extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      expect(rowsOf(carrier, "paper_records")[0]?.title).toBe(
+        "Quantitative inhibition of EGFR signaling",
+      );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("preserves mixed-content order in authoritative registered JATS metadata", async () => {
+    const fixture = await makeFixture(makeVlmResponse({ paper: null }));
+    try {
+      const mixedTitle = await writeFileAndRegister(
+        fixture.registry,
+        fixture.taskRoot,
+        "mixed-title.xml",
+        "<article><front><article-meta><article-id pub-id-type=\"pmid\">31234567</article-id>" +
+          "<title-group><article-title>Inhibition of EGFR<sup>WT</sup>, EGFR<sup>T790M</sup>, " +
+          "and <italic>EGFR</italic><sup>L858R</sup></article-title></title-group>" +
+          "</article-meta></front></article>",
+        "application/xml",
+      );
+      const result = await extractRegisteredPaperChartEvidence({
+        ...baseRequest(fixture),
+        paper_xml_asset_id: mixedTitle.asset_ref.asset_id,
+      }, {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        ...fixture.depsDefaults,
+      });
+      const carrier = await readCarrier(fixture, result.carrier.relative_path);
+      expect(rowsOf(carrier, "paper_records")[0]?.title).toBe(
+        "Inhibition of EGFR WT, EGFR T790M, and EGFR L858R",
+      );
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
+  it("renders a caption-selected full PDF page when no page extractor is injected", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const pdfPath = path.join(fixture.taskRoot, ...fixture.assets.pdfReceipt.relative_path.split("/"));
+      await copyFile(VECTOR_PDF_FIXTURE, pdfPath);
+      fixture.assets.pdfReceipt = await fixture.registry.register({
+        sourceId: "fixture_vector_pdf",
+        relativePath: fixture.assets.pdfReceipt.relative_path,
+        mediaType: "application/pdf",
+        role: "carrier",
+      });
+
+      await expect(extractRegisteredPaperChartEvidence(baseRequest(fixture), {
+        taskRoot: fixture.taskRoot,
+        sourceAssetRegistry: fixture.registry,
+        resolveVlmConfig: fixture.depsDefaults.resolveVlmConfig,
+        vlmClientFactory: fixture.depsDefaults.vlmClientFactory,
+        now: fixture.depsDefaults.now,
+      })).resolves.toMatchObject({ status: "ok" });
+      expect(fixture.calls).toHaveLength(1);
+      expect(path.basename(fixture.calls[0]!.imagePath)).toBe("paper_p2.png");
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  }, 60_000);
+
   it("batches all pending carrier estimates into one data_review request", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {
@@ -549,6 +637,27 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
+  it("rejects registered JATS identity drift before any model call", async () => {
+    const fixture = await makeFixture(makeVlmResponse());
+    try {
+      const mismatchedXml = await writeFileAndRegister(
+        fixture.registry,
+        fixture.taskRoot,
+        "mismatched-paper.xml",
+        "<article><front><article-meta><article-id pub-id-type=\"pmid\">99999999</article-id>" +
+          "<title-group><article-title>Different paper</article-title></title-group>" +
+          "</article-meta></front></article>",
+        "application/xml",
+      );
+      await expectRejectionBeforeModelCall(fixture, {
+        ...baseRequest(fixture),
+        paper_xml_asset_id: mismatchedXml.asset_ref.asset_id,
+      }, /identity does not match requested paper_id/);
+    } finally {
+      await Promise.all(fixture.roots.map((root) => rm(root, { recursive: true, force: true })));
+    }
+  });
+
   it("rejects browser-only screenshot registrations before any model call", async () => {
     const fixture = await makeFixture(makeVlmResponse());
     try {
@@ -649,19 +758,7 @@ describe("registered paper chart evidence extraction", () => {
     }
   });
 
-  it("fails when the model omits required paper metadata or activity confidence", async () => {
-    const missingTitle = await makeFixture(makeVlmResponse({ paper: { title: "" } }));
-    try {
-      await expect(extractRegisteredPaperChartEvidence(baseRequest(missingTitle), {
-        taskRoot: missingTitle.taskRoot,
-        sourceAssetRegistry: missingTitle.registry,
-        ...missingTitle.depsDefaults,
-      })).rejects.toThrow(/paper title/);
-      expect(missingTitle.calls).toHaveLength(1);
-    } finally {
-      await Promise.all(missingTitle.roots.map((root) => rm(root, { recursive: true, force: true })));
-    }
-
+  it("fails when the model omits required activity confidence", async () => {
     const missingConfidence = await makeFixture(makeVlmResponse({
       activities: [
         {

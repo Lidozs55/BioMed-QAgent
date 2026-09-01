@@ -287,6 +287,27 @@ describe("TASK-C2I Core-owned acquisition", () => {
     expect(durable).toHaveLength(3);
   });
 
+  it("serializes concurrent durable attempt appends without losing records", async () => {
+    const fixture = await runtime({
+      executor: async () => ({
+        status: 200,
+        headers: { "content-type": "text/tab-separated-values", "content-length": String(Buffer.byteLength(CONTENT)) },
+        body: (async function* (): AsyncIterable<Buffer> { yield Buffer.from(CONTENT); })(),
+      }),
+    });
+    const count = 6;
+    const results = await Promise.all(Array.from({ length: count }, (_, index) => fixture.runtime.acquire(request({
+      request_id: `request_parallel_${index}`,
+      requirement_id: `build_parallel_${index}`,
+      binding_id: `binding_parallel_${index}`,
+    }))));
+    const durable = JSON.parse(
+      await readFile(path.join(fixture.root, "state", "core-acquisition-attempts.json"), "utf8"),
+    ) as unknown[];
+    expect(durable).toHaveLength(results.reduce((sum, result) => sum + result.attempts.length, 0));
+    expect(durable.length).toBeGreaterThanOrEqual(count);
+  });
+
   it("preserves the terminal provider error after bounded retries", async () => {
     const fixture = await runtime({
       executor: async () => {

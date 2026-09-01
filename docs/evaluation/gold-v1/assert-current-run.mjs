@@ -21,6 +21,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
+import { fetchAllTaskEvents } from "../../../scripts/gold-formal-supervisor.mjs";
+
 const root = dirname(fileURLToPath(import.meta.url));
 const usage =
   "Usage: node docs/evaluation/gold-v1/assert-current-run.mjs <run-result.json> [--base-url URL]";
@@ -164,7 +166,7 @@ if (accepted === null || accepted === undefined) {
 // -- 4. Event evidence: one publication, resolved acceptance review, and
 // current-task carrier acquisitions for every frozen PMCID.
 const events = liveTask
-  ? (await getJson(baseUrl, `/api/v1/tasks/${taskId}/events?limit=100000`)).events ?? []
+  ? await fetchAllTaskEvents(baseUrl, taskId)
   : [];
 const publicationsCreated = events.filter((event) => event.payload.type === "publication_created");
 if (liveTask && publicationsCreated.length !== 1) {

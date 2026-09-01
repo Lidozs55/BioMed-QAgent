@@ -353,6 +353,38 @@ export function createApiClient(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS, fetchIm
   return Object.freeze({ root, request, download });
 }
 
+/** Read a complete task event stream without exceeding the API's 1,000-row page cap. */
+export async function fetchAllTaskEvents(
+  baseUrl,
+  taskId,
+  fetchImpl = globalThis.fetch,
+) {
+  const base = normalizedBaseUrl(baseUrl);
+  const events = [];
+  let afterSequence = 0;
+  for (;;) {
+    const response = await fetchImpl(
+      `${base}/api/v1/tasks/${encodeURIComponent(taskId)}/events?after_sequence=${afterSequence}&limit=1000`,
+    );
+    if (!response.ok) {
+      throw new Error(`task event page failed: HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (!isRecord(payload) || !Array.isArray(payload.events)) {
+      throw new Error("task event page response is invalid");
+    }
+    if (payload.events.length === 0) return events;
+    for (const event of payload.events) {
+      if (!isRecord(event) || !Number.isSafeInteger(event.sequence) || event.sequence !== afterSequence + 1) {
+        throw new Error("task event page is not contiguous");
+      }
+      events.push(event);
+      afterSequence = event.sequence;
+    }
+    if (payload.events.length < 1_000) return events;
+  }
+}
+
 /** Parse the formal event page shape. */
 export function parseEventPage(body) {
   if (!isRecord(body) || !Array.isArray(body.events)) throw new SupervisorError("protocol", "event page must contain events[]");
@@ -820,6 +852,7 @@ export async function supervise(input, dependencies = {}) {
     if (typeof adoptId !== "string") throw new SupervisorError("protocol", "--adopt requires at least one run on the task");
     if (state.run_id !== null && state.run_id !== adoptId) throw new SupervisorError("protocol", "evidence state belongs to another run");
     runId = adoptId;
+    state.run_id = runId;
     state.request_id = runFrom(snapshot, adoptId)?.request_id ?? state.request_id;
     state.stopped = false;
     state.pending_hil = null;
