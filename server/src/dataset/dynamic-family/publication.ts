@@ -564,12 +564,18 @@ export async function publishDynamicFamily(
       throw new Error("dynamic publication review evidence digest does not match the reviewed candidate");
     }
     if (review.decision.action !== "accept") {
-      throw new PublicationAcceptanceRejectedError(
-        review.decision.action === "skip" ? "skip" : "reject",
-        typeof review.reason === "string" && review.reason.trim() !== ""
-          ? review.reason.slice(0, 2000)
-          : null,
-      );
+      if (review.decision.action === "reject" || review.decision.action === "skip") {
+        throw new PublicationAcceptanceRejectedError(
+          review.decision.action,
+          typeof review.reason === "string" && review.reason.trim() !== ""
+            ? review.reason.slice(0, 2000)
+            : null,
+        );
+      }
+      // Any other non-accept decision is not a formal rejection decision; it
+      // surfaces verbatim (including the actual action) without triggering
+      // the typed untrusted-fallback allowlist.
+      throw new Error(rejectReasonMessage("dynamic publication review", review));
     }
     const currentAssessment = await fileReceipt(assessmentPath);
     if (currentAssessment.sha256 !== provisionalAssessment.sha256 || currentAssessment.size_bytes !== provisionalAssessment.size_bytes) {
@@ -888,11 +894,16 @@ export async function completePublicationAcceptanceContinuation(
     );
   }
   if (input.review.decision.action !== "accept") {
-    throw new PublicationAcceptanceRejectedError(
-      input.review.decision.action === "skip" ? "skip" : "reject",
-      typeof input.review.reason === "string" && input.review.reason.trim() !== ""
-        ? input.review.reason.slice(0, 2000)
-        : null,
+    if (input.review.decision.action === "reject" || input.review.decision.action === "skip") {
+      throw new PublicationAcceptanceRejectedError(
+        input.review.decision.action,
+        typeof input.review.reason === "string" && input.review.reason.trim() !== ""
+          ? input.review.reason.slice(0, 2000)
+          : null,
+      );
+    }
+    throw new Error(
+      rejectReasonMessage("publication continuation review", input.review),
     );
   }
 
