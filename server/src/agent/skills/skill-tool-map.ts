@@ -202,6 +202,15 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
     { guidanceOnly: true },
   ),
   mapping(
+    "github-api",
+    "discovery",
+    ["github", "web"],
+    "Route GitHub-hosted files and docs to reachable REST/raw entry points and avoid unreachable mirrors. Invoke when a needed data file or doc lives on GitHub or official sources are unreachable.",
+    "Use only after official sources are exhausted: search api.github.com, list a repo contents to confirm path and ref, then fetch via github.com/{owner}/{repo}/raw/{ref}/{path}; never guess CDN/raw mirrors. GitHub downloads are staging evidence, never formal carriers.",
+    ["download_from_page", "navigate_page"],
+    { guidanceOnly: true },
+  ),
+  mapping(
     "local_cache",
     "acquisition",
     ["local_cache"],

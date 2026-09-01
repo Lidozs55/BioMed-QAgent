@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { SourceAssetRegistry } from "../../src/runtime/source-assets/registry.js";
+import { BrowserAcquisitionEvidenceStore } from "../../src/runtime/browser-acquisition-store.js";
 import {
   BROWSER_UA,
   DEFAULT_BROWSER_LAUNCH_ARGS,
@@ -300,6 +301,10 @@ describe("NodeBrowserPool (real chromium + fixture server)", () => {
     try {
       const result = await recordingPool.fetch(url("/redirect-a"));
       expect(result.content).toContain("redirected body");
+      expect(result.url).toBe(url("/redirect-target"));
+      expect(result.redirect_chain).toEqual([
+        { from_url: url("/redirect-a"), to_url: url("/redirect-target"), status: 302 },
+      ]);
       expect(validations).toEqual([url("/redirect-a"), url("/redirect-target")]);
     } finally {
       await recordingPool.close();
@@ -504,6 +509,10 @@ describe("browser tools", () => {
       crawler: facade,
       hooks: { onQuery: (query, source, status, count) => queries.push([query, source, status, count]) },
     });
+    const properties = (navigatePage.parameters as {
+      properties: Record<string, Record<string, unknown>>;
+    }).properties;
+    expect(properties["archive_html"]).toMatchObject({ type: "boolean", default: false });
 
     const result = await navigatePage.execute({ url: "https://example.com/paper" });
     const data = JSON.parse(result.content) as Record<string, unknown>;
@@ -517,13 +526,86 @@ describe("browser tools", () => {
     expect(data["method_used"]).toBe("crawl");
     expect(data["status_code"]).toBe(200);
     expect(data["content_type"]).toBe("text/html; charset=utf-8");
+    expect(data["final_url"]).toBe("https://example.com/paper");
+    expect(data["redirect_chain"]).toEqual([]);
+    expect(data["html_archived"]).toBe(false);
+    expect(data).not.toHaveProperty("source_asset");
     expect(queries).toEqual([["https://example.com/paper", "browser", "success", 1]]);
   });
 
-  function navigateToolWithHtml(html: string) {
+  it("navigate_page archives complete rendered HTML as a registered SourceAsset without inlining it", async () => {
+    const html = await readFile(path.join(FIXTURES, "browser_page.html"), "utf8");
+    const requestedUrl = "https://example.com/start";
+    const finalUrl = "https://example.com/final/page";
+    const fakePool: BrowserPoolClient = {
+      fetch: async () => ({
+        url: finalUrl,
+        content: html,
+        status_code: 200,
+        elapsed_ms: 3,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        redirect_chain: [{ from_url: requestedUrl, to_url: finalUrl, status: 302 }],
+      }),
+      screenshot: async () => {
+        throw new Error("unused in this test");
+      },
+    };
+    const registry = new SourceAssetRegistry("task_browser_html", root);
+    const evidenceStore = new BrowserAcquisitionEvidenceStore({ taskRoot: root });
+    const [navigatePage] = createBrowserTools({
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client: new PublicHttpClient(),
+      crawler: new CrawlerFacade({ browserPool: fakePool, minInterval: 0 }),
+      sourceAssetRegistry: registry,
+      evidenceStore,
+      taskId: "task_browser_html",
+      runId: "run_browser_html",
+    });
+
+    const first = await navigatePage.execute({ url: requestedUrl, archive_html: true });
+    expect(first.isError, first.content).toBeUndefined();
+    expect(first.content).not.toContain("<html");
+    const data = JSON.parse(first.content) as Record<string, unknown>;
+    expect(data["html_archived"]).toBe(true);
+    expect(data["final_url"]).toBe(finalUrl);
+    expect(data["redirect_chain"]).toEqual([
+      { from_url: requestedUrl, to_url: finalUrl, status: 302 },
+    ]);
+    expect(String(data["body_text_preview"])).not.toContain("fixtureNoise");
+
+    const localFiles = data["local_files"] as string[];
+    expect(localFiles).toHaveLength(1);
+    expect(await readFile(localFiles[0], "utf8")).toBe(html);
+    const expectedSha = createHash("sha256").update(html, "utf8").digest("hex");
+    const asset = data["source_asset"] as Record<string, unknown>;
+    expect(asset["asset_id"]).toBe(`asset_${expectedSha}`);
+    expect(asset["sha256"]).toBe(expectedSha);
+    expect(asset["media_type"]).toBe("text/html");
+    const receipt = data["source_asset_registration_receipt"] as Record<string, unknown>;
+    expect((receipt["asset_ref"] as Record<string, unknown>)["asset_id"]).toBe(asset["asset_id"]);
+    const evidence = data["browser_acquisition_evidence"] as Record<string, unknown>;
+    expect(evidence["requested_url"]).toBe(requestedUrl);
+    expect(evidence["final_url"]).toBe(finalUrl);
+    expect(evidence["source_asset_id"]).toBe(asset["asset_id"]);
+    expect(evidence["media_type"]).toBe("text/html");
+    expect(evidence["bytes_received"]).toBe(Buffer.byteLength(html, "utf8"));
+    await expect(registry.resolveAny(String(asset["asset_id"]))).resolves.toBeDefined();
+
+    const repeated = await navigatePage.execute({ url: requestedUrl, archive_html: true });
+    expect(repeated.isError, repeated.content).toBeUndefined();
+    const repeatedData = JSON.parse(repeated.content) as Record<string, unknown>;
+    expect((repeatedData["source_asset"] as Record<string, unknown>)["asset_id"]).toBe(asset["asset_id"]);
+    expect(
+      (repeatedData["browser_acquisition_evidence"] as Record<string, unknown>)["evidence_id"],
+    ).not.toBe(evidence["evidence_id"]);
+    expect(await evidenceStore.list()).toHaveLength(2);
+  });
+
+  function navigateToolWithHtml(html: string, finalUrl?: string) {
     const fakePool: BrowserPoolClient = {
       fetch: async (value) => ({
-        url: value,
+        url: finalUrl ?? value,
         content: html,
         status_code: 200,
         elapsed_ms: 1,
@@ -564,6 +646,21 @@ describe("browser tools", () => {
       { href: "ftp://ftp.fda.gov/dilirank.xlsx", text: "ftp mirror file" },
     ]);
     expect(data.links_total).toBe(3);
+  });
+
+  it("navigate_page resolves relative links against the final redirected URL", async () => {
+    const html = '<html><body><a href="files/table.csv">table</a></body></html>';
+    const result = await navigateToolWithHtml(html, "https://example.com/final/index.html").execute({
+      url: "https://example.com/start",
+    });
+    const data = JSON.parse(result.content) as {
+      final_url: string;
+      links: Array<{ href: string; text: string }>;
+    };
+    expect(data.final_url).toBe("https://example.com/final/index.html");
+    expect(data.links).toEqual([
+      { href: "https://example.com/final/files/table.csv", text: "table" },
+    ]);
   });
 
   it("navigate_page pages long body text via max_chars and offset", async () => {

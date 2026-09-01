@@ -141,8 +141,8 @@ const TOOL_LABEL_MAP: Record<string, ToolLabelFormatter> = {
   analyze_papers: () => ({ verb: "分析", target: "论文标题" }),
   // Browser fallback / visual capture
   navigate_page: (args) => ({
-    verb: "浏览",
-    target: "网页",
+    verb: args?.archive_html === true ? "归档" : "浏览",
+    target: args?.archive_html === true ? "网页 HTML" : "网页",
     details: args?.url ? String(args.url) : undefined,
   }),
   download_from_page: (args) => ({

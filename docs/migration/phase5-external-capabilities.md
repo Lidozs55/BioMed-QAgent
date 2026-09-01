@@ -88,7 +88,7 @@ progress 语义）以 Python 实现为参考；TS 实现必须先通过 fixture 
 | `search_reactome` | `skills/builtin/acquisition/reactome.py` | `term`, `max_results=20` | `source, term, count, total_matches, records[], enriched_count, method_used, attempts[]` | `server/src/agent/tools/reactome.ts` | ✅ |
 | `get_pathway` | 同上 | `pathway_id` | `source, pathway_id, record, method_used, attempts` | `server/src/agent/tools/reactome.ts` | ✅ |
 | `download_reactome` | 同上 | `pathway_id`, `file_type="tsv"` | `source, pathway_id, source_url, local_files[], format_hint, retrieved_at` | `server/src/agent/tools/reactome.ts` | ✅ |
-| `navigate_page` | `skills/builtin/acquisition/browser.py` | `url` | `url, status_code, method_used, title, body_text_preview(≤5000), content_type` / `{url, error}` | `server/src/agent/tools/browser.ts` | ✅ |
+| `navigate_page` | `skills/builtin/acquisition/browser.py` | `url` (required), `max_chars=5000`, `offset=0`, `archive_html=false` | `url, final_url, redirect_chain, status_code, method_used, title, body_text_preview(≤20000), links[]`; `archive_html=true` additionally returns verified `text/html` SourceAsset/registration/DownloadAttempt/browser evidence metadata without inline HTML | `server/src/agent/tools/browser.ts` | ✅ |
 | `download_from_page` | 同上 | `url`, `filename` | `source:"browser", source_url, local_files[], mime_type, bytes_received, retrieved_at, source_asset, download_attempt` / error | `server/src/agent/tools/browser.ts` | ✅ |
 | `capture_web_page` | `skills/builtin/acquisition/web_visual_capture.py` | `url`, kw-only `full_page=True, viewport_width=1920, viewport_height=1080, wait_until="networkidle", label=None` | `source, url, status_code, local_files[], meta_file, sha256, size_bytes, viewport, full_page, selector, label, captured_at, source_id` | `server/src/agent/tools/web-visual-capture.ts` | ✅ |
 | `capture_page_section` | 同上 | `url, selector` + 同 kw-only | 同上 | `server/src/agent/tools/web-visual-capture.ts` | ✅ |
@@ -121,6 +121,9 @@ progress 语义）以 Python 实现为参考；TS 实现必须先通过 fixture 
   `toil-xena-hub.s3.us-east-1.amazonaws.com`, `api.unpaywall.org`,
   `www.ebi.ac.uk`。TS 侧命名为 `CURATED_SOURCE_HOSTS`。
 - redirect ≤ 5 跳、逐跳重新校验；正式 acquisition 禁跨 host。
+- HTTPS transport 默认严格校验证书；仅 CA 链无法建立（自签名/未知 CA）时对该 hop
+  回退一次，并继续强制 hostname/SAN 与证书有效期校验。禁止全局关闭 TLS 校验，
+  redirect 后的新 hop 重新从严格校验开始。
 - 大小限制：download ≤ 4096 MiB（Python `MAX_CRAWLER_DOWNLOAD_BYTES`）、
   crawler response ≤ 10 MiB、browser page/extract 10 MiB、screenshot 25 MiB /
   25,000,000 px、declarative DB response ≤ 10 MiB。

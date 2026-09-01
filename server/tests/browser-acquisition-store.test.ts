@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BROWSER_ACQUISITION_POLICY_REVISION,
+  LEGACY_BROWSER_ACQUISITION_POLICY_REVISION,
   BROWSER_ACQUISITION_PROVIDER_ID,
   type BrowserAcquisitionEvidence,
 } from "@biomed/contracts";
@@ -42,6 +43,16 @@ describe("BrowserAcquisitionEvidenceStore", () => {
 
     expect(reloaded).toEqual(first);
     expect(JSON.parse(await readFile(path.join(root, "state/browser-acquisition-evidence.json"), "utf8"))).toHaveLength(1);
+  });
+
+  it("continues to read evidence written under the legacy TLS policy revision", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "browser-evidence-"));
+    const store = new BrowserAcquisitionEvidenceStore({ taskRoot: root });
+    const legacy = {
+      ...evidence("task_fixture"),
+      browser_policy_revision: LEGACY_BROWSER_ACQUISITION_POLICY_REVISION,
+    };
+    await expect(store.put(legacy)).resolves.toMatchObject({ evidence: legacy });
   });
 
   it("rejects an evidence identity collision instead of overwriting", async () => {

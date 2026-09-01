@@ -19,6 +19,8 @@ export {
   PublicHttpClient,
   DEFAULT_MAX_REDIRECTS,
   defaultExecutor,
+  isRelaxableTlsChainError,
+  validateRelaxedTlsPeer,
   validateCuratedSourceUrl,
   type HttpClientResponse,
   type HttpRequestOptions,

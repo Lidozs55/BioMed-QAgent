@@ -17,7 +17,8 @@
  */
 
 import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { checkServerIdentity, connect as tlsConnect, type DetailedPeerCertificate, type TLSSocket } from "node:tls";
 import type { IncomingMessage } from "node:http";
 import type { LookupFunction } from "node:net";
 import type { RequestOptions } from "node:https";
@@ -108,9 +109,103 @@ function headersFromIncoming(message: IncomingMessage): Record<string, string> {
   return headers;
 }
 
-/** Default transport: node http/https with address-pinned connect. */
-export const defaultExecutor: RequestExecutor = (request) =>
-  new Promise((resolve, reject) => {
+const RELAXABLE_TLS_CHAIN_ERROR_CODES = new Set([
+  "CERT_UNTRUSTED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+/** Only CA-chain trust failures may use the one-shot relaxed TLS retry. */
+export function isRelaxableTlsChainError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== null && typeof current === "object"; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && RELAXABLE_TLS_CHAIN_ERROR_CODES.has(code)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+export function validateRelaxedTlsPeer(
+  hostname: string,
+  certificate: DetailedPeerCertificate,
+  now = Date.now(),
+): void {
+  if (Object.keys(certificate).length === 0) {
+    throw Object.assign(new Error("TLS peer did not provide a certificate"), { code: "CERT_MISSING" });
+  }
+  const identityError = checkServerIdentity(hostname, certificate);
+  if (identityError !== undefined) throw identityError;
+  const validFrom = Date.parse(certificate.valid_from);
+  const validTo = Date.parse(certificate.valid_to);
+  if (!Number.isFinite(validFrom) || !Number.isFinite(validTo)) {
+    throw Object.assign(new Error("TLS peer certificate validity is invalid"), { code: "CERT_INVALID" });
+  }
+  if (now < validFrom) {
+    throw Object.assign(new Error("TLS peer certificate is not yet valid"), { code: "CERT_NOT_YET_VALID" });
+  }
+  if (now > validTo) {
+    throw Object.assign(new Error("TLS peer certificate has expired"), { code: "CERT_HAS_EXPIRED" });
+  }
+}
+
+function openRelaxedTlsSocket(request: ExecutorRequest): Promise<TLSSocket> {
+  const hostname = request.pinned?.connectAddress.address ?? request.url.hostname;
+  const port = request.pinned?.port
+    ?? (request.url.port === "" ? 443 : Number.parseInt(request.url.port, 10));
+  const servername = request.pinned?.sniHostname ?? request.url.hostname;
+  return new Promise<TLSSocket>((resolve, reject) => {
+    const socket = tlsConnect({ host: hostname, port, servername, rejectUnauthorized: false });
+    let settled = false;
+    const connectTimer = request.connectTimeoutMs === undefined
+      ? null
+      : setTimeout(() => {
+          fail(Object.assign(new Error("connect timeout"), { name: "TimeoutError" }));
+        }, request.connectTimeoutMs);
+    const cleanup = (): void => {
+      if (connectTimer !== null) clearTimeout(connectTimer);
+      socket.removeListener("error", fail);
+      request.signal?.removeEventListener("abort", abort);
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(error);
+    };
+    const abort = (): void => {
+      const reason = request.signal?.reason;
+      fail(reason instanceof Error ? reason : Object.assign(new Error("aborted"), { cause: reason }));
+    };
+    socket.once("error", fail);
+    socket.once("secureConnect", () => {
+      try {
+        validateRelaxedTlsPeer(servername, socket.getPeerCertificate(true));
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(socket);
+    });
+    if (request.signal !== undefined) {
+      if (request.signal.aborted) abort();
+      else request.signal.addEventListener("abort", abort, { once: true });
+    }
+  });
+}
+
+function executeNodeRequest(
+  request: ExecutorRequest,
+  relaxedSocket?: TLSSocket,
+): ReturnType<RequestExecutor> {
+  return new Promise((resolve, reject) => {
     const { url, pinned } = request;
     const isHttps = url.protocol === "https:";
     const transport = isHttps ? httpsRequest : httpRequest;
@@ -141,6 +236,11 @@ export const defaultExecutor: RequestExecutor = (request) =>
         };
         if (port !== undefined) requestOptions.port = port;
         if (lookup !== undefined) requestOptions.lookup = lookup as LookupFunction;
+        if (relaxedSocket !== undefined) {
+          const agent = new HttpsAgent({ keepAlive: false, maxSockets: 1 });
+          agent.createConnection = () => relaxedSocket;
+          requestOptions.agent = agent;
+        }
         return requestOptions;
       })(),
       (message) => {
@@ -158,7 +258,7 @@ export const defaultExecutor: RequestExecutor = (request) =>
       },
     );
     req.on("error", reject);
-    if (request.connectTimeoutMs !== undefined) {
+    if (relaxedSocket === undefined && request.connectTimeoutMs !== undefined) {
       const connectTimer = setTimeout(() => {
         req.destroy(Object.assign(new Error("connect timeout"), { name: "TimeoutError" }));
       }, request.connectTimeoutMs);
@@ -184,6 +284,33 @@ export const defaultExecutor: RequestExecutor = (request) =>
     }
     req.end();
   });
+}
+
+/**
+ * Default transport: strict TLS first; one CA-chain-only retry keeps hostname and
+ * validity checks while tolerating environments whose HTTPS interception root is
+ * not installed in Node's trust store.
+ */
+export const defaultExecutor: RequestExecutor = async (request) => {
+  try {
+    return await executeNodeRequest(request);
+  } catch (error) {
+    if (
+      request.url.protocol !== "https:"
+      || request.signal?.aborted === true
+      || !isRelaxableTlsChainError(error)
+    ) {
+      throw error;
+    }
+    const socket = await openRelaxedTlsSocket(request);
+    try {
+      return await executeNodeRequest(request, socket);
+    } catch (retryError) {
+      socket.destroy();
+      throw retryError;
+    }
+  }
+};
 
 export class PublicHttpClient {
   readonly resolve: AddressResolver;

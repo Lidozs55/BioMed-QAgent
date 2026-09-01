@@ -28,6 +28,7 @@ export {
   type BrowserFetchResult,
   type BrowserPoolOptions,
   type BrowserRequestAuthorizer,
+  type BrowserRedirectHop,
   type BrowserScreenshotOptions,
   type BrowserScreenshotResult,
   type BrowserSessionOptions,
