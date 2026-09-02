@@ -139,6 +139,27 @@ function runOrDie(command, args, options = {}) {
   return result;
 }
 
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+// Windows Defender / 索引服务会瞬时锁定刚解压出的运行时文件，紧接着的目录
+// rename 会撞上 EPERM/EACCES/EBUSY；等待后重试即可恢复。
+function renameWithRetry(from, to, attempts = 6) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      const retryable =
+        error?.code === "EPERM" || error?.code === "EACCES" || error?.code === "EBUSY";
+      if (!retryable || attempt >= attempts) throw error;
+      console.log(`[pack]   rename busy (${error.code}); retrying in 2s (${attempt}/${attempts - 1})`);
+      sleepSync(2_000);
+    }
+  }
+}
+
 function download(url, destFile) {
   console.log(`[pack]   downloading ${url}`);
   const result = run("curl", ["-fL", "--retry", "2", "--connect-timeout", "20", "-o", destFile, url]);
@@ -584,7 +605,7 @@ for (const key of selected) {
     fail(`unexpected Node archive layout: ${nodeInner} lacks ${platform.nodeBin}`);
   }
   mkdirSync(path.join(packageDir, "runtime"), { recursive: true });
-  renameSync(nodeInner, path.join(packageDir, "runtime", "node"));
+  renameWithRetry(nodeInner, path.join(packageDir, "runtime", "node"));
 
   const pyAsset = `cpython-${PYTHON_VERSION}+${PYTHON_PBS_TAG}-${platform.pyTriple}-install_only.tar.gz`;
   const pyArchive = path.join(cacheDir, pyAsset);
@@ -597,7 +618,7 @@ for (const key of selected) {
   if (!existsSync(path.join(pyInner, platform.pythonBin))) {
     fail(`unexpected Python archive layout: ${pyInner} lacks ${platform.pythonBin}`);
   }
-  renameSync(pyInner, path.join(packageDir, "runtime", "python"));
+  renameWithRetry(pyInner, path.join(packageDir, "runtime", "python"));
   installPythonExtras(key, platform, path.join(packageDir, "runtime", "python"), path.join(cacheDir, "pip"));
 
   step(7, "write launchers and README");
