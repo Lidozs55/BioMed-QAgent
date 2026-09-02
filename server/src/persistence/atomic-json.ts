@@ -90,10 +90,14 @@ export async function writeJsonAtomic(
     await handle.close();
   }
   await rename(temporary, filePath);
-  const directoryHandle = await open(path.dirname(filePath), "r");
-  try {
-    await directoryHandle.sync();
-  } finally {
-    await directoryHandle.close();
+  // 目录 fsync 只在 POSIX 上有意义；libuv 在 Windows 对目录句柄 sync() 返回
+  // EPERM（2026-09-02 实证，semantic route fence 的 durable write 全量失败）。
+  if (process.platform !== "win32") {
+    const directoryHandle = await open(path.dirname(filePath), "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
+    }
   }
 }
