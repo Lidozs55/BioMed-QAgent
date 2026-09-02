@@ -89,10 +89,22 @@ describe("Gold9 trusted Core acquisition providers", () => {
   });
 
   it.each([
+    ["GTF2H2C_2", "GTF2H2C_2%5Bgene%5D"],
+    ["SNORD116@", "SNORD116%40%5Bgene%5D"],
+  ] as const)("accepts HGNC current symbols with '_'/'@' as the ClinVar gene probe (%s)", async (accession, encodedTerm) => {
+    const provider = createGold9AcquisitionProviders().find((entry) => entry.providerId === GOLD9_PROVIDER_IDS.clinvarGeneEsearch);
+    expect(provider).toBeDefined();
+    const result = await provider!.plan(request(GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", accession));
+    expect(result.source.url).toContain(`term=${encodedTerm}`);
+  });
+
+  it.each([
     [GOLD9_PROVIDER_IDS.orphanetProduct1, "orphanet_en_product1", "en_product6"],
     [GOLD9_PROVIDER_IDS.orphanetProduct6, "orphanet_en_product6", "https://evil.example/x"],
     [GOLD9_PROVIDER_IDS.hgncApproved, "hgnc_approved", "../hgnc.tsv"],
     [GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "not a gene"],
+    [GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "1ABC"],
+    [GOLD9_PROVIDER_IDS.clinvarGeneEsearch, "clinvar_gene_esearch", "A!B"],
     [GOLD9_PROVIDER_IDS.clingenGeneValidity, "clingen_gene_validity", "gene-validity.csv"],
   ] as const)("rejects an invalid accession for %s", async (providerId, source, accession) => {
     const provider = createGold9AcquisitionProviders().find((entry) => entry.providerId === providerId)!;
