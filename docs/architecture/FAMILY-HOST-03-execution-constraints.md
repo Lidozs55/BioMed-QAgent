@@ -23,7 +23,7 @@
 15. **Single Host during evidence runs**：在event-log multiprocess race修复前，同一data root只能运行一个BioMed-QAgent Host；不得启动多个`tsx watch`实例。
 16. **Product success**：Host exit、OperationResult committed、B3 passed或文件存在都不能代替ProductAssessment.publishable + immutable Publication + Artifact API byte-hash verification。
 17. **Core-owned product closure**：动态 `assessment_policy_ref` 必须命中 Core 注册的产品拓扑清单；scaffold 由该清单直接生成 FamilySpec、Projection、表定义和关系，Agent 只绑定来源/抽取事实；prepare receipt 绑定清单 digest，submit 时重算。候选在 B3/HIL 前必须精确闭合清单要求的 family、table ID/role/schema、relation ID 与最小行数。Agent 自报清单、未知 policy、手写漂移 topology 或缩减后的单表 projection 均 fail closed，不能进入 `publication_acceptance`。
-18. **Formal derived evidence**：VLM manifest 与 archive member/parser output 必须是 task-owned derived SourceAsset，并有持久 OperationResult；动态输入验证递归父资产 closure。低可信点先完成 `vlm_extraction` HIL，六表 publication 再逐点核对 manifest/model/prompt/bbox/confidence/review 后进入最终 `publication_acceptance`。
+18. **Formal derived evidence**：VLM manifest 与 archive member/parser output 必须是 task-owned derived SourceAsset，并有持久 OperationResult；动态输入验证递归父资产 closure。按 [ADR-043](../adr/043-exact-only-chart-values.md)，VLM 只提供 figure/series/axis/legend/locator discovery；正式非空 chart points 必须逐行闭合到显式 numeric source-data asset，图像估计即使 HIL accepted/corrected 也不得发布。无精确点时可在留存搜索审计后空表、继续独立精确记录，再进入最终 `publication_acceptance`。
 19. **Output locator closure**：Transform output 的 `locator_ref` 必须等于 Core 预期 locator，或精确命中本 invocation 已 admission 的 input asset/result locator；不同表可选择各自真实输入 locator。未知、外部或未登记 locator 仍以 `OUTPUT_CLOSURE_MISMATCH` 拒绝。
 
 ## 当前受支持流程

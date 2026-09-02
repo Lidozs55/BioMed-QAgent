@@ -209,6 +209,25 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/declare the matching semantic family, projection, and row granularity/i);
   });
 
+  test("requires exact published chart values and reports skipped figures", () => {
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /chart coordinates enter a formal product only from an explicit numeric source/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /article tables[\s\S]*supplement[\s\S]*official publisher source data[\s\S]*author-declared repository/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /never publish[\s\S]*digitization[\s\S]*OCR[\s\S]*interpolation[\s\S]*fitting/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/human review cannot make an estimate exact/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /omit chart_points[\s\S]*publish independently exact records/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /report the skipped chart[\s\S]*recommend contacting authors/i,
+    );
+  });
+
   test("guides adjusted-parameter retries before switching source or reporting NO_DATA", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /retry the same route after adjusting the parameters/i,
@@ -264,17 +283,13 @@ describe("Pi system prompt", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never as publication authority: only a current-run immutable Publication proves completion/i,
     );
-    // Gold6-like work must go through registered carriers plus the governed
-    // extraction tool, with structured blockers instead of workspace CSV.
+    // Gold6-like work uses governed extraction for chart discovery, but formal
+    // point values require an independently registered explicit numeric source.
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /acquire registered full-text XML\/PDF\/supplement carriers through fixed Core acquisition/i,
+      /use extract_registered_paper_chart_evidence on registered assets to locate figures\/series/i,
     );
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /call extract_registered_paper_chart_evidence on task-owned asset ids/i,
-    );
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /If any carrier, visual model, locator, or required review is unavailable, return the structured blocker instead of a workspace CSV/i,
-    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/explicit numeric source/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(/binding\/blockers[\s\S]*never use a workspace-CSV fallback/i);
   });
 
   test("briefs the system while deferring mechanics to the Phase 1 sections", () => {

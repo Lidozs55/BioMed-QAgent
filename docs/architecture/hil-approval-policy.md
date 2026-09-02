@@ -43,7 +43,7 @@ PUT /api/v1/settings/hil-approval   { default_mode?, review_modes? }
 
 三个发布信任边界的 scope 固定人工审批,设置 API 对非人工档位返回 422:
 
-- `vlm_extraction` — bioactivity chart 证据组装门禁要求 `reviewer === "user"`。
+- `vlm_extraction` — figure/panel/series、坐标轴和图例 discovery 证据的组装门禁要求 `reviewer === "user"`；该审批不授权任何估计 chart point，也不能替代 exact numeric source-data gate。
 - `browser_evidence_acceptance` — 浏览器发布交接链按 `reviewer: "user"` 契约。
 - `publication_acceptance` — `parseProductAssessment` 的
   `human_review_evidence` 只接受 `reviewer: "user"`。

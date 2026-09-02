@@ -255,9 +255,10 @@ source-to-adapter/schema 能力。Agent Tool Schema 与 Core admission 从同一
 
 target/variant/structure/activity/paper/figure 等非 `gene_expression` 数据不能把
 Agent workspace 的 Markdown/CSV 直接当作正式 artifact。每个数据族必须先注册
-Canonical Schema、Adapter、Validation Profile 和 Publication manifest；图表估读
-还必须携带 figure/axis/legend locator、`estimated`/confidence 和人工审核状态。
-在这些组件落地前，运行可以正常结束并产出审计型报告，但不得设置
+Canonical Schema、Adapter、Validation Profile 和 Publication manifest；正式图表
+坐标只接受显式 numeric source-data，并携带 figure/axis/legend/series locator 及
+数值单元格或记录定位。像素/矢量估读、OCR 推断、插值或拟合值即使经过人工审核也
+不得发布；无精确来源时应产出审计型报告并跳过 chart points，不得设置
 `current_publication_id` 或伪造可下载主数据。
 
 > gold3–gold6 的 2026-08-17 真实 run 当时仅有 workspace 摘要、不满足该边界；该缺口

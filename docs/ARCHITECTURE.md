@@ -19,7 +19,7 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-08-29（对照 `main@8d174f1a`，重点复核 family 清单、API 路由与前端组件名）。
+> - **最后验证（Last Verified）**：2026-09-02（对照 `main@401ae983`，重点复核 exact-only 图表策略、family 清单、API 路由与前端组件名）。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
@@ -36,6 +36,7 @@
 | §4-§8, §20 | 可信执行内核 / 执行模型 / 职责边界 / 来源能力 / 字段映射 / 代码评审检查表 | [architecture/dataset-execution.md](architecture/dataset-execution.md) |
 | §9-§13 | 运行状态 / Validation / 置信度 / 溯源 / 缓存 | [architecture/result-validation.md](architecture/result-validation.md) |
 | §13A | Canonical Evidence Product Layer（语义产品层） | [architecture/canonical-evidence.md](architecture/canonical-evidence.md) |
+| — 图表精确数值策略 | 正式坐标只接受显式数值来源；图像估计不得发布 | [architecture/chart-exact-data-policy.md](architecture/chart-exact-data-policy.md) + [ADR-043](adr/043-exact-only-chart-values.md) |
 | §14-§15 | Durable Runtime / API 面 | [architecture/runtime-events.md](architecture/runtime-events.md) |
 | §16-§17 | Skill 仓库与 Subagent / 前端架构 | [architecture/agent-frontend.md](architecture/agent-frontend.md) |
 | §18, §21-§23, 附录 A | 迁移历史 / Demo 决策 / 待决问题 / 非目标 / 被否决方案 | [architecture/roadmap.md](architecture/roadmap.md) |
@@ -331,7 +332,7 @@ supersedes_publication_id
    `DatasetRequest`；
 4. Dataset Runtime 使用服务端固定构建骨架，不新增数据集级 `BuildRecipe`；
 5. 主数据记录必须来自真实来源或可复算确定性派生；
-6. Agent 不能直接制造科研值；
+6. Agent 不能直接制造科研值；图表像素/矢量几何、OCR 推断、插值或拟合值不得作为正式坐标，人工复核不能将估计升级为精确值；
 7. Agent 不能提交发布阈值或放宽 acceptance policy；
 8. 无 SourceAsset / locator 的来源值不得作为高可信正式记录；
 9. 合并前必须通过 Compatibility Gate；
