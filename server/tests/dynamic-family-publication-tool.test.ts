@@ -298,6 +298,9 @@ describe("dynamic family build tool boundary", () => {
     expect(schema).toContain("Synchronous TypeScript only");
     expect(schema).toMatch(/EVERY CSV field.*quoted.*double/i);
     expect(schema).toMatch(/chart_series\.source_locator.*locator_version.*locator_type.*image_bbox.*never.*\{locator/i);
+    // K3: the JSON newline trap burned 10+ same-signature rounds in gold9.
+    expect(schema).toContain("String.fromCharCode(10)");
+    expect(schema).toContain("backslash and n");
     expect(schema).toContain("target_records");
     expect(schema).toContain("maxItems");
     expect(schema).toContain("chembl.files.v1");
