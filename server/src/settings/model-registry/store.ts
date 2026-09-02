@@ -357,7 +357,7 @@ export function normalizeRuntimeLimits(value: unknown): RuntimeLimits {
   for (const key of Object.keys(RUNTIME_LIMIT_RANGES) as Array<keyof RuntimeLimits>) {
     const range = RUNTIME_LIMIT_RANGES[key];
     normalized[key] = clampNumber(source[key], range.min, range.max, DEFAULT_RUNTIME_LIMITS[key], {
-      label: `runtime_limits.${key}`,
+      label: `runtime_limits.${String(key)}`,
       integer: true,
     });
   }
