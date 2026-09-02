@@ -1,1 +1,0 @@
-﻿肠道微生物组与代谢/免疫/肿瘤疾病关联数据整合（十案最后一个；run 实发 TOPIC，依 docs/plans/gold10-four-table-closure.md 重建）：MGnify 研究元数据+样本级分类丰度、NCBI Taxonomy 名称归一（含同义/历史名）、差异丰度取论文官方补充材料、参考丰度基线取 GMRepo，四表以 study_id/ncbi_taxon_id/phenotype 关联，缺失表型/来源结构化标注不零填充。
