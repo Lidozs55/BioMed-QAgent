@@ -8,7 +8,7 @@
  * difference per function in the failure message.
  */
 
-import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -912,6 +912,55 @@ describe("basic_statistics tool", () => {
     expect(result.status).toBe("error");
     expect(result.error).toBe("columns not found in CSV: ['nope']");
     expect(result.columns_analyzed).toEqual([]);
+  });
+
+  it("summarizes a declared head sample for files beyond the 64 MiB cap (C3)", async () => {
+    const taskRoot = await makeTaskRoot();
+    // 4 chunks x 80000 rows x 210 bytes ~= 67 MB > 64 MiB cap; streamed to
+    // disk chunk-wise so the fixture itself never materializes one 67 MB string.
+    const row = "G1,42.5," + "x".repeat(201) + "\n";
+    const chunk = Buffer.from(row.repeat(80_000), "utf8");
+    const handle = await open(path.join(taskRoot, "big.csv"), "w");
+    try {
+      await handle.writeFile(Buffer.from("gene,value,note\n", "utf8"));
+      for (let i = 0; i < 4; i += 1) {
+        await handle.write(chunk);
+      }
+    } finally {
+      await handle.close();
+    }
+    const totalBytes = (await stat(path.join(taskRoot, "big.csv"))).size;
+    expect(totalBytes).toBeGreaterThan(64 * 1024 * 1024);
+
+    const result = (await runTool(taskRoot, "run-big", BASIC_STATISTICS_TOOL_NAME, {
+      csv_path: "big.csv",
+    })) as unknown as {
+      status: string;
+      total_rows: number;
+      summary: Record<string, { count: number; mean: number }>;
+      sampling: { mode: string; sample_rows: number; sample_bytes: number; total_bytes: number };
+      stats_report: string;
+    };
+    expect(result.status).toBe("ok");
+    expect(result.sampling.mode).toBe("head_prefix");
+    expect(result.sampling.sample_bytes).toBeLessThanOrEqual(64 * 1024 * 1024);
+    expect(result.sampling.total_bytes).toBe(totalBytes);
+    // Sample cut at the last complete line: stats cover exactly the declared rows.
+    expect(result.sampling.sample_rows).toBeGreaterThan(0);
+    expect(result.total_rows).toBe(result.sampling.sample_rows);
+    expect(result.summary.value.count).toBe(result.sampling.sample_rows);
+    expect(result.summary.value.mean).toBe(42.5);
+    await expect(stat(path.join(taskRoot, result.stats_report))).resolves.toBeDefined();
+  });
+
+  it("reports no sampling block for files within the 64 MiB cap", async () => {
+    const taskRoot = await makeTaskRoot();
+    await installFixture(taskRoot);
+    const result = (await runTool(taskRoot, "run-small", BASIC_STATISTICS_TOOL_NAME, {
+      csv_path: "de_input.csv",
+    })) as unknown as Record<string, unknown>;
+    expect(result.status).toBe("ok");
+    expect("sampling" in result).toBe(false);
   });
 });
 
