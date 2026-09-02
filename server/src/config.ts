@@ -2,22 +2,31 @@ type Environment = Record<string, string | undefined>;
 
 import path from "node:path";
 
+import { DEFAULT_HOST_RESOURCE_LIMITS } from "./host-resource-limits.js";
+
 export type AgentExecPolicy = "deny" | "ask" | "allow";
 
 export interface HostConfig {
   publicHost: string;
   publicPort: number;
   shutdownTimeoutMs: number;
+  /** Host-wide concurrent Playwright BrowserContext budget. */
+  browserMaxContexts: number;
+  /** Host-wide approximate parsed-event cache budget. */
+  eventCacheMaxBytes: number;
   /**
    * Migration feature flag (plan §58): overrides the process.exec policy
    * regardless of preset. Removed once the settings layer stabilizes.
    */
   agentExecPolicy: AgentExecPolicy | null;
 }
+
 export const DEFAULT_HOST_CONFIG = {
   HOST: "127.0.0.1",
   PORT: "5173",
   SHUTDOWN_TIMEOUT_MS: "10000",
+  BROWSER_MAX_CONTEXTS: String(DEFAULT_HOST_RESOURCE_LIMITS.browserMaxContexts),
+  EVENT_CACHE_MAX_BYTES: String(DEFAULT_HOST_RESOURCE_LIMITS.eventCacheMaxBytes),
   AGENT_EXEC_POLICY: "",
 } as const;
 
@@ -31,8 +40,8 @@ function parsePort(name: string, value: string): number {
 
 function parsePositiveInteger(name: string, value: string): number {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
   }
   return parsed;
 }
@@ -49,6 +58,14 @@ export function parseHostConfig(environment: Environment): HostConfig {
     shutdownTimeoutMs: parsePositiveInteger(
       "SHUTDOWN_TIMEOUT_MS",
       environment.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_HOST_CONFIG.SHUTDOWN_TIMEOUT_MS,
+    ),
+    browserMaxContexts: parsePositiveInteger(
+      "BROWSER_MAX_CONTEXTS",
+      environment.BROWSER_MAX_CONTEXTS ?? DEFAULT_HOST_CONFIG.BROWSER_MAX_CONTEXTS,
+    ),
+    eventCacheMaxBytes: parsePositiveInteger(
+      "EVENT_CACHE_MAX_BYTES",
+      environment.EVENT_CACHE_MAX_BYTES ?? DEFAULT_HOST_CONFIG.EVENT_CACHE_MAX_BYTES,
     ),
     agentExecPolicy: parseAgentExecPolicy(environment.AGENT_EXEC_POLICY),
   };

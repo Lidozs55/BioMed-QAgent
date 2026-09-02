@@ -259,6 +259,7 @@ async function makeFixture(responseContent: FixtureResponse): Promise<Fixture> {
         apiKey: API_KEY,
         baseUrl: "https://vlm.fixture.example/v1",
         model: RESOLVED_MODEL,
+        temperature: 0.25,
       }),
       vlmClientFactory: () => fakeClient,
       extractPageImages: async (_pdfBytes: Buffer, _sourceLabel: string, destDir: string) => {
@@ -408,6 +409,10 @@ describe("registered paper chart evidence extraction", () => {
         "sources",
       ]);
 
+      expect(carrier.extraction).toMatchObject({
+        implementation_version: "1.6.0",
+        parameters: { temperature: 0.25, render_dpi: 216, max_pages: 12 },
+      });
       const paperRecord = rowsOf(carrier, "paper_records")[0] as Record<string, unknown>;
       expect(paperRecord).toMatchObject({ pmid: "31234567", pmcid: "none", doi: "none" });
 
@@ -425,6 +430,13 @@ describe("registered paper chart evidence extraction", () => {
         .update(REGISTERED_PAPER_CHART_PROMPT, "utf8")
         .digest("hex");
       expect(series.prompt_digest).toBe(expectedPromptDigest);
+      expect((series.transform_provenance as {
+        steps: Array<{ parameters: Record<string, unknown> }>;
+      }).steps[0]?.parameters).toMatchObject({
+        temperature: 0.25,
+        render_dpi: 216,
+        max_pages: 12,
+      });
 
       // The carrier embeds the exact manifest that Core will require on the
       // consuming provenance: projected from validated rows in the validator's

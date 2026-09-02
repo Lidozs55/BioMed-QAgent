@@ -9,6 +9,8 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicHost: "127.0.0.1",
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
+      browserMaxContexts: 4,
+      eventCacheMaxBytes: 256 * 1024 * 1024,
       agentExecPolicy: null,
     });
   });
@@ -18,11 +20,15 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       HOST: "0.0.0.0",
       PORT: "8080",
       SHUTDOWN_TIMEOUT_MS: "5000",
+      BROWSER_MAX_CONTEXTS: "8",
+      EVENT_CACHE_MAX_BYTES: "536870912",
       AGENT_EXEC_POLICY: "ask",
     })).toEqual({
       publicHost: "0.0.0.0",
       publicPort: 8080,
       shutdownTimeoutMs: 5000,
+      browserMaxContexts: 8,
+      eventCacheMaxBytes: 536_870_912,
       agentExecPolicy: "ask",
     });
   });
@@ -31,6 +37,8 @@ describe("host config (Phase 8: runtime parameters only)", () => {
     expect(() => parseHostConfig({ PORT: "70000" })).toThrow(/PORT/);
     expect(() => parseHostConfig({ PORT: "abc" })).toThrow(/PORT/);
     expect(() => parseHostConfig({ SHUTDOWN_TIMEOUT_MS: "0" })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+    expect(() => parseHostConfig({ BROWSER_MAX_CONTEXTS: "0" })).toThrow(/BROWSER_MAX_CONTEXTS/);
+    expect(() => parseHostConfig({ EVENT_CACHE_MAX_BYTES: "1.5" })).toThrow(/EVENT_CACHE_MAX_BYTES/);
   });
 
   test("ignores the retired DATASET_OPERATION_TIMEOUT_MS bypass", () => {
@@ -70,6 +78,8 @@ describe("host config (Phase 8: runtime parameters only)", () => {
       publicHost: "127.0.0.1",
       publicPort: 5173,
       shutdownTimeoutMs: 10000,
+      browserMaxContexts: 4,
+      eventCacheMaxBytes: 256 * 1024 * 1024,
       agentExecPolicy: null,
     });
   });

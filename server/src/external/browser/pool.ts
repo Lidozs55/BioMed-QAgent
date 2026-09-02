@@ -45,6 +45,7 @@
 import { chromium, type Browser, type BrowserContext, type Page, type Request, type Response, type Route } from "playwright";
 import { URL } from "node:url";
 
+import { DEFAULT_HOST_RESOURCE_LIMITS } from "../../host-resource-limits.js";
 import { strictBrowserEgressPolicy, type BrowserEgressPolicy } from "./egress.js";
 
 /** Project-wide browser User-Agent (Python ``BROWSER_UA``). */
@@ -541,7 +542,7 @@ export class BrowserSession {
 }
 
 export interface BrowserPoolOptions {
-  /** Maximum concurrent BrowserContexts (Python ``max_contexts``, default 4). */
+  /** Maximum concurrent BrowserContexts per Application Host. */
   maxContexts?: number;
   /** Injectable egress policy; defaults to the strict production policy. */
   policy?: BrowserEgressPolicy;
@@ -586,7 +587,7 @@ export class NodeBrowserPool {
   private idleWaiters: Array<() => void> = [];
 
   constructor(options: BrowserPoolOptions = {}) {
-    this.maxContextsValue = options.maxContexts ?? 4;
+    this.maxContextsValue = options.maxContexts ?? DEFAULT_HOST_RESOURCE_LIMITS.browserMaxContexts;
     if (this.maxContextsValue <= 0) {
       throw new Error("max_contexts must be positive");
     }

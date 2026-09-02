@@ -80,7 +80,13 @@ function client(executor: RequestExecutor): PublicHttpClient {
   });
 }
 
-async function runtime(options: { executor: RequestExecutor; registry?: CoreAcquisitionRegistry }): Promise<{
+async function runtime(options: {
+  executor: RequestExecutor;
+  registry?: CoreAcquisitionRegistry;
+  maxAttempts?: number;
+  retryBaseDelayMs?: number;
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+}): Promise<{
   root: string;
   runtime: CoreAcquisitionRuntime;
   assets: SourceAssetRegistry;
@@ -102,7 +108,9 @@ async function runtime(options: { executor: RequestExecutor; registry?: CoreAcqu
       client: client(options.executor),
       sourceAssetRegistry: assets,
       registry,
-      maxAttempts: 3,
+      maxAttempts: options.maxAttempts ?? 3,
+      retryBaseDelayMs: options.retryBaseDelayMs,
+      sleep: options.sleep ?? (async () => undefined),
     }),
   };
 }
@@ -308,9 +316,15 @@ describe("TASK-C2I Core-owned acquisition", () => {
     expect(durable.length).toBeGreaterThanOrEqual(count);
   });
 
-  it("preserves the terminal provider error after bounded retries", async () => {
+  it("applies configured acquisition attempts and exponential retry pacing", async () => {
+    const delays: number[] = [];
+    let calls = 0;
     const fixture = await runtime({
+      maxAttempts: 3,
+      retryBaseDelayMs: 250,
+      sleep: async (delayMs) => { delays.push(delayMs); },
       executor: async () => {
+        calls += 1;
         throw new Error("socket unavailable");
       },
     });
@@ -327,6 +341,8 @@ describe("TASK-C2I Core-owned acquisition", () => {
         attempts: 3,
       },
     });
+    expect(calls).toBe(3);
+    expect(delays).toEqual([250, 500]);
   });
 
   it("accepts only a registered PROMOTED recipe and rejects unknown providers", async () => {

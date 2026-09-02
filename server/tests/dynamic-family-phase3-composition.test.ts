@@ -10,7 +10,7 @@ import {
   type FamilySpec,
   type Projection,
 } from "@biomed/contracts";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
@@ -24,6 +24,7 @@ import {
 } from "../src/runtime/phase3-composition.js";
 import type { CoreAcquisitionResult } from "../src/dataset/acquisition/runtime.js";
 import { listUntrustedArtifacts } from "../src/runtime/untrusted-artifact-store.js";
+import { PermissionBrokerRegistry } from "../src/agent/permissions/broker.js";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -547,6 +548,98 @@ describe("dynamic family phase3 composition fencing", () => {
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.some((event) => event.payload.type === "publication_created")).toBe(true);
     expect(events.some((event) => event.payload.type === "artifact_produced")).toBe(true);
+    await runtime.close();
+  });
+
+  test("snapshots current runtime limits for every new Run on the same task", async () => {
+    const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-run-limit-snapshot-"));
+    roots.push(tasksRoot);
+    const workspacesRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-run-limit-workspaces-"));
+    roots.push(workspacesRoot);
+    let currentMaxAttempts = 2;
+    const seenAttempts: number[] = [];
+    const permissionBrokerRegistry = new PermissionBrokerRegistry();
+    const registerBroker = vi.spyOn(permissionBrokerRegistry, "register");
+
+    const adapter: BioMedAgentAdapter = {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        return {
+          piSessionId: `pi_${config.taskId}`,
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* run(): AsyncIterable<import("../src/agent/contracts.js").BioMedAgentEvent> {
+            yield { type: "turn_completed" };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    };
+    const runtime = await createPhase3Runtime({
+      tasksRoot,
+      workspacesRoot,
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
+      adapter,
+      database: null,
+      browserPool: null,
+      permissionBrokerRegistry,
+      resolveRuntimeLimits: () => ({
+        ...DEFAULT_RUNTIME_LIMITS,
+        acquisition_max_attempts: currentMaxAttempts,
+      }),
+      dynamicFamilySeams: {
+        createAcquisitionRuntime: ({ maxAttempts }) => {
+          seenAttempts.push(maxAttempts);
+          return {
+            plan: async () => ({
+              requestIdentityDigest: REQUEST_DIGEST,
+              providerId: "geo.files.v1",
+              implementationDigest: IMPLEMENTATION_DIGEST,
+              recipe: null,
+            }),
+            acquire: async () => {
+              throw new Error("not exercised");
+            },
+          };
+        },
+      },
+    });
+    const server = createServer((request, response) => { void runtime.handle(request, response); });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("phase3 snapshot test server has no address");
+    const base = `http://127.0.0.1:${address.port}`;
+    const first = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "phase3_run_limit_snapshot_1",
+        input: "first run",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(first.task_id)
+    )?.task.status).toBe("completed");
+
+    currentMaxAttempts = 7;
+    const secondResponse = await fetch(`${base}/api/v1/tasks/${first.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "phase3_run_limit_snapshot_2", input: "second run" }),
+    });
+    expect(secondResponse.status).toBe(202);
+    const second = await secondResponse.json() as { run_id: string };
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(first.task_id)
+    )?.runs.find((run) => run.run_id === second.run_id)?.status).toBe("completed");
+
+    expect(seenAttempts).toEqual([2, 7]);
+    expect(registerBroker).toHaveBeenCalledTimes(2);
+    expect(registerBroker.mock.calls[0]?.[1]).toBe(registerBroker.mock.calls[1]?.[1]);
     await runtime.close();
   });
 

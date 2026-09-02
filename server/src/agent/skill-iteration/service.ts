@@ -45,6 +45,10 @@ export interface SkillIterationServiceOptions {
   tasksRoot: string;
   settingsDir: string;
   resolveModel: () => Promise<BioMedModelConfig>;
+  /** Settings-derived model request deadline; resolved when an iteration starts. */
+  resolveModelRequestTimeoutMs?: () => number;
+  /** Shared Host repository; direct callers may omit it for an isolated instance. */
+  repository?: DurableTaskRepository;
   generate?: (input: {
     model: BioMedModelConfig;
     systemPrompt: string;
@@ -338,7 +342,7 @@ export class SkillIterationService {
   private running = false;
 
   constructor(private readonly options: SkillIterationServiceOptions) {
-    this.repository = new DurableTaskRepository(options.tasksRoot);
+    this.repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
     this.skillsRoot = path.join(options.repositoryRoot, ".pi", "skills");
     this.guidePath = path.join(
       options.repositoryRoot,
@@ -465,7 +469,11 @@ export class SkillIterationService {
         }, null, 2),
       ].join("\n");
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180_000);
+      const timeoutMs = this.options.resolveModelRequestTimeoutMs?.() ?? 180_000;
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+        throw new TypeError("skill iteration model request timeout must be a positive integer");
+      }
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const abort = (): void => controller.abort();
       signal.addEventListener("abort", abort, { once: true });
       let raw: string;

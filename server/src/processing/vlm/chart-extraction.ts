@@ -36,9 +36,9 @@ import {
 import { writeChartCsvs } from "./chart-csv.js";
 import { createVlmClient, DEFAULT_DASHSCOPE_BASE_URL, VL_MODEL_NAME, type VlmClient, type VlmConfig } from "./vlm-client.js";
 import { extractPdfImages, MAX_PDF_IMAGES_PER_FILE, type PdfPageRaster } from "./pdf-images.js";
-import { RENDER_DPI, renderPdfPages } from "./pdf-pages.js";
+import { MAX_PDF_PAGES_PER_FILE, RENDER_DPI, renderPdfPages } from "./pdf-pages.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
-import type { JsonValue } from "@biomed/contracts";
+import type { JsonValue, ModelRetryPolicy } from "@biomed/contracts";
 import { evaluateConfidence } from "../../dataset/confidence/evaluator.js";
 import {
   analyzeDigitAnomaly,
@@ -64,6 +64,13 @@ export interface VlmToolHooks {
 export interface VlmToolsConfig {
   /** VLM credentials/model; all values are explicitly injected. */
   vlmConfig?: Partial<VlmConfig>;
+  /** RuntimeLimits-derived model-provider deadline in milliseconds. */
+  timeoutMs?: number;
+  /** Settings-derived visual-model retry policy. */
+  retryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
+  pdfMaxPages?: number;
+  pdfMaxImages?: number;
+  renderDpi?: number;
   /** Injectable HTTP client (fixture tests use a local-executor instance). */
   httpClient?: PublicHttpClient;
   /** Task-absolute work root. */
@@ -118,6 +125,12 @@ export interface VlmResultOk {
   model_name: string;
   model_version: string;
   prompt_digest: string;
+  extraction_parameters: {
+    temperature: number;
+    pdf_max_pages: number;
+    pdf_max_images: number;
+    render_dpi: number;
+  };
   charts: VlmChartSummary[];
   total_charts: number;
   total_data_points: number;
@@ -344,6 +357,7 @@ export function resolveVlmConfig(partial: Partial<VlmConfig> = {}): VlmConfig {
     apiKey: partial.apiKey ?? "",
     baseUrl: partial.baseUrl ?? DEFAULT_DASHSCOPE_BASE_URL,
     model: partial.model ?? VL_MODEL_NAME,
+    ...(partial.temperature === undefined ? {} : { temperature: partial.temperature }),
   };
 }
 
@@ -580,11 +594,12 @@ async function extractFromPdfL1(
   taskRoot: string,
   hooks: VlmToolHooks,
   modelName: string,
+  maxImages: number,
   signal?: AbortSignal,
 ): Promise<{ extractions: PageRasterExtraction[]; l1Failed: boolean }> {
   let images: Awaited<ReturnType<typeof extractPdfImages>>;
   try {
-    images = await extractPdfImages(pdfPath, context.downloadTmp);
+    images = await extractPdfImages(pdfPath, context.downloadTmp, maxImages);
   } catch (error) {
     console.warn(`L1 PDF image extraction failed for ${pdfPath}: ${error instanceof Error ? error.message : String(error)}`);
     return { extractions: [], l1Failed: true };
@@ -623,16 +638,20 @@ async function extractFromRenderedPages(
   hooks: VlmToolHooks,
   modelName: string,
   hint: string,
+  maxPages: number,
+  renderDpi: number,
   signal?: AbortSignal,
 ): Promise<PageRasterExtraction[]> {
   const rendered = await renderPdfPages(pdfPath, path.join(taskRoot, "download_tmp", "rendered_pages"), {
     hint,
+    dpi: renderDpi,
+    maxPages,
     signal,
   });
   if (rendered.pages.length === 0) return [];
   hooks.onWarning?.(
     "info",
-    `no embedded raster was usable for ${sourceLabel}; rendering ${rendered.pages.length} candidate page(s) at ${RENDER_DPI} DPI (${rendered.selection} selection)`,
+    `no embedded raster was usable for ${sourceLabel}; rendering ${rendered.pages.length} candidate page(s) at ${renderDpi} DPI (${rendered.selection} selection)`,
     "extract_chart_data_vlm",
   );
   const extractions = await runVlmOnPageRasters({
@@ -814,6 +833,13 @@ export function createVlmTools(options: {
   taskRoot: string;
   hooks?: VlmToolHooks;
   vlmConfig?: Partial<VlmConfig>;
+  /** RuntimeLimits-derived model-provider deadline in milliseconds. */
+  timeoutMs?: number;
+  /** Settings-derived visual-model retry policy. */
+  retryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
+  pdfMaxPages?: number;
+  pdfMaxImages?: number;
+  renderDpi?: number;
   httpClient?: PublicHttpClient;
   hilGate?: DatasetHILGate | null;
 }): VlmTools {
@@ -823,7 +849,13 @@ export function createVlmTools(options: {
   // A default client performs public-URL policy + DNS pinning; tests inject
   // a PublicHttpClient bound to a fixture server.
   const client = options.httpClient ?? new PublicHttpClient();
-  const vlm = createVlmClient(config, client);
+  const vlm = createVlmClient(config, client, {
+    timeoutMs: options.timeoutMs,
+    retryPolicy: options.retryPolicy,
+  });
+  const pdfMaxPages = options.pdfMaxPages ?? MAX_PDF_PAGES_PER_FILE;
+  const pdfMaxImages = options.pdfMaxImages ?? MAX_PDF_IMAGES_PER_FILE;
+  const renderDpi = options.renderDpi ?? RENDER_DPI;
 
   return {
     config,
@@ -866,7 +898,18 @@ export function createVlmTools(options: {
             sourceAssetId: `asset_${pdfSha}`,
             downloadTmp: path.join(taskRoot, "download_tmp"),
           };
-          const l1 = await extractFromPdfL1(resolved, context, sourceLabel, vlm, prompt, taskRoot, hooks, config.model, signal);
+          const l1 = await extractFromPdfL1(
+            resolved,
+            context,
+            sourceLabel,
+            vlm,
+            prompt,
+            taskRoot,
+            hooks,
+            config.model,
+            pdfMaxImages,
+            signal,
+          );
           for (const extraction of l1.extractions) {
             chartRows.push(extraction.chartRow);
             pointRows.push(...extraction.pointRows);
@@ -886,6 +929,8 @@ export function createVlmTools(options: {
               hooks,
               config.model,
               hint,
+              pdfMaxPages,
+              renderDpi,
               signal,
             );
             for (const extraction of rendered) {
@@ -988,6 +1033,12 @@ export function createVlmTools(options: {
           model_name: config.model,
           model_version: config.model,
           prompt_digest: promptDigest,
+          extraction_parameters: {
+            temperature: config.temperature ?? 0.1,
+            pdf_max_pages: pdfMaxPages,
+            pdf_max_images: pdfMaxImages,
+            render_dpi: renderDpi,
+          },
           extraction_tiers: tiersUsed,
           charts: candidateManifest.charts,
           points: candidateManifest.points,
@@ -1026,6 +1077,12 @@ export function createVlmTools(options: {
             model_name: config.model,
             model_version: config.model,
             prompt_digest: promptDigest,
+            extraction_parameters: {
+              temperature: config.temperature ?? 0.1,
+              pdf_max_pages: pdfMaxPages,
+              pdf_max_images: pdfMaxImages,
+              render_dpi: renderDpi,
+            },
             extraction_tiers: tiersUsed,
             review,
             charts: terminalManifest.charts,
@@ -1083,6 +1140,12 @@ export function createVlmTools(options: {
         model_name: config.model,
         model_version: config.model,
         prompt_digest: promptDigest,
+        extraction_parameters: {
+          temperature: config.temperature ?? 0.1,
+          pdf_max_pages: pdfMaxPages,
+          pdf_max_images: pdfMaxImages,
+          render_dpi: renderDpi,
+        },
         charts,
         total_charts: chartRows.length,
         total_data_points: pointRows.length,

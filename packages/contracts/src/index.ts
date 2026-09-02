@@ -25,6 +25,7 @@ export type * from "./json.js";
 export * from "./task-run.js";
 export * from "./task-execution-context.js";
 export * from "./untrusted-artifact-submission.js";
+export * from "./upload-limits.js";
 export type * from "./websocket.js";
 
 /* ---- Wire DTO types (settings / model registry / declarative databases) ---- */

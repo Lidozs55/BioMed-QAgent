@@ -139,8 +139,8 @@ const QUERY_SOURCE_LABELS: Readonly<Record<string, string>> = {
  *   ``tool:acquisition:*``) once per run — they have no natural end signal,
  *   so the run-terminal fallback on the frontend closes them.
  *
- * ``currentRunId`` must be a getter: the workspace outlives runs and the
- * dedup key must not leak state across runs.
+ * ``currentRunId`` remains a getter because a run-scoped workspace may also
+ * service durable continuations that explicitly rebind their run identity.
  */
 export function createPhase3ToolHooks(
   recordRunEvent: (payload: import("@biomed/contracts").EventPayload) => Promise<void>,
@@ -339,6 +339,8 @@ export interface Phase3RuntimeOptions {
   resolveModel?: () => Promise<BioMedModelConfig>;
   /** Limits are snapshotted whenever a new task workspace/run is created. */
   resolveRuntimeLimits?: () => RuntimeLimits;
+  /** Shared Host repository; production passes one instance to all task-history consumers. */
+  repository?: import("./task-repository.js").DurableTaskRepository;
   /**
    * Composition/test override for the TS Dataset Core per-operation
    * wall-clock timeout. Production does not set it: the default comes from
@@ -381,6 +383,10 @@ export interface Phase3DynamicFamilySeams {
     client: PublicHttpClient;
     sourceAssetRegistry: SourceAssetRegistry;
     registrar: CacheRegistrar | null;
+    /** RuntimeLimits-derived acquisition retry count. */
+    maxAttempts: number;
+    /** RuntimeLimits-derived base delay between acquisition retries. */
+    retryBaseDelayMs: number;
   }) => Phase3AcquisitionRuntime;
   readonly submitDynamicFamilyPublication?: typeof submitDynamicFamilyPublication;
   readonly publishDynamicFamily?: typeof publishDynamicFamily;
@@ -402,6 +408,10 @@ export function createPhase3AcquisitionRuntime(options: {
   /** RuntimeLimits-derived download budgets (audit P0-6/P0-7). */
   maxDownloadBytes?: number;
   downloadTimeoutMs?: number;
+  /** RuntimeLimits-derived acquisition retry count. */
+  maxAttempts?: number;
+  /** RuntimeLimits-derived base delay between acquisition retries. */
+  retryBaseDelayMs?: number;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   for (const provider of createCoreAcquisitionProviders()) registry.registerProvider(provider);
@@ -437,16 +447,29 @@ export async function createPhase3Runtime(
   });
   const runtime = await createDurableAgentRuntime({
     tasksRoot: options.tasksRoot,
+    repository: options.repository,
     workspaceManager,
     permissionBrokerRegistry: options.permissionBrokerRegistry,
-    hilPreReview: createHilGatePreReview(
-      options.hilApprovalPolicy ?? null,
-      options.resolveModel ?? null,
-    ),
+    createHilPreReview: () => {
+      const limits = options.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS;
+      return createHilGatePreReview(
+        options.hilApprovalPolicy ?? null,
+        options.resolveModel ?? null,
+        undefined,
+        limits.model_request_timeout_seconds * 1000,
+      );
+    },
     adapter: options.adapter ?? new PiAgentAdapter({
       resolveModel: options.resolveModel,
     }),
-    workspaceFactory: async ({ taskId, runId, approvalGate, recordRunEvent, mode }) => {
+    workspaceFactory: async ({
+      taskId,
+      runId,
+      approvalGate,
+      existingPermissionBroker,
+      recordRunEvent,
+      mode,
+    }) => {
       const limits = options.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS;
       let currentRunId = runId;
       let currentPiSessionId = "pi_session_pending";
@@ -469,23 +492,26 @@ export async function createPhase3Runtime(
       const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
         path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
       );
-      const grants = new TemporaryGrantStore();
-      const protectedPaths = new ProtectedPaths({ taskOutputRoot: taskRoot });
-      const permissionAudit = new AppendOnlyPermissionAuditSink(taskRoot);
-      const permissionBroker = new PermissionBroker({
-        taskId,
-        runId,
-        evaluator: new PermissionEvaluator({
-          protectedPaths,
+      const permissionBroker = existingPermissionBroker ?? (() => {
+        const grants = new TemporaryGrantStore();
+        const protectedPaths = new ProtectedPaths({ taskOutputRoot: taskRoot });
+        const permissionAudit = new AppendOnlyPermissionAuditSink(taskRoot);
+        return new PermissionBroker({
+          taskId,
+          runId,
+          evaluator: new PermissionEvaluator({
+            protectedPaths,
+            grants,
+            policyStore,
+            execPolicyOverride: options.agentExecPolicy ?? undefined,
+          }),
           grants,
           policyStore,
-          execPolicyOverride: options.agentExecPolicy ?? undefined,
-        }),
-        grants,
-        policyStore,
-        audit: permissionAudit,
-        recordRunEvent,
-      });
+          audit: permissionAudit,
+          recordRunEvent,
+        });
+      })();
+      permissionBroker.bindRun(runId, recordRunEvent);
       const workspace = await createTaskWorkspace({
         taskId,
         runId,
@@ -528,6 +554,8 @@ export async function createPhase3Runtime(
         client,
         sourceAssetRegistry,
         registrar,
+        maxAttempts: limits.acquisition_max_attempts,
+        retryBaseDelayMs: limits.request_interval_ms,
       }) ?? createPhase3AcquisitionRuntime({
         taskId,
         taskRoot,
@@ -537,6 +565,8 @@ export async function createPhase3Runtime(
         registrar,
         maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
         downloadTimeoutMs: limits.download_timeout_seconds * 1000,
+        maxAttempts: limits.acquisition_max_attempts,
+        retryBaseDelayMs: limits.request_interval_ms,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -604,6 +634,7 @@ export async function createPhase3Runtime(
             client,
             hooks: toolHooks,
             timeoutMs: limits.database_timeout_seconds * 1000,
+            maxResponseBytes: limits.api_response_max_mib * 1024 * 1024,
           }).catch((error: unknown) => {
             console.warn("tool.declarative_databases_unavailable", error);
             return [] as Awaited<ReturnType<typeof createDeclarativeDatabaseTools>>;
@@ -1032,8 +1063,9 @@ export async function createPhase3Runtime(
         },
         getCurrentPublicationId: () => currentPublicationId,
         onRunEnd: (endedRunId: string) => {
-          // Round-4 audit: run-bound temporary grants die with the run.
-          grants.clearRun(endedRunId);
+          // Round-4 audit: run-bound temporary grants die with the run;
+          // task grants remain on the broker reused by the next Run.
+          permissionBroker.clearRunGrants(endedRunId);
         },
         dispose: () => workspace.dispose(),
       };

@@ -11,6 +11,7 @@
  * resolution fails closed with an actionable message — there is no hidden
  * default visual model and no cross-provider credential reuse.
  */
+import { modelRetryPolicyFromRuntimeLimits } from "@biomed/contracts";
 import type { BioMedModelConfig } from "../../agent/contracts.js";
 import type { AuthState, ModelRecord, ProviderRecord, RegistryState } from "./store.js";
 
@@ -184,6 +185,7 @@ export function resolveActiveConfig(
     repetitionPenalty: settings.advanced.repetition_penalty,
     enableSearch: settings.advanced.enable_search,
     thinkingMode: settings.advanced.thinking_mode,
+    retryPolicy: modelRetryPolicyFromRuntimeLimits(settings.runtime_limits),
     params: model?.params ?? {},
   };
 }
@@ -197,7 +199,7 @@ export function resolveActiveConfig(
 export function resolveVlmConfig(
   registry: RegistryState,
   auth: AuthState,
-): { apiKey: string; baseUrl: string; model: string } {
+): { apiKey: string; baseUrl: string; model: string; temperature?: number } {
   const picked = pickVisionModel(registry);
   if (!picked.ok) throw new VisionConfigError(picked.failure);
   const apiKey = visionApiKey(picked.provider, auth);
@@ -207,5 +209,11 @@ export function resolveVlmConfig(
         "未配置 API Key，请在设置中补全后重试。",
     );
   }
-  return { apiKey, baseUrl: picked.provider.base_url, model: picked.model.model_id };
+  const temperature = picked.model.params.temperature;
+  return {
+    apiKey,
+    baseUrl: picked.provider.base_url,
+    model: picked.model.model_id,
+    ...(typeof temperature === "number" ? { temperature } : {}),
+  };
 }

@@ -35,7 +35,21 @@ cd BioMedQAgent
 2. 添加并激活主模型；
 3. Gold6 等图形任务还要选择具备图像能力的视觉模型。
 
-设置分别持久化到本机 `data/settings/model-registry.json` 和权限收紧的 `data/settings/model-auth.json`；后者只掩码返回，禁止提交或输出原始 key。根 `.env` 是可选的 Host/部署覆盖入口，例如 `HOST`、`PORT`、`SHUTDOWN_TIMEOUT_MS`、`BIOMED_PYTHON_BIN`，但不再是模型凭据或模型选择来源。使用 Commonly 或需要外部工具身份时，可按相应脚本文档在本地 `.env` 中设置其专用变量。
+设置分别持久化到本机 `data/settings/model-registry.json` 和权限收紧的 `data/settings/model-auth.json`；后者只掩码返回，禁止提交或输出原始 key。模型行为与任务级运行预算在设置页管理；机器资源预算才使用根目录中未跟踪的 `.env`。仓库不提供可提交的环境模板；不要创建或追踪此类模板，也不要把本机路径、身份或密钥提交入库。
+
+常用 Host/部署变量如下；未设置时使用表中默认值：
+
+| 变量 | 默认 | 用途 |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | 单端口 Host 监听地址 |
+| `PORT` | `5173` | 首选监听端口；`0` 表示由 OS 分配 |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | Host 关闭等待预算（正整数毫秒） |
+| `BROWSER_MAX_CONTEXTS` | `4` | 单 Host 的 Playwright BrowserContext 并发预算 |
+| `EVENT_CACHE_MAX_BYTES` | `268435456` | durable parsed-event 缓存预算（默认 256 MiB） |
+| `OUTPUT_DIR` | `<repo>/data/output` | durable runtime 与正式输出根目录；相对路径锚定仓库根 |
+| `BIOMED_PYTHON_BIN` | 仓库 `.venv` / PATH 探测 | database bridge 的 Python 3.12+ 解释器 |
+
+`BROWSER_MAX_CONTEXTS`、`EVENT_CACHE_MAX_BYTES` 与 shutdown timeout 在启动时严格校验为正安全整数。任务级 timeout、下载大小、模型重试、VLM PDF 页/图/DPI 等不从 env 读取，统一由 **设置 → Agent → 运行限制** 管理，语义见 [`architecture/runtime-limits.md`](architecture/runtime-limits.md)。模型与 API key 不再从环境变量自动引导；使用 Commonly 或需要外部工具身份时，按相应脚本文档在本地 `.env` 中设置其专用变量。
 
 ## 3. 安装依赖
 

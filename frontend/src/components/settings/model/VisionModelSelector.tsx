@@ -103,7 +103,7 @@ export function VisionModelSelector({
         </SelectContent>
       </Select>
       <p className="max-w-[42rem] text-xs leading-relaxed text-muted-foreground">
-        上传的图片由视觉抽取工具处理，不会直接发送给主对话模型。未选择时，仅当激活的模型具备图像能力才能进行图片抽取。
+        上传的图片由视觉抽取工具处理，不会直接发送给主对话模型。未选择时，仅当激活的模型具备图像能力才能进行图片抽取。视觉抽取使用所选模型在“模型列表”中保存的 Temperature；未设置时使用兼容默认值 0.1。
       </p>
       {Boolean(settings.vision_block_reason) && (
         <p className="max-w-[42rem] text-xs leading-relaxed text-destructive">

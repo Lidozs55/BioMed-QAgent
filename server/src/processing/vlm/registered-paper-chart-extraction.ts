@@ -22,6 +22,7 @@ import type {
   CoreDerivedAssetOperationKind,
   HILSubject,
   JsonValue,
+  ModelRetryPolicy,
   OperationResultManifest,
   SourceAssetRegistrationReceipt,
   SourceLocatorV2,
@@ -66,7 +67,7 @@ import { createVlmClient, type VlmClient, type VlmConfig } from "./vlm-client.js
 
 export const REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION =
   "registered-paper-chart-extraction";
-export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.5.0";
+export const REGISTERED_PAPER_CHART_EXTRACTION_VERSION = "1.6.0";
 export const REGISTERED_PAPER_CHART_PROMPT_VERSION = "registered_paper_chart.v3";
 export const REGISTERED_PAPER_CHART_CARRIER_KIND = "registered_paper_chart_evidence";
 
@@ -124,6 +125,13 @@ export interface RegisteredPaperChartExtractionDeps {
   sourceAssetRegistry: SourceAssetRegistry;
   /** Live visual-model resolver; consulted immediately before the first call. */
   resolveVlmConfig: () => Promise<VlmConfig>;
+  /** RuntimeLimits-derived model-provider deadline in milliseconds. */
+  modelRequestTimeoutMs?: number;
+  /** Settings-derived visual-model retry policy. */
+  modelRetryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
+  /** Run-snapshotted PDF page budget and raster resolution. */
+  pdfMaxPages?: number;
+  renderDpi?: number;
   httpClient?: PublicHttpClient;
   /** Test seam: build the VLM client from the resolved config. */
   vlmClientFactory?: (config: VlmConfig) => VlmClient;
@@ -132,7 +140,7 @@ export interface RegisteredPaperChartExtractionDeps {
     pdfBytes: Buffer,
     sourceLabel: string,
     destDir: string,
-    options: { hint: string; signal?: AbortSignal },
+    options: { hint: string; signal?: AbortSignal; maxPages?: number; dpi?: number },
   ) => Promise<{ images: PdfPageRaster[]; skippedPages: number }>;
   /**
    * Durable review gate. When present, ALL pending VLM point estimates of
@@ -1024,11 +1032,13 @@ function defaultExtractPageImages(
   pdfBytes: Buffer,
   sourceLabel: string,
   destDir: string,
-  options: { hint: string; signal?: AbortSignal },
+  options: { hint: string; signal?: AbortSignal; maxPages?: number; dpi?: number },
 ): Promise<{ images: PdfPageRaster[]; skippedPages: number }> {
   return renderPdfPagesFromBytes(pdfBytes, sourceLabel, destDir, {
-    ...options,
-    dpi: REGISTERED_PAPER_RENDER_DPI,
+    hint: options.hint,
+    signal: options.signal,
+    maxPages: options.maxPages,
+    dpi: options.dpi ?? REGISTERED_PAPER_RENDER_DPI,
   }).then((rendering) => ({
     images: rendering.pages,
     skippedPages: rendering.skippedPages,
@@ -1286,6 +1296,9 @@ function transformStep(options: {
   pageNumber: number;
   inputDigest: string;
   outputDigest: string;
+  temperature: number;
+  renderDpi: number;
+  maxPages: number;
   /** Digest of the ACTUAL surviving page prompt for this step. */
   promptDigest?: string;
 }): ChartTransformStep {
@@ -1297,6 +1310,9 @@ function transformStep(options: {
     parameters: {
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       ...(options.promptDigest === undefined ? {} : { prompt_digest: options.promptDigest }),
+      temperature: options.temperature,
+      render_dpi: options.renderDpi,
+      max_pages: options.maxPages,
       page_number: options.pageNumber,
     },
     input_digest: options.inputDigest,
@@ -1380,11 +1396,13 @@ export async function extractRegisteredPaperChartEvidence(
   });
   const destDir = path.join(deps.taskRoot, "download_tmp", "paper_chart_evidence");
   const renderHint = paperMeta.title;
+  const renderDpi = deps.renderDpi ?? REGISTERED_PAPER_RENDER_DPI;
+  const pdfMaxPages = deps.pdfMaxPages ?? 12;
   const pageImages = await (deps.extractPageImages ?? defaultExtractPageImages)(
     pdf.bytes,
     pdf.receipt.relative_path,
     destDir,
-    { hint: renderHint, signal },
+    { hint: renderHint, signal, maxPages: pdfMaxPages, dpi: renderDpi },
   );
   if (pageImages.images.length === 0) {
     throw new ChartExtractionError(
@@ -1396,9 +1414,13 @@ export async function extractRegisteredPaperChartEvidence(
   // A page-local schema/point deficit gets at most one corrective retry; a
   // failed page is recorded and omitted so valid sibling pages can proceed.
   const config = await deps.resolveVlmConfig();
+  const extractionTemperature = config.temperature ?? 0.1;
   const client = deps.vlmClientFactory !== undefined
     ? deps.vlmClientFactory(config)
-    : createVlmClient(config, deps.httpClient ?? new PublicHttpClient());
+    : createVlmClient(config, deps.httpClient ?? new PublicHttpClient(), {
+        timeoutMs: deps.modelRequestTimeoutMs,
+        retryPolicy: deps.modelRetryPolicy,
+      });
   let providerHost: string;
   try {
     providerHost = new URL(config.baseUrl).host;
@@ -1720,6 +1742,9 @@ export async function extractRegisteredPaperChartEvidence(
       pageNumber: page.pageNumber,
       inputDigest: page.inputDigest,
       outputDigest: page.outputDigest,
+      temperature: extractionTemperature,
+      renderDpi,
+      maxPages: pdfMaxPages,
       // The series step binds the ACTUAL surviving page prompt (base vs
       // corrective retry), matching the row-level prompt_digest identity.
       promptDigest: page.promptDigest,
@@ -1901,6 +1926,9 @@ export async function extractRegisteredPaperChartEvidence(
             pageNumber: pointEntry.page.pageNumber,
             inputDigest: pointEntry.page.inputDigest,
             outputDigest: pointEntry.page.outputDigest,
+            temperature: extractionTemperature,
+            renderDpi,
+            maxPages: pdfMaxPages,
             promptDigest: pointPromptDigest,
           }),
         }),
@@ -2025,6 +2053,11 @@ export async function extractRegisteredPaperChartEvidence(
       implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       model: { provider: providerHost, model: config.model, model_version: modelVersion },
+      parameters: {
+        temperature: extractionTemperature,
+        render_dpi: renderDpi,
+        max_pages: pdfMaxPages,
+      },
       prompt_digest: servedPromptDigest,
       evidence_manifest: evidenceManifest,
       source_assets: {
@@ -2051,6 +2084,9 @@ export async function extractRegisteredPaperChartEvidence(
     prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
     model_name: config.model,
     model_version: modelVersion,
+    temperature: extractionTemperature,
+    render_dpi: renderDpi,
+    max_pages: pdfMaxPages,
   });
   const receipt = await registerDerivedJsonAsset({
     taskRoot: deps.taskRoot,
@@ -2194,6 +2230,11 @@ export async function extractRegisteredPaperChartEvidence(
           implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
           prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
           model: { provider: providerHost, model: config.model, model_version: modelVersion },
+          parameters: {
+            temperature: extractionTemperature,
+            render_dpi: renderDpi,
+            max_pages: pdfMaxPages,
+          },
           prompt_digest: servedPromptDigest,
           evidence_manifest: evidenceManifest,
           source_assets: {

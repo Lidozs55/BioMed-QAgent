@@ -2,6 +2,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
+import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
 
 export const LOOKUP_DBSNP_TOOL_NAME = "lookup_dbsnp";
@@ -13,6 +14,8 @@ const RS_ID = /^rs([0-9]+)$/i;
 interface DbsnpDeps {
   client?: PublicHttpClient;
   limiter?: Pick<HostRateLimiter, "wait">;
+  /** Host setting may tighten, but never loosen, the tool's intrinsic cap. */
+  maxResponseBytes?: number;
   maxRetries?: number;
   sleep?: (delayMs: number) => Promise<void>;
   jitter?: () => number;
@@ -59,17 +62,6 @@ export interface DbsnpLookupResult {
     status_code: number | null;
     error: string;
   }>;
-}
-
-async function readBoundedJson(body: AsyncIterable<Buffer>): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) throw new Error("dbSNP response exceeds 2 MiB");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -186,7 +178,11 @@ export async function lookupDbsnp(
           completed = true;
           break;
         }
-        const parsed = asRecord(await readBoundedJson(response.body));
+        const parsed = asRecord(await readBoundedJson(response.body, {
+          source: "dbSNP",
+          intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+          configuredMaxBytes: deps.maxResponseBytes,
+        }));
         if (parsed === null || String(parsed["refsnp_id"] ?? "") !== item.numericId) {
           throw new Error("dbSNP returned an invalid or mismatched RefSNP record");
         }

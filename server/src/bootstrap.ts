@@ -23,6 +23,7 @@ import { createPermissionSettingsApi } from "./settings/permission-settings.js";
 import {
   JsonHilApprovalPolicyStore,
 } from "./runtime/hil-approval-store.js";
+import { DurableTaskRepository } from "./runtime/task-repository.js";
 import {
   JsonPermissionPolicyStore,
   PermissionBrokerRegistry,
@@ -54,6 +55,8 @@ export interface BootstrapInput {
   modelSettings?: ModelSettingsSurface;
   productApi?: ApiSurface;
   skillIterationApi?: ApiSurface;
+  /** Shared parsed-event cache owner for all Host task-history consumers. */
+  taskRepository?: DurableTaskRepository;
   createFormalRuntime?: (options: Phase3RuntimeOptions) => Promise<FormalRuntime>;
 }
 
@@ -121,8 +124,11 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     timeoutMs: runtimeLimits.database_timeout_seconds * 1000,
   });
   const browserPool = input.browserPool ?? new NodeBrowserPool({
-    maxContexts: 4,
+    maxContexts: config.browserMaxContexts,
     navigationTimeoutMs: runtimeLimits.browser_timeout_seconds * 1000,
+  });
+  const taskRepository = input.taskRepository ?? new DurableTaskRepository(tasksRoot, {
+    eventCacheMaxBytes: config.eventCacheMaxBytes,
   });
   const productApi = input.productApi ?? await createProductApi({
     tasksRoot,
@@ -136,6 +142,10 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     tasksRoot,
     settingsDir,
     resolveModel: modelSettings.resolveActiveModel,
+    resolveModelRequestTimeoutMs: () =>
+      (modelSettings.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS)
+        .model_request_timeout_seconds * 1000,
+    repository: taskRepository,
   });
   const permissionBrokerRegistry = new PermissionBrokerRegistry();
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
@@ -167,6 +177,7 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       hilApprovalPolicy,
       resolveModel: modelSettings.resolveActiveModel,
       resolveRuntimeLimits: modelSettings.resolveRuntimeLimits,
+      repository: taskRepository,
       database,
       browserPool,
       resolveVlmConfig: modelSettings.resolveVlmConfig,

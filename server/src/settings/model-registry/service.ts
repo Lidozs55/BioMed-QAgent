@@ -199,6 +199,7 @@ export class ModelSettingsService {
     apiKey: string;
     baseUrl: string;
     model: string;
+    temperature?: number;
   }> => {
     const stale = visionAssignmentProblem(this.registry);
     if (stale !== null) {
@@ -777,7 +778,9 @@ export class ModelSettingsService {
     const response = await this.fetcher(target, {
       headers: apiKey === "" ? undefined : { authorization: `Bearer ${apiKey}` },
       redirect: "error",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(
+        this.registry.settings.runtime_limits.model_request_timeout_seconds * 1000,
+      ),
     }).catch(() => {
       throw new HttpError(502, "模型发现失败");
     });

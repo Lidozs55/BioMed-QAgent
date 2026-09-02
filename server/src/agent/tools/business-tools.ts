@@ -19,7 +19,11 @@
  * ```
  */
 
-import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
+import {
+  DEFAULT_RUNTIME_LIMITS,
+  modelRetryPolicyFromRuntimeLimits,
+  type RuntimeLimits,
+} from "@biomed/contracts";
 
 import { defaultNcbiClientConfig } from "../../external/ncbi/client.js";
 import { HostRateLimiter } from "../../external/ncbi/retry.js";
@@ -183,11 +187,29 @@ export async function createBusinessToolBundle(
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     config: { totalTimeoutMs: limits.http_timeout_seconds * 1000 },
   }), "pubmed");
-  register(createDbsnpTools({ client, limiter: ncbiToolPacing() }), "dbsnp");
-  register(createOpenFdaTools({ client, limiter: ncbiToolPacing() }), "openfda");
-  register(createClinvarTools({ client, limiter: ncbiToolPacing() }), "clinvar");
-  register(createMgnifyTools({ client }), "mgnify");
-  register(createGwasCatalogTools({ client, limiter: ncbiToolPacing() }), "gwas_catalog");
+  const maxApiResponseBytes = limits.api_response_max_mib * 1024 * 1024;
+  const modelRetryPolicy = modelRetryPolicyFromRuntimeLimits(limits);
+  register(createDbsnpTools({
+    client,
+    limiter: ncbiToolPacing(),
+    maxResponseBytes: maxApiResponseBytes,
+  }), "dbsnp");
+  register(createOpenFdaTools({
+    client,
+    limiter: ncbiToolPacing(),
+    maxResponseBytes: maxApiResponseBytes,
+  }), "openfda");
+  register(createClinvarTools({
+    client,
+    limiter: ncbiToolPacing(),
+    maxResponseBytes: maxApiResponseBytes,
+  }), "clinvar");
+  register(createMgnifyTools({ client, maxResponseBytes: maxApiResponseBytes }), "mgnify");
+  register(createGwasCatalogTools({
+    client,
+    limiter: ncbiToolPacing(),
+    maxResponseBytes: maxApiResponseBytes,
+  }), "gwas_catalog");
   register(createGeoTools({
     taskRoot,
     cache,
@@ -323,7 +345,12 @@ export async function createBusinessToolBundle(
     workspaceRoot: context.workspaceRoot,
     vlmConfig: context.vlmConfig,
     resolveVlmConfig: context.resolveVlmConfig,
-    httpClient: client,
+    httpClient: context.vlmHttpClient ?? client,
+    modelRequestTimeoutMs: limits.model_request_timeout_seconds * 1000,
+    modelRetryPolicy,
+    pdfMaxPages: limits.vlm_pdf_max_pages,
+    pdfMaxImages: limits.vlm_pdf_max_images,
+    renderDpi: limits.vlm_render_dpi,
     onWarning: context.onWarning,
     hilGate: context.hilGate,
     approvalGate: context.approvalGate,
@@ -338,6 +365,10 @@ export async function createBusinessToolBundle(
       sourceAssetRegistry: context.sourceAssetRegistry,
       resolveVlmConfig: context.resolveVlmConfig,
       httpClient: context.vlmHttpClient ?? client,
+      modelRequestTimeoutMs: limits.model_request_timeout_seconds * 1000,
+      modelRetryPolicy,
+      pdfMaxPages: limits.vlm_pdf_max_pages,
+      renderDpi: limits.vlm_render_dpi,
       approvalGate: context.approvalGate,
       hilGate: context.hilGate,
     }), "extract_chart_data_vlm");

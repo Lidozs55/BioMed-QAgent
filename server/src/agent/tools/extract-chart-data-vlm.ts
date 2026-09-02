@@ -29,6 +29,7 @@ import {
   type VlmToolHooks,
 } from "../../processing/vlm/index.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
+import type { ModelRetryPolicy } from "@biomed/contracts";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
 import { errorResult } from "./result.js";
@@ -47,6 +48,13 @@ export interface ChartDataVlmToolDeps extends ToolServiceDeps {
    * API key stays in memory and never enters tool results or events.
    */
   resolveVlmConfig?: () => Promise<VlmConfig>;
+  /** RuntimeLimits-derived model-provider deadline in milliseconds. */
+  modelRequestTimeoutMs?: number;
+  /** Settings-derived visual-model retry policy. */
+  modelRetryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
+  pdfMaxPages?: number;
+  pdfMaxImages?: number;
+  renderDpi?: number;
   /** Injectable HTTP client (fixture tests; default is the public policy client). */
   httpClient?: PublicHttpClient;
   /** Warning surface (Python ``run_ctx.add_warning`` parity). */
@@ -228,6 +236,7 @@ async function formalizeVlmOutputs(options: {
     model_name: options.result.model_name,
     model_version: options.result.model_version,
     prompt_digest: options.result.prompt_digest,
+    extraction_parameters: options.result.extraction_parameters,
   };
   // Stage 1: the CANDIDATE carrier registers first, directly derived from the
   // exact Core source asset, and its OperationResult commits BEFORE anything
@@ -484,6 +493,11 @@ export function createChartDataVlmTool(deps: ChartDataVlmToolDeps): BioMedAgentT
           vlmConfig: deps.resolveVlmConfig === undefined
             ? deps.vlmConfig
             : await deps.resolveVlmConfig(),
+          timeoutMs: deps.modelRequestTimeoutMs,
+          retryPolicy: deps.modelRetryPolicy,
+          pdfMaxPages: deps.pdfMaxPages,
+          pdfMaxImages: deps.pdfMaxImages,
+          renderDpi: deps.renderDpi,
           httpClient: deps.httpClient,
           hilGate: deps.hilGate,
         });

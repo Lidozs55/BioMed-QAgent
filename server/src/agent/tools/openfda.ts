@@ -2,6 +2,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
+import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
 
 export const LOOKUP_OPENFDA_DILI_COUNTS_TOOL_NAME = "lookup_openfda_dili_counts";
@@ -14,6 +15,8 @@ const PROCESS_OPENFDA_LIMITER = new HostRateLimiter({ minInterval: 0.25 });
 interface OpenFdaDeps {
   client?: PublicHttpClient;
   limiter?: Pick<HostRateLimiter, "wait">;
+  /** Host setting may tighten, but never loosen, the tool's intrinsic cap. */
+  maxResponseBytes?: number;
   maxRetries?: number;
   sleep?: (delayMs: number) => Promise<void>;
   jitter?: () => number;
@@ -22,7 +25,7 @@ interface OpenFdaDeps {
 
 type ResolvedOpenFdaDeps = Required<Pick<
   OpenFdaDeps,
-  "client" | "limiter" | "maxRetries" | "sleep" | "jitter" | "now"
+  "client" | "limiter" | "maxResponseBytes" | "maxRetries" | "sleep" | "jitter" | "now"
 >>;
 
 export interface OpenFdaDiliCountResult {
@@ -63,17 +66,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-async function readBoundedJson(body: AsyncIterable<Buffer>): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) throw new Error("openFDA response exceeds 4 MiB");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 function normalizedValues(values: readonly string[], field: string, max: number): string[] {
@@ -124,10 +116,18 @@ async function requestOpenFdaJson(
       signal,
     });
     if (response.status >= 200 && response.status < 300) {
-      return readBoundedJson(response.body);
+      return readBoundedJson(response.body, {
+        source: "openFDA",
+        intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+        configuredMaxBytes: deps.maxResponseBytes,
+      });
     }
     if (response.status === 404 && noMatchAsNull) {
-      const payload = await readBoundedJson(response.body);
+      const payload = await readBoundedJson(response.body, {
+        source: "openFDA",
+        intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+        configuredMaxBytes: deps.maxResponseBytes,
+      });
       if (isNoMatchesPayload(payload)) return null;
       throw new OpenFdaHttpError(404, "openFDA returned HTTP 404 without a no-match response");
     }
@@ -177,6 +177,7 @@ export async function lookupOpenFdaDiliCounts(
   const resolved: ResolvedOpenFdaDeps = {
     client: deps.client ?? new DefaultPublicHttpClient(),
     limiter: deps.limiter ?? PROCESS_OPENFDA_LIMITER,
+    maxResponseBytes: deps.maxResponseBytes ?? MAX_RESPONSE_BYTES,
     maxRetries: deps.maxRetries ?? 2,
     sleep: deps.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))),
     jitter: deps.jitter ?? Math.random,

@@ -3,7 +3,7 @@
 > 基准:`origin/main@998fe232`(分支 `research/settings-audit`)。
 > 与 [`2026-08-28-settings-wiring-audit.md`](2026-08-28-settings-wiring-audit.md) 互补:那份审计
 > 「已有设置但不生效」,本份审计「**未纳入设置、写死在代码里的参数**」并评估哪些应纳入设置。
-> 本报告仅为评估,不含代码改动。
+> 本报告正文保留初始评估；同日批准的整改结果记录在下方“整改状态”，不回写或删除原始发现。
 
 ## 范围与方法
 
@@ -32,6 +32,30 @@
 | P1 | 强烈建议新增设置(直接影响结果或运维) | ~20 项 |
 | P2 | 建议 env/配置文件而非 Web 设置(主机级) | ~10 项 |
 | 保持 | 不变量/parity/安全/溯源冻结,保持硬编码 | 其余全部 |
+
+## 整改状态（`research/settings-audit`）
+
+本次整改遵循“用户级任务预算进 `RuntimeLimits`、模型身份行为进 managed model、整机
+资源进 Host env、安全/协议/Publication/溯源边界留在代码”的分层，不以“消灭所有
+字面量”为目标。
+
+| 范围 | 状态 | 落地结果 |
+| --- | --- | --- |
+| P0 双源真相 12 项 | 已完成 | 现有设置成为唯一默认/预算来源；provider 下载一律只能按 Host 预算收紧；退役 `DATASET_OPERATION_TIMEOUT_MS` 与未使用的 GDC timeout；统一 NCBI 身份和模型默认。 |
+| 模型请求与恢复 | 已完成 | `model_request_timeout_seconds` 覆盖 VLM、HIL LLM 预审、模型发现和技能迭代；Pi provider retry、durable recovery、VLM retry 由一份 `ModelRetryPolicy` 派生。HIL 与任务执行预算在新 Run 创建时快照。 |
+| 视觉产出形状 | 已完成并版本化 | 使用所选 vision model 的 Temperature（缺省 `0.1`）；PDF 页数/嵌图数/DPI 进入 `RuntimeLimits`，默认 `12/10/216`；普通与 governed 路线共同消费。registered-paper 实现升为 `1.6.0`，实际参数进入 carrier、transform step 与 digest。像素闸、caption 算法、冻结 prompt 仍是代码级边界。 |
+| Core acquisition | 已完成 | `acquisition_max_attempts` 控制总尝试次数；以 `request_interval_ms` 为基础作可取消指数退避并在 30 秒封顶。 |
+| JSON 工具响应 | 已完成 | `api_response_max_mib` 覆盖 dbSNP、ClinVar、openFDA、GWAS Catalog、MGnify 与 declarative DB；有效值始终为 `min(工具固有上限, Host 设置)`，设置不能放宽安全上限。 |
+| Host 资源预算 | 部分采纳并完成 | 新增严格校验的 `BROWSER_MAX_CONTEXTS`（默认 4）与 `EVENT_CACHE_MAX_BYTES`（默认 256 MiB），统一登记于 `DEVELOPER_QUICKSTART.md`。主线明确不跟踪 `.env.example`，因此不恢复该文件。 |
+| 导入上限 | 消除漂移，不开放 | 10 文件/单文件 500 MiB/合计 2 GiB 收敛到 `@biomed/contracts`；前端提前拒绝、Host 权威校验。它们仍是固定协议/安全闸，不允许 env 放宽。 |
+| 发布/置信度门槛 | 明确保留 | Benford/数字异常、覆盖率、低置信度发布拒绝、非确定性通道封顶等继续作为带版本与测试的代码级产品语义；不得由任务设置绕过。若改变必须走独立产品决策、版本化和证据重验。 |
+
+未在本次批准范围内的来源专用 retry/TTL、ZIP 与 family parser 上限、分页/UI 刷新、UA
+维护等原始候选仍保留在正文，不能据此假定已成为设置。它们只有在出现明确运维需求
+或产品决策后才单独立项；安全、Publication gate、协议、parity 和 provenance 常量不在
+该候选范围内。字段定义、默认/范围、快照语义及 Host env 清单见
+[`../architecture/runtime-limits.md`](../architecture/runtime-limits.md) 与
+[`../DEVELOPER_QUICKSTART.md`](../DEVELOPER_QUICKSTART.md)。
 
 ---
 
@@ -218,19 +242,19 @@ vision 作用域的 temperature;重试策略收敛为一个可配置策略对象
 
 ---
 
-## 五、落地建议(如获批准实施)
+## 五、落地建议（处置结果）
 
-1. **P0 接线整改**(不动设置面,只删第二真相):上表 12 项逐项改为消费现有设置;
-   `GDC_JSON_TIMEOUT_MS` 死常量删除;`DATASET_OPERATION_TIMEOUT_MS` 旁路按其注释退役。
-2. **`RuntimeLimits` 扩容**:新增 `model_request_timeout_seconds`、
-   `acquisition_max_attempts`(及退避)、`api_response_max_mib`(统一六处工具响应上限);
-   provider `maxBytes` 一律 `min(providerCap, max_download_mib)`。
-3. **模型行为设置**:vision 作用域 temperature + 模型重试策略(收敛三层为一)。
-4. **主机级 env 清单**:`HOST/PORT/SHUTDOWN_TIMEOUT_MS`、`EVENT_CACHE_MAX_BYTES`、
-   浏览器 `maxContexts`、导入上限 —— 建议 `.env.example` 统一登记(它们是部署属性,
-   不属于多用户 Web 设置)。
-5. **发布门槛域**:先文档化常量+理由,开放设置作 `[Q]` 产品决策(防止竞赛产物随设置漂移)。
-6. 前端分页/重连参数随对应 server 设置走,不单独开面。
+1. **P0 接线整改**：已完成；上表 12 项消费共享设置/默认，死常量与 env 旁路已退役。
+2. **`RuntimeLimits` 扩容**：已完成；除最初建议的三项外，同时加入统一模型恢复策略和
+   VLM PDF 产出形状预算，详见“整改状态”。
+3. **模型行为设置**：已完成；Temperature 复用所选 managed vision model 的参数，而非
+   增加第二个全局 Temperature；重试策略由 `RuntimeLimits` 单源派生。
+4. **主机级 env 清单**：部分采纳并完成；浏览器并发与事件缓存进入 Host env。导入上限
+   因属于前后端协议/安全闸，改为 contracts 单源而非 env；主线不恢复 `.env.example`，
+   清单集中维护在 `DEVELOPER_QUICKSTART.md`。
+5. **发布门槛域**：已文档化为不可由设置绕过的产品/安全语义；本次不开放设置。任何
+   调整需独立产品决策、版本化和正式证据重验。
+6. **前端分页/重连**：本次不新增独立设置；原建议保留为后续有明确需求时的独立事项。
 
 ## 六、与 2026-08-28 设置接线审计的衔接
 

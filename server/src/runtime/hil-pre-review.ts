@@ -7,7 +7,7 @@
  * ``model``); ``fail`` — or any transport/parsing error, treated as fail —
  * leaves the classic human-review flow untouched (fail-safe escalation).
  */
-import type { HILApprovalMode, HILRequest } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type HILApprovalMode, type HILRequest } from "@biomed/contracts";
 
 import type { BioMedModelConfig } from "../agent/contracts.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
@@ -30,8 +30,18 @@ export interface HILGatePreReview {
   modelReview(request: HILRequest): Promise<HilModelReviewVerdict>;
 }
 
-const REVIEW_TIMEOUT_MS = 60_000;
+const REVIEW_TIMEOUT_MS = DEFAULT_RUNTIME_LIMITS.model_request_timeout_seconds * 1000;
 const MAX_REASON_LENGTH = 500;
+
+type TimeoutSetting = number | (() => number);
+
+function resolveReviewTimeout(value: TimeoutSetting | undefined): number {
+  const timeoutMs = typeof value === "function" ? value() : value ?? REVIEW_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("HIL model review timeout must be positive");
+  }
+  return timeoutMs;
+}
 
 const SYSTEM_PROMPT = [
   "You are the first-pass reviewer in a human-in-the-loop data curation pipeline.",
@@ -49,11 +59,13 @@ const SYSTEM_PROMPT = [
 export function createHilModelReviewer(
   resolveModel: () => Promise<BioMedModelConfig>,
   httpClient?: PublicHttpClient,
+  timeoutSetting?: TimeoutSetting,
 ): HilModelReviewer {
   return {
     review: async (request) => {
       const config = await resolveModel();
-      const client = httpClient ?? new PublicHttpClient({ timeoutMs: REVIEW_TIMEOUT_MS });
+      const timeoutMs = resolveReviewTimeout(timeoutSetting);
+      const client = httpClient ?? new PublicHttpClient({ timeoutMs });
       const endpoint = new URL(
         `${(config.baseUrl ?? "").replace(/\/+$/, "")}/chat/completions`,
       );
@@ -87,7 +99,8 @@ export function createHilModelReviewer(
           "content-type": "application/json",
         },
         body: payload,
-        signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
+        timeoutMs,
+        signal: AbortSignal.timeout(timeoutMs),
         validateRedirect: () => {
           throw new Error("model endpoint must not redirect");
         },
@@ -149,11 +162,12 @@ export function createHilGatePreReview(
   policyStore: HILApprovalPolicyStore | null,
   resolveModel: (() => Promise<BioMedModelConfig>) | null,
   httpClient?: PublicHttpClient,
+  timeoutSetting?: TimeoutSetting,
 ): HILGatePreReview | null {
   if (policyStore === null) return null;
   const reviewer = resolveModel === null
     ? null
-    : createHilModelReviewer(resolveModel, httpClient);
+    : createHilModelReviewer(resolveModel, httpClient, timeoutSetting);
   return {
     modeFor: (kind, reviewType) => policyStore.modeFor(kind, reviewType),
     modelReview: async (request) => {

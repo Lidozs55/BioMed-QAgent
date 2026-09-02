@@ -7,6 +7,7 @@ import { parseHostConfig } from "../src/config.js";
 import { NodeBrowserPool } from "../src/external/browser/pool.js";
 import { DatabaseClient } from "../src/persistence/db-client.js";
 import type { Phase3RuntimeOptions } from "../src/runtime/phase3-composition.js";
+import { DurableTaskRepository } from "../src/runtime/task-repository.js";
 
 function services() {
   const database = new DatabaseClient({
@@ -73,6 +74,45 @@ describe("Phase 8 bootstrap (fixed TS/Pi/TS topology)", () => {
       browserPool: shared.browserPool,
       resolveVlmConfig: expect.any(Function),
     }));
+    await options.lifecycle?.close();
+  });
+
+  test("threads deployment-owned browser and event-cache budgets", async () => {
+    const shared = services();
+    const createFormalRuntime = vi.fn(async (runtimeOptions: Phase3RuntimeOptions) => {
+      void runtimeOptions;
+      return {
+        handle: () => false,
+        handleUpgrade: () => false,
+        close: async () => undefined,
+      };
+    });
+    const taskRepository = new DurableTaskRepository(path.resolve("test-tasks"), {
+      eventCacheMaxBytes: 128 * 1024 * 1024,
+    });
+    const options = await createBootstrapOptions({
+      config: parseHostConfig({
+        PORT: "0",
+        BROWSER_MAX_CONTEXTS: "7",
+        EVENT_CACHE_MAX_BYTES: "134217728",
+      }),
+      repositoryRoot: path.resolve("test-repository"),
+      tasksRoot: path.resolve("test-tasks"),
+      workspacesRoot: path.resolve("test-workspaces"),
+      database: shared.database,
+      modelSettings: shared.modelSettings,
+      productApi: shared.productApi,
+      taskRepository,
+      createFormalRuntime,
+    });
+
+    await options.formalRuntime?.();
+    const runtimeOptions = vi.mocked(createFormalRuntime).mock.calls[0]?.[0];
+    expect(runtimeOptions?.browserPool?.maxContexts).toBe(7);
+    expect(runtimeOptions?.repository).toBe(taskRepository);
+    expect(runtimeOptions?.repository?.eventCacheMaxBytes).toBe(128 * 1024 * 1024);
+
+    await options.initializeLifecycle?.(options.lifecycle!);
     await options.lifecycle?.close();
   });
 

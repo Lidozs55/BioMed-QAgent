@@ -80,9 +80,10 @@ describe("parseVerdict (model pre-review output)", () => {
 });
 
 describe("createHilModelReviewer", () => {
-  it("posts the review batch to the chat endpoint and parses the verdict", async () => {
+  it("posts the review batch with the configured timeout and parses the verdict", async () => {
     let seenBody = "";
     let seenUrl = "";
+    let seenTimeoutMs: number | undefined;
     const reviewer = createHilModelReviewer(
       async () => ({
         provider: "openai-compatible",
@@ -93,12 +94,15 @@ describe("createHilModelReviewer", () => {
       {
         request: async (url: string | URL, options: unknown) => {
           seenUrl = String(url);
-          seenBody = String((options as { body?: unknown } | undefined)?.body ?? "");
+          const requestOptions = options as { body?: unknown; timeoutMs?: number } | undefined;
+          seenBody = String(requestOptions?.body ?? "");
+          seenTimeoutMs = requestOptions?.timeoutMs;
           return fakeHttpResponse(200, {
             choices: [{ message: { content: '{"verdict":"pass","reason":"clear mapping"}' } }],
           }) as never;
         },
       } as never,
+      240_000,
     );
     const request = {
       request_id: "hil_x",
@@ -119,6 +123,7 @@ describe("createHilModelReviewer", () => {
     expect(seenBody).toContain("test-model");
     expect(seenBody).toContain("field_mapping");
     expect(seenBody).toContain("i1");
+    expect(seenTimeoutMs).toBe(240_000);
   });
 
   it("throws on an HTTP error so the gate escalates to a human", async () => {
@@ -322,9 +327,13 @@ describe("DurableHILGate pre-review", () => {
     };
   }
 
-  /** Resolves a parked human request through the store and hands it to the gate. */
+  /** Resolves a parked request after both durable state and the in-memory waiter exist. */
   async function parkAndResolve(fixture: GateFixture, gate: DurableHILGate): Promise<void> {
     const parked = await waitForPending(fixture);
+    await expect.poll(
+      () => gate.hasPending(fixture.runId),
+      { timeout: 5_000, interval: 10 },
+    ).toBe(true);
     const review = await fixture.store.resolveRequest(fixture.taskId, fixture.runId, {
       request_id: parked.request_id,
       evidence_digest: parked.evidence_digest,
@@ -347,6 +356,14 @@ describe("DurableHILGate pre-review", () => {
     }
   }
 
+  /** The store row precedes event-log append; wait for the externally observable pause event. */
+  async function waitForUserInputRequired(fixture: GateFixture, timeoutMs = 5_000): Promise<void> {
+    await expect.poll(
+      async () => (await fixture.events()).some((event) => event.type === "user_input_required"),
+      { timeout: timeoutMs, interval: 10 },
+    ).toBe(true);
+  }
+
   function stubModelReview(
     seam: HILGatePreReview,
     outcome: HilModelReviewVerdict | Error,
@@ -365,7 +382,7 @@ describe("DurableHILGate pre-review", () => {
     const pendingReview = gate.requestHIL(reviewInput() as never);
     const parked = await waitForPending(fixture);
     expect(parked).not.toBeNull();
-    expect((await fixture.events()).some((e) => e.type === "user_input_required")).toBe(true);
+    await waitForUserInputRequired(fixture);
     await parkAndResolve(fixture, gate);
     await expect(pendingReview).resolves.toMatchObject({ reviewer: "user" });
   });
