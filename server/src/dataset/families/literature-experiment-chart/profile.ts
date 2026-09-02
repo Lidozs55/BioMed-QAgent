@@ -18,12 +18,13 @@ function table(options: {
   primaryKey: readonly string[];
   fields: readonly string[];
   allowEmpty?: boolean;
+  required?: boolean;
 }): TableDefinition {
   return parseTableDefinition({
     table_id: options.tableId,
     schema_ref: options.schemaRef,
     role: options.role,
-    required: true,
+    required: options.required ?? true,
     allow_empty: options.allowEmpty ?? false,
     primary_key: [...options.primaryKey],
     field_names: [...options.fields],
@@ -98,6 +99,13 @@ export const literatureExperimentChartTables: readonly TableDefinition[] = Objec
       "parent_archive_asset_id", "parent_archive_sha256", "member_path", "member_sha256",
       "media_type", "size_bytes", "parser_id", "operation_result_id", "source_locator",
     ],
+    // Topology change approved 2026-09-02 (operator): the archive-member gate
+    // is conditional. Papers whose supplementary assets are not EBI-hosted
+    // (publisher-DOI hosting) cannot supply a Core-owned archive member; the
+    // table stays in the closure but is optional and may be empty, and the
+    // validator then requires the absence to be explicit and evidence-backed.
+    allowEmpty: true,
+    required: false,
   }),
 ]);
 
@@ -170,9 +178,11 @@ export const literatureExperimentChartProjection: Projection = Object.freeze({
     "paper_records", "experiment_records", "chart_series", "supplementary_asset_records",
   ],
   derived_tables: ["chart_points"],
-  required: literatureExperimentChartTables.map((item) => item.table_id),
-  optional: [],
-  allow_empty: ["chart_points"],
+  required: literatureExperimentChartTables
+    .filter((item) => item.required)
+    .map((item) => item.table_id),
+  optional: ["supplementary_asset_records"],
+  allow_empty: ["chart_points", "supplementary_asset_records"],
   relations: literatureExperimentChartRelations.map((item) => item.relation_id),
   row_granularity: "literature_experiment_activity_value",
   compatibility_dimensions: ["raw_relation", "raw_unit", "normalized_unit", "value_precision"],

@@ -24,7 +24,7 @@ function frozenContext(): TaskExecutionContext {
     case_id: "gold6",
     manifest_sha256: "a".repeat(64),
     case_spec_sha256: "b".repeat(64),
-    prompt_sha256: "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298",
+    prompt_sha256: "2267815c0bab859bc0b7488837bd4682ca4248d6fcf84b15e4af8414ab34c92e",
     runtime_profile_sha256: "c".repeat(64),
     expected_family: "bioactivity_measurement",
     required_tables: ["paper_records", "chart_points"],
