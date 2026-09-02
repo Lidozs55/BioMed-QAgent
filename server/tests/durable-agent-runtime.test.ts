@@ -330,6 +330,57 @@ describe("durable formal Agent runtime", () => {
     await runtime.close();
   });
 
+  test("creates a fresh workspace and agent session for every new run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-run-snapshot-"));
+    roots.push(root);
+    const adapter = new ControlledAdapter();
+    const workspaceRuns: string[] = [];
+    const runtime = await createDurableAgentRuntime({
+      tasksRoot: root,
+      adapter,
+      workspaceFactory: async ({ runId }) => {
+        workspaceRuns.push(runId);
+        return { root, tools: [], dispose: async () => undefined };
+      },
+    });
+    const server = createServer((request, response) => {
+      if (!runtime.handle(request, response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    servers.push(server);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const first = await (await fetch(`${base}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "request-run-snapshot-1",
+        input: "first run",
+        databases: [],
+        mode: "agent",
+      }),
+    })).json() as { task_id: string; run_id: string };
+    await expect.poll(() => adapter.gates.length).toBe(1);
+    adapter.gates[0]?.resolve();
+    await expect.poll(async () => (
+      await runtime.repository.getSnapshot(first.task_id)
+    )?.task.status).toBe("completed");
+
+    const secondResponse = await fetch(`${base}/api/v1/tasks/${first.task_id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request_id: "request-run-snapshot-2", input: "second run" }),
+    });
+    expect(secondResponse.status).toBe(202);
+    const second = await secondResponse.json() as { run_id: string };
+
+    await expect.poll(() => workspaceRuns).toEqual([first.run_id, second.run_id]);
+    expect(adapter.configs.map((config) => config.runId)).toEqual([first.run_id, second.run_id]);
+    expect(adapter.configs[0]?.sessionDir).toBe(adapter.configs[1]?.sessionDir);
+    adapter.gates[1]?.resolve();
+    await runtime.close();
+  });
+
   test("does not execute an idempotent run admission retry twice", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "biomed-durable-run-retry-"));
     roots.push(root);
@@ -855,7 +906,7 @@ describe("durable formal Agent runtime", () => {
       { timeout: 5_000 },
     ).toBe(true);
 
-    // A second run in the same session triggers the hook again.
+    // A second Run gets a fresh session/workspace and triggers its hook.
     const second = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${accepted.task_id}/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },

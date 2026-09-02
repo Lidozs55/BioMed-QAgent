@@ -2,6 +2,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
+import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
 
 export const LOOKUP_CLINVAR_COUNTS_TOOL_NAME = "lookup_clinvar_counts";
@@ -18,6 +19,8 @@ const PROCESS_CLINVAR_LIMITER = new HostRateLimiter({ minInterval: 1 / 3 });
 interface ClinvarDeps {
   client?: PublicHttpClient;
   limiter?: Pick<HostRateLimiter, "wait">;
+  /** Host setting may tighten, but never loosen, the tool's intrinsic cap. */
+  maxResponseBytes?: number;
   maxRetries?: number;
   sleep?: (delayMs: number) => Promise<void>;
   jitter?: () => number;
@@ -57,17 +60,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-async function readBoundedJson(body: AsyncIterable<Buffer>): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) throw new Error("ClinVar response exceeds 1 MiB");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-}
-
 function queryUrl(term: string): string {
   const url = new URL(CLINVAR_ESEARCH_URL);
   url.searchParams.set("db", "clinvar");
@@ -79,14 +71,18 @@ function queryUrl(term: string): string {
 
 async function fetchCount(
   url: string,
-  deps: Required<Pick<ClinvarDeps, "client" | "limiter" | "maxRetries" | "sleep" | "jitter" | "now">>,
+  deps: Required<Pick<ClinvarDeps, "client" | "limiter" | "maxResponseBytes" | "maxRetries" | "sleep" | "jitter" | "now">>,
   signal?: AbortSignal,
 ): Promise<number> {
   for (let attempt = 0; attempt <= deps.maxRetries; attempt++) {
     await deps.limiter.wait(url);
     const response = await deps.client.request(url, { headers: { Accept: "application/json" }, signal });
     if (response.status >= 200 && response.status < 300) {
-      const root = asRecord(await readBoundedJson(response.body));
+      const root = asRecord(await readBoundedJson(response.body, {
+        source: "ClinVar",
+        intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+        configuredMaxBytes: deps.maxResponseBytes,
+      }));
       const esearch = asRecord(root?.["esearchresult"]);
       const rawCount = esearch?.["count"];
       if (typeof rawCount !== "string" || !/^\d+$/.test(rawCount)) {
@@ -126,6 +122,7 @@ export async function lookupClinvarCounts(
   const resolved = {
     client: deps.client ?? new DefaultPublicHttpClient(),
     limiter: deps.limiter ?? PROCESS_CLINVAR_LIMITER,
+    maxResponseBytes: deps.maxResponseBytes ?? MAX_RESPONSE_BYTES,
     maxRetries: deps.maxRetries ?? 3,
     sleep: deps.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))),
     jitter: deps.jitter ?? Math.random,

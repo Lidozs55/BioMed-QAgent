@@ -170,6 +170,36 @@ describe("SkillIterationService", () => {
     ))).toMatchObject({ status: "candidate", target_skill: "geo" });
   });
 
+  test("applies the settings-derived model request deadline", async () => {
+    const repositoryRoot = await root();
+    const tasksRoot = path.join(repositoryRoot, "data", "output", "tasks");
+    await writeSkillResources(repositoryRoot);
+    const history = await completedTask(tasksRoot, "Use GEO.", "Okay.");
+    const generate = vi.fn(async ({ signal }: { signal: AbortSignal }) =>
+      new Promise<string>((_resolve, reject) => {
+        const rejectAborted = (): void => reject(signal.reason ?? new Error("aborted"));
+        if (signal.aborted) rejectAborted();
+        else signal.addEventListener("abort", rejectAborted, { once: true });
+      }));
+    const service = new SkillIterationService({
+      repositoryRoot,
+      tasksRoot,
+      settingsDir: path.join(repositoryRoot, "data", "settings"),
+      resolveModel: async () => ({ provider: "test", modelId: "model", apiKey: "key" }),
+      resolveModelRequestTimeoutMs: () => 10,
+      generate,
+    });
+
+    await expect(service.iterate({
+      schema_version: "1.0",
+      target_skill: "geo",
+      task_ids: [history.taskId],
+      user_focus: "",
+    })).rejects.toBeDefined();
+    expect(generate).toHaveBeenCalledOnce();
+    expect(generate.mock.calls[0]?.[0].signal.aborted).toBe(true);
+  });
+
   test("rejects evidence references outside the selected transcript", async () => {
     const repositoryRoot = await root();
     const tasksRoot = path.join(repositoryRoot, "data", "output", "tasks");

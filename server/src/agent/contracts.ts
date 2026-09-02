@@ -1,3 +1,5 @@
+import type { ModelRetryPolicy } from "@biomed/contracts";
+
 export type BioMedAgentErrorCode =
   | "INVALID_CONFIGURATION"
   | "INVALID_SESSION_CONFIG"
@@ -109,6 +111,8 @@ export interface BioMedModelConfig {
   repetitionPenalty?: number;
   enableSearch?: boolean;
   thinkingMode?: boolean;
+  /** Settings-derived policy shared by Pi retries and durable recovery. */
+  retryPolicy?: ModelRetryPolicy;
   /** Provider/model parameter overrides saved in the model registry. */
   params?: Record<string, unknown>;
 }

@@ -2,6 +2,7 @@ import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
+import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
 
 export const LOOKUP_GWAS_CATALOG_TOOL_NAME = "lookup_gwas_catalog";
@@ -15,6 +16,8 @@ export type GwasCatalogQueryType = "pubmed_id" | "study_accession" | "rs_id";
 interface GwasCatalogDeps {
   client?: PublicHttpClient;
   limiter?: Pick<HostRateLimiter, "wait">;
+  /** Host setting may tighten, but never loosen, the tool's intrinsic cap. */
+  maxResponseBytes?: number;
   maxRetries?: number;
   sleep?: (delayMs: number) => Promise<void>;
   jitter?: () => number;
@@ -99,17 +102,6 @@ function uniqueStrings(values: unknown[], key: string): string[] {
   return [...new Set(found)];
 }
 
-async function readBoundedJson(body: AsyncIterable<Buffer>): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) throw new Error("GWAS Catalog response exceeds 8 MiB");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-}
-
 function normalizeQuery(queryType: GwasCatalogQueryType, query: string): string {
   const trimmed = query.trim();
   if (queryType === "pubmed_id") {
@@ -154,7 +146,13 @@ async function fetchJson(
       headers: { Accept: "application/hal+json,application/json;q=0.9" },
       signal,
     });
-    if (response.status >= 200 && response.status < 300) return readBoundedJson(response.body);
+    if (response.status >= 200 && response.status < 300) {
+      return readBoundedJson(response.body, {
+        source: "GWAS Catalog",
+        intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+        configuredMaxBytes: deps.maxResponseBytes,
+      });
+    }
     const retryable = response.status === 429 || (response.status >= 500 && response.status < 600);
     const retryAfter = parseRetryAfter(
       response.headers["retry-after"] ?? response.headers["Retry-After"],

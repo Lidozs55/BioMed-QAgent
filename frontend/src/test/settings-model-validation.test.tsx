@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 import { ModelDetailDialog } from "@/components/settings/model/ModelDetailDialog";
 import { ModelImportSheet } from "@/components/settings/model/ModelImportSheet";
@@ -385,22 +386,7 @@ describe("VisionModelSelector", () => {
       thinking_mode: false,
     },
     run_block_reason: null,
-    runtime_limits: {
-      command_timeout_seconds: 600,
-      command_output_kib: 256,
-      workspace_read_kib: 256,
-      workspace_write_kib: 1024,
-      workspace_search_file_mib: 16,
-      workspace_search_max_files: 2000,
-      http_timeout_seconds: 300,
-      download_timeout_seconds: 3600,
-      browser_timeout_seconds: 300,
-      dataset_operation_timeout_seconds: 3600,
-      database_timeout_seconds: 600,
-      max_download_mib: 8192,
-      gdc_max_files: 50,
-      request_interval_ms: 500,
-    },
+    runtime_limits: { ...DEFAULT_RUNTIME_LIMITS },
     vision_model_id: null,
     vision_model_name: null,
     vision_provider_name: null,

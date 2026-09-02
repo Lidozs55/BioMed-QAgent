@@ -13,6 +13,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  DEFAULT_MODEL_RETRY_POLICY,
+  DEFAULT_RUNTIME_LIMITS,
+  type ModelRetryPolicy,
+} from "@biomed/contracts";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import {
   classifyTransportFailure,
@@ -30,13 +35,15 @@ export const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compat
 /** Hard cap on image bytes sent inline (DashScope ~10MB, Python parity). */
 export const MAX_VLM_IMAGE_BYTES = 10 * 1024 * 1024;
 
-/** Per-request timeout (Python ``call_vl_model`` default). */
-export const VLM_TIMEOUT_MS = 60_000;
+/** Default per-request timeout, kept in sync with RuntimeLimits. */
+export const VLM_TIMEOUT_MS = DEFAULT_RUNTIME_LIMITS.model_request_timeout_seconds * 1000;
 
 export interface VlmConfig {
   apiKey: string;
   baseUrl: string;
   model: string;
+  /** Visual-role sampling temperature from the selected managed model. */
+  temperature?: number;
 }
 
 const SUPPORTED_IMAGE_MIMES: Readonly<Record<string, string>> = {
@@ -78,10 +85,12 @@ export interface VlmClient {
 }
 
 export interface VlmClientOptions {
+  /** RuntimeLimits-derived total deadline for one provider request. */
+  timeoutMs?: number;
+  /** Shared settings-derived retry policy; VLM consumes its VLM fields. */
+  retryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
   sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 }
-
-const MAX_VLM_ATTEMPTS = 3;
 const TRANSIENT_TRANSPORT_CODES = new Set([
   "dns_failure",
   "connect_refused",
@@ -121,6 +130,14 @@ export function createVlmClient(
   httpClient: PublicHttpClient,
   options: VlmClientOptions = {},
 ): VlmClient {
+  const requestTimeoutMs = options.timeoutMs ?? httpClient.timeoutMs ?? VLM_TIMEOUT_MS;
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new TypeError("VLM request timeout must be positive");
+  }
+  const retryPolicy = options.retryPolicy ?? DEFAULT_MODEL_RETRY_POLICY;
+  if (!Number.isSafeInteger(retryPolicy.vlmMaxAttempts) || retryPolicy.vlmMaxAttempts < 1) {
+    throw new TypeError("VLM max attempts must be a positive safe integer");
+  }
   const callOnce = async (imagePath: string, prompt: string, signal?: AbortSignal): Promise<VlmCallResult> => {
     if (config.apiKey.trim() === "") {
       throw new ChartExtractionError(
@@ -141,7 +158,7 @@ export function createVlmClient(
           ],
         },
       ],
-      temperature: 0.1,
+      temperature: config.temperature ?? 0.1,
     });
     const response = await httpClient.request(endpoint.toString(), {
       method: "POST",
@@ -152,8 +169,9 @@ export function createVlmClient(
       body: payload,
       signal: AbortSignal.any([
         signal ?? new AbortController().signal,
-        AbortSignal.timeout(httpClient.timeoutMs ?? VLM_TIMEOUT_MS),
+        AbortSignal.timeout(requestTimeoutMs),
       ]),
+      timeoutMs: requestTimeoutMs,
       validateRedirect: () => {
         throw new Error("VLM endpoint must not redirect");
       },
@@ -194,7 +212,7 @@ export function createVlmClient(
     prompt: string,
     signal?: AbortSignal,
   ): Promise<VlmCallResult> => {
-    for (let attempt = 1; attempt <= MAX_VLM_ATTEMPTS; attempt += 1) {
+    for (let attempt = 1; attempt <= retryPolicy.vlmMaxAttempts; attempt += 1) {
       try {
         return await callOnce(imagePath, prompt, signal);
       } catch (error) {
@@ -205,15 +223,18 @@ export function createVlmClient(
           (error instanceof UnsafeUrlError && error.message.startsWith("URL hostname could not be resolved:")) ||
           (transportCode !== null && TRANSIENT_TRANSPORT_CODES.has(transportCode));
         if (!retryable) throw error;
-        if (attempt === MAX_VLM_ATTEMPTS) {
+        if (attempt === retryPolicy.vlmMaxAttempts) {
           throw error instanceof ChartExtractionError
             ? error
             : new ChartExtractionError(
-                `${config.model} call failed for ${imagePath} after ${MAX_VLM_ATTEMPTS} attempts: ` +
+                `${config.model} call failed for ${imagePath} after ${retryPolicy.vlmMaxAttempts} attempts: ` +
                   `${error instanceof Error ? error.message : String(error)}`,
               );
         }
-        await sleep(attempt * 1_000, signal);
+        await sleep(
+          Math.min(retryPolicy.maxDelayMs, retryPolicy.vlmBaseDelayMs * 2 ** (attempt - 1)),
+          signal,
+        );
       }
     }
     throw new ChartExtractionError(`${config.model} call exhausted retries for ${imagePath}`);

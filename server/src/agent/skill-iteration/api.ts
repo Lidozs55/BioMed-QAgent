@@ -17,6 +17,8 @@ export interface SkillIterationApiOptions {
   tasksRoot: string;
   settingsDir: string;
   resolveModel: () => Promise<BioMedModelConfig>;
+  resolveModelRequestTimeoutMs?: () => number;
+  repository?: SkillIterationServiceOptions["repository"];
   service?: Pick<SkillIterationService, "context" | "iterate">;
   generate?: SkillIterationServiceOptions["generate"];
 }
@@ -40,6 +42,8 @@ export function createSkillIterationApi(options: SkillIterationApiOptions): {
     tasksRoot: options.tasksRoot,
     settingsDir: options.settingsDir,
     resolveModel: options.resolveModel,
+    resolveModelRequestTimeoutMs: options.resolveModelRequestTimeoutMs,
+    repository: options.repository,
     ...(options.generate === undefined ? {} : { generate: options.generate }),
   });
 

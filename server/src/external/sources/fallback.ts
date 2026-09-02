@@ -16,6 +16,8 @@
 
 import { createHash } from "node:crypto";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import type { Database } from "../../dataset/contracts/enums.js";
 import { AsyncHostRateLimiter } from "../crawler/rate-limit.js";
 import { isAbortError } from "../network/errors.js";
@@ -37,8 +39,13 @@ export const BROWSER_HEADERS: Readonly<Record<string, string>> = {
 /** Python ``MAX_CRAWLER_RESPONSE_BYTES``: bounded in-memory tier responses. */
 export const MAX_API_RESPONSE_BYTES = 10 * 1024 * 1024;
 export const MAX_BODY_CHARS = 5000;
-/** Python ``DEFAULT_RATE_LIMIT_SECONDS``: 2s between requests (hard constraint). */
-export const DEFAULT_RATE_LIMIT_MS = 2000;
+/**
+ * Fallback pacing for callers that omit ``rateLimitMs``; derived from the
+ * ``request_interval_ms`` settings default so it cannot drift from the
+ * configured default (2026-09-02 audit P0-4). Production callers pass the
+ * live settings value.
+ */
+export const DEFAULT_RATE_LIMIT_MS = DEFAULT_RUNTIME_LIMITS.request_interval_ms;
 
 /** BeautifulSoup-style visible text: strip script/style/head/noscript, tags, collapse whitespace. */
 export function visibleText(html: string): string {

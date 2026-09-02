@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import type { RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 
 import type { ApplicationHostOptions } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
@@ -23,6 +23,7 @@ import { createPermissionSettingsApi } from "./settings/permission-settings.js";
 import {
   JsonHilApprovalPolicyStore,
 } from "./runtime/hil-approval-store.js";
+import { DurableTaskRepository } from "./runtime/task-repository.js";
 import {
   JsonPermissionPolicyStore,
   PermissionBrokerRegistry,
@@ -54,6 +55,8 @@ export interface BootstrapInput {
   modelSettings?: ModelSettingsSurface;
   productApi?: ApiSurface;
   skillIterationApi?: ApiSurface;
+  /** Shared parsed-event cache owner for all Host task-history consumers. */
+  taskRepository?: DurableTaskRepository;
   createFormalRuntime?: (options: Phase3RuntimeOptions) => Promise<FormalRuntime>;
 }
 
@@ -105,11 +108,27 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
   const hilApprovalPolicy = new JsonHilApprovalPolicyStore(
     path.join(settingsDir, "hil-approval.json"),
   );
-  const database = input.database ?? new DatabaseClient({ cacheDir, databasesDir });
-  const browserPool = input.browserPool ?? new NodeBrowserPool({ maxContexts: 4 });
+  // Settings first: the bridge/browser defaults below must come from the
+  // same RuntimeLimits the user configures (2026-09-02 hardcoded-params
+  // audit P0-1/P0-2), not from divergent hardcoded fallbacks.
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
     settingsDir,
     legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
+  });
+  const runtimeLimits = modelSettings.resolveRuntimeLimits?.() ?? {
+    ...DEFAULT_RUNTIME_LIMITS,
+  };
+  const database = input.database ?? new DatabaseClient({
+    cacheDir,
+    databasesDir,
+    timeoutMs: runtimeLimits.database_timeout_seconds * 1000,
+  });
+  const browserPool = input.browserPool ?? new NodeBrowserPool({
+    maxContexts: config.browserMaxContexts,
+    navigationTimeoutMs: runtimeLimits.browser_timeout_seconds * 1000,
+  });
+  const taskRepository = input.taskRepository ?? new DurableTaskRepository(tasksRoot, {
+    eventCacheMaxBytes: config.eventCacheMaxBytes,
   });
   const productApi = input.productApi ?? await createProductApi({
     tasksRoot,
@@ -123,6 +142,10 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
     tasksRoot,
     settingsDir,
     resolveModel: modelSettings.resolveActiveModel,
+    resolveModelRequestTimeoutMs: () =>
+      (modelSettings.resolveRuntimeLimits?.() ?? DEFAULT_RUNTIME_LIMITS)
+        .model_request_timeout_seconds * 1000,
+    repository: taskRepository,
   });
   const permissionBrokerRegistry = new PermissionBrokerRegistry();
   const lifecycle = new LifecycleRegistry({ timeoutMs: config.shutdownTimeoutMs + 5_000 });
@@ -149,12 +172,12 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       workspacesRoot,
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
-      operationTimeoutMs: config.operationTimeoutMs,
       permissionPolicyStore,
       permissionBrokerRegistry,
       hilApprovalPolicy,
       resolveModel: modelSettings.resolveActiveModel,
       resolveRuntimeLimits: modelSettings.resolveRuntimeLimits,
+      repository: taskRepository,
       database,
       browserPool,
       resolveVlmConfig: modelSettings.resolveVlmConfig,

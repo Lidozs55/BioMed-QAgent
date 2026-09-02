@@ -1,6 +1,7 @@
 import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
+import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
 
 export const SEARCH_MGNIFY_STUDIES_TOOL_NAME = "search_mgnify_studies";
@@ -10,6 +11,8 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 interface MgnifyDeps {
   client?: PublicHttpClient;
+  /** Host setting may tighten, but never loosen, the tool's intrinsic cap. */
+  maxResponseBytes?: number;
 }
 
 export interface MgnifyStudySearchResult {
@@ -33,17 +36,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-async function readBoundedJson(body: AsyncIterable<Buffer>): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.length;
-    if (size > MAX_RESPONSE_BYTES) throw new Error("MGnify response exceeds 8 MiB");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 function optionalString(record: Record<string, unknown> | null, key: string): string | null {
@@ -78,7 +70,11 @@ export async function searchMgnifyStudies(
     await response.discard();
     throw Object.assign(new Error(`MGnify returned HTTP ${status}`), { statusCode: status });
   }
-  const root = asRecord(await readBoundedJson(response.body));
+  const root = asRecord(await readBoundedJson(response.body, {
+    source: "MGnify",
+    intrinsicMaxBytes: MAX_RESPONSE_BYTES,
+    configuredMaxBytes: deps.maxResponseBytes,
+  }));
   const data = Array.isArray(root?.["data"]) ? root["data"] : null;
   if (data === null) throw new Error("MGnify returned an invalid JSON:API response");
   const meta = asRecord(root?.["meta"]);

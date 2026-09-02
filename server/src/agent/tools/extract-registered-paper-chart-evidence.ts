@@ -17,6 +17,7 @@ import {
   type RegisteredPaperChartEvidenceResult,
 } from "../../processing/vlm/registered-paper-chart-extraction.js";
 import type { VlmConfig } from "../../processing/vlm/vlm-client.js";
+import type { ModelRetryPolicy } from "@biomed/contracts";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { DatasetHILGate } from "../../dataset/review/hil-policy.js";
 import type { SourceAssetRegistry } from "../../runtime/source-assets/registry.js";
@@ -32,6 +33,12 @@ export interface RegisteredPaperChartEvidenceToolDeps extends ToolServiceDeps {
   resolveVlmConfig?: () => Promise<VlmConfig>;
   /** Injectable HTTP client (fixture tests; default is the public policy client). */
   httpClient?: PublicHttpClient;
+  /** RuntimeLimits-derived model-provider deadline in milliseconds. */
+  modelRequestTimeoutMs?: number;
+  /** Settings-derived visual-model retry policy. */
+  modelRetryPolicy?: Pick<ModelRetryPolicy, "vlmMaxAttempts" | "vlmBaseDelayMs" | "maxDelayMs">;
+  pdfMaxPages?: number;
+  renderDpi?: number;
   /** Durable credential approval gate (VLM access is credentialed). */
   approvalGate?: ToolApprovalGate | null;
   /**
@@ -174,6 +181,10 @@ export function createRegisteredPaperChartEvidenceTool(
           sourceAssetRegistry: deps.sourceAssetRegistry,
           resolveVlmConfig: deps.resolveVlmConfig,
           httpClient: deps.httpClient,
+          modelRequestTimeoutMs: deps.modelRequestTimeoutMs,
+          modelRetryPolicy: deps.modelRetryPolicy,
+          pdfMaxPages: deps.pdfMaxPages,
+          renderDpi: deps.renderDpi,
           hilGate: deps.hilGate ?? null,
         }, signal);
       } catch (error) {

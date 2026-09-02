@@ -299,13 +299,15 @@ describe("VLM image encoding caps", () => {
 });
 
 describe("createVlmClient L1 tier", () => {
-  it("calls the OpenAI-compatible endpoint with the image and returns the raw JSON", async () => {
+  it("calls the OpenAI-compatible endpoint with the image and visual-model temperature", async () => {
     const fixture = await startFixtureServer((_req, res, requests) => {
       const body = JSON.parse(requests.at(-1)?.body ?? "{}") as {
         messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+        temperature: number;
       };
       const userMessage = body.messages.at(-1)?.content ?? [];
       expect(userMessage.some((part) => part.type === "image_url" && part.image_url?.url.startsWith("data:image/png;base64,"))).toBe(true);
+      expect(body.temperature).toBe(0.25);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ choices: [{ message: { content: GOOD_VLM_JSON } }] }));
     });
@@ -315,7 +317,7 @@ describe("createVlmClient L1 tier", () => {
     const imagePath = path.join(taskRoot, "chart.png");
     await writeFile(imagePath, tinyPng());
     const client = createVlmClient(
-      { apiKey: "test-key", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      { apiKey: "test-key", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max", temperature: 0.25 },
       new PublicHttpClient({
         resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
         executor: localExecutor(fixture.port),
@@ -338,6 +340,33 @@ describe("createVlmClient L1 tier", () => {
     await expect(client.call(imagePath, VLM_PROMPT)).rejects.toThrow(
       /visual model credential is missing; configure the visual model provider API key in Settings/i,
     );
+  });
+
+  it("honors the configured VLM attempt count and exponential retry delays", async () => {
+    const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
+    roots.push(taskRoot);
+    const imagePath = path.join(taskRoot, "chart.png");
+    await writeFile(imagePath, tinyPng());
+    const delays: number[] = [];
+    let calls = 0;
+    const client = createVlmClient(
+      { apiKey: "test-key", baseUrl: "https://vlm.example.com/v1", model: "qwen-vl-max" },
+      new PublicHttpClient({
+        resolve: fakeResolver({ "vlm.example.com": [PUBLIC_IP] }),
+        executor: async () => {
+          calls += 1;
+          throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+        },
+      }),
+      {
+        retryPolicy: { vlmMaxAttempts: 2, vlmBaseDelayMs: 250, maxDelayMs: 500 },
+        sleep: async (delayMs) => { delays.push(delayMs); },
+      },
+    );
+
+    await expect(client.call(imagePath, VLM_PROMPT)).rejects.toThrow(/socket reset/);
+    expect(calls).toBe(2);
+    expect(delays).toEqual([250]);
   });
 
   it("retries a transient connection reset and returns the next valid response", async () => {
@@ -946,7 +975,7 @@ describe("vector PDF page rendering tier", () => {
     expect(extraction.skippedExtra).toBe(0);
   });
 
-  it("selects the caption page and renders it at 144 DPI with a detected pixel bbox", async () => {
+  it("selects the caption page and renders it at the Gold-aligned default DPI", async () => {
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
     roots.push(taskRoot);
     const rendering = await renderPdfPages(VECTOR_PDF_FIXTURE, path.join(taskRoot, "rendered_pages"));
@@ -996,16 +1025,18 @@ describe("vector PDF page rendering tier", () => {
     })).rejects.toThrow(new RegExp(`exceeded the ${MAX_PDF_RENDER_PIXELS} pixel rendering limit`));
   }, 60_000);
 
-  it("caps page rendering at 12 pages and falls back to the first pages without caption candidates", async () => {
+  it("applies the configured page cap and falls back to the first pages without caption candidates", async () => {
     expect(MAX_PDF_PAGES_PER_FILE).toBe(12);
     const taskRoot = await mkdtemp(path.join(os.tmpdir(), "p5-vlm-"));
     roots.push(taskRoot);
     const pdfPath = path.join(taskRoot, "text_only_pages.pdf");
     await writeFile(pdfPath, buildTextOnlyPdf(16));
-    const rendering = await renderPdfPages(pdfPath, path.join(taskRoot, "rendered_pages"));
+    const rendering = await renderPdfPages(pdfPath, path.join(taskRoot, "rendered_pages"), {
+      maxPages: 5,
+    });
     expect(rendering.selection).toBe("first_pages");
-    expect(rendering.pages).toHaveLength(MAX_PDF_PAGES_PER_FILE);
-    expect(rendering.skippedPages).toBe(4);
+    expect(rendering.pages).toHaveLength(5);
+    expect(rendering.skippedPages).toBe(11);
     for (const [index, page] of rendering.pages.entries()) {
       // First-pages fallback keeps source order with 1-based page numbers.
       expect(page.pageIndex).toBe(index + 1);
@@ -1103,8 +1134,8 @@ describe("vector PDF page rendering tier", () => {
     const base64Prefix = "data:image/png;base64,";
     expect(dataUrl.startsWith(base64Prefix)).toBe(true);
     const pageImage = PNG.sync.read(Buffer.from(dataUrl.slice(base64Prefix.length), "base64"));
-    expect(pageImage.width).toBe(1224); // 612pt page at 144 DPI
-    expect(pageImage.height).toBe(1584); // 792pt page at 144 DPI
+    expect(pageImage.width).toBe(Math.round((612 * RENDER_DPI) / 72));
+    expect(pageImage.height).toBe(Math.round((792 * RENDER_DPI) / 72));
 
     // SourceLocator 2.0 payload: 1-based page number + detected pixel bbox.
     const chartCsv = await readFile(path.join(taskRoot, "parsed", "chart_data", CHART_CSV_NAME), "utf8");

@@ -11,13 +11,14 @@ import {
 } from "./zip-members.js";
 import { xlsxWorksheetsToCsv } from "./xlsx-to-csv.js";
 
-import type {
-  CoreAcquisitionRequest,
-  CoreDownloadAttempt,
-  JsonValue,
-  ProviderRevisionEvidenceV1,
-  RegisteredSourceAssetRef,
-  WorkflowRecipeRef,
+import {
+  DEFAULT_RUNTIME_LIMITS,
+  type CoreAcquisitionRequest,
+  type CoreDownloadAttempt,
+  type JsonValue,
+  type ProviderRevisionEvidenceV1,
+  type RegisteredSourceAssetRef,
+  type WorkflowRecipeRef,
 } from "@biomed/contracts";
 
 import {
@@ -256,8 +257,69 @@ export interface CoreAcquisitionRuntimeOptions {
   sourceAssetRegistry: SourceAssetRegistry;
   registry: CoreAcquisitionRegistry;
   maxAttempts?: number;
+  /** Base backoff between retryable attempts, derived from request_interval_ms. */
+  retryBaseDelayMs?: number;
+  /** Test seam for retry waits; production uses an abort-aware timer. */
+  sleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Host-side download budget from ``RuntimeLimits.max_download_mib``: every
+   * provider plan's ``maxBytes`` is clamped down to it (2026-09-02 audit
+   * P0-7), so lowering the setting bounds all providers even when their
+   * per-provider caps are larger. Provider caps remain authoritative when
+   * smaller.
+   */
+  maxDownloadBytes?: number;
+  /**
+   * Host-side download budget from ``RuntimeLimits.download_timeout_seconds``:
+   * a provider plan's measured ``timeoutMs`` floor is raised to it
+   * (2026-09-02 audit P0-6), so raising the setting honors the user's intent
+   * even for providers that hardcode a measured wall-clock floor (Orphanet).
+   * Plans without a floor keep the generic HTTP timeout.
+   */
+  downloadTimeoutMs?: number;
   /** Global cache registrar (raw downloads → data/cache). */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+}
+
+/**
+ * Apply the host-side download budgets to a provider plan (audit P0-6/P0-7):
+ * ``maxBytes`` is clamped to ``min(provider cap, max_download_mib)`` and a
+ * provider ``timeoutMs`` floor is raised to ``max(floor, download_timeout)``.
+ */
+export function clampAcquisitionDownloadBudget(
+  plan: Pick<AcquisitionDownloadPlan, "maxBytes" | "timeoutMs">,
+  budgets: { maxDownloadBytes?: number; downloadTimeoutMs?: number },
+): Pick<AcquisitionDownloadPlan, "maxBytes" | "timeoutMs"> {
+  return {
+    maxBytes:
+      budgets.maxDownloadBytes === undefined
+        ? plan.maxBytes
+        : Math.min(plan.maxBytes, budgets.maxDownloadBytes),
+    timeoutMs:
+      plan.timeoutMs === undefined
+        ? undefined
+        : budgets.downloadTimeoutMs === undefined
+          ? plan.timeoutMs
+          : Math.max(plan.timeoutMs, budgets.downloadTimeoutMs),
+  };
+}
+
+const MAX_ACQUISITION_RETRY_DELAY_MS = 30_000;
+
+function abortableSleep(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export class CoreAcquisitionRuntime {
@@ -268,6 +330,10 @@ export class CoreAcquisitionRuntime {
   readonly #assets: SourceAssetRegistry;
   readonly #registry: CoreAcquisitionRegistry;
   readonly #maxAttempts: number;
+  readonly #retryBaseDelayMs: number;
+  readonly #sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  readonly #maxDownloadBytes: number | undefined;
+  readonly #downloadTimeoutMs: number | undefined;
   readonly #registrar: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   #attemptAppendQueue: Promise<void> = Promise.resolve();
 
@@ -278,7 +344,14 @@ export class CoreAcquisitionRuntime {
     this.#client = options.client;
     this.#assets = options.sourceAssetRegistry;
     this.#registry = options.registry;
-    this.#maxAttempts = options.maxAttempts ?? 3;
+    this.#maxAttempts = options.maxAttempts ?? DEFAULT_RUNTIME_LIMITS.acquisition_max_attempts;
+    this.#retryBaseDelayMs = options.retryBaseDelayMs ?? DEFAULT_RUNTIME_LIMITS.request_interval_ms;
+    if (!Number.isSafeInteger(this.#retryBaseDelayMs) || this.#retryBaseDelayMs < 0) {
+      throw new TypeError("acquisition retry base delay must be a non-negative integer");
+    }
+    this.#sleep = options.sleep ?? abortableSleep;
+    this.#maxDownloadBytes = options.maxDownloadBytes;
+    this.#downloadTimeoutMs = options.downloadTimeoutMs;
     this.#registrar = options.registrar ?? null;
   }
 
@@ -318,6 +391,10 @@ export class CoreAcquisitionRuntime {
       const partial = await stat(partPath).catch(() => null);
       const result = await acquireSource({
         ...plan,
+        ...clampAcquisitionDownloadBudget(plan, {
+          maxDownloadBytes: this.#maxDownloadBytes,
+          downloadTimeoutMs: this.#downloadTimeoutMs,
+        }),
         workdirRoot: this.#taskRoot,
         cache: this.#cache,
         client: this.#client,
@@ -478,6 +555,11 @@ export class CoreAcquisitionRuntime {
         );
       }
       resumedFromAttemptId = attempt.attempt_id;
+      const delayMs = Math.min(
+        MAX_ACQUISITION_RETRY_DELAY_MS,
+        this.#retryBaseDelayMs * 2 ** (attemptNumber - 1),
+      );
+      await this.#sleep(delayMs, signal);
     }
     throw new CoreAcquisitionError(
       "acquisition exhausted attempts",

@@ -21,6 +21,9 @@ import type {
 } from "@biomed/contracts";
 import {
   APIError,
+  MAX_IMPORT_FILES,
+  MAX_IMPORT_FILE_BYTES,
+  MAX_IMPORT_TOTAL_BYTES,
   parseJsonTextStrict,
   parseResumeHILInput,
   parseTaskExecutionContext,
@@ -78,9 +81,6 @@ import { DiskWorkspaceManager, type WorkspaceManager } from "../agent/workspace/
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_INPUT_LENGTH = 64 * 1024;
-const MAX_IMPORT_FILES = 10;
-const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
-const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_WS_COMMAND_BYTES = 8 * 1024;
 const MAX_WS_BUFFERED_BYTES = 64 * 1024;
 
@@ -125,18 +125,24 @@ export interface DurableAgentRuntimeOptions {
    * auto_approve). Null keeps the classic human-only flow.
    */
   hilPreReview?: HILGatePreReview | null;
+  /** Optional factory for run-snapshotted HIL pre-review settings. */
+  createHilPreReview?: () => HILGatePreReview | null;
   adapter: BioMedAgentAdapter;
   workspaceFactory: (identity: {
     taskId: string;
     runId: string;
     /** Durable credential-approval gate (P5-D9); pass to business tools. */
     approvalGate: ApprovalGateHandle;
+    /** Existing task-scoped broker whose task grants must survive a new Run. */
+    existingPermissionBroker: PermissionBroker | null;
     /** Append a durable event for the currently active run (M2 core sink). */
     recordRunEvent: (payload: EventPayload) => Promise<void>;
     /** Task mode (agent / fixture / import); import tasks get extra tools. */
     mode: TaskMode;
   }) => Promise<DurableAgentWorkspace>;
   repository?: DurableTaskRepository;
+  /** Host-owned parsed-event cache budget used when constructing the repository. */
+  eventCacheMaxBytes?: number;
   fetch?: typeof fetch;
   cancellationTimeoutMs?: number;
 }
@@ -374,7 +380,9 @@ export async function createDurableAgentRuntime(
   // events.jsonl appends (docs/ISSUES.md §运行环境).
   await claimTasksRootExclusive(options.tasksRoot, options.leaseOverride);
 
-  const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot);
+  const repository = options.repository ?? new DurableTaskRepository(options.tasksRoot, {
+    eventCacheMaxBytes: options.eventCacheMaxBytes,
+  });
 
   const hilStore = new DurableHILStore(repository);
   const hilRecoveries = await hilStore.reconcileTaskTimeline();
@@ -564,6 +572,22 @@ export async function createDurableAgentRuntime(
     }
   }
 
+  async function replaceIdleTaskSession(
+    taskId: string,
+    runId: string,
+    mode: TaskMode,
+    previous: ActiveTask,
+  ): Promise<ActiveTask> {
+    if (previous.activeRunId !== null) {
+      throw new DurableTaskConflictError("active_run", "Task already has an active run");
+    }
+    await Promise.all([
+      previous.session.dispose(),
+      previous.workspace.dispose(),
+    ]);
+    return createSession(taskId, runId, mode, previous.permissionBroker);
+  }
+
   function startRun(taskId: string, runId: string, input: string): void {
     const task = activeTasks.get(taskId);
     if (task === undefined) throw new ReferenceError("Task session is unavailable");
@@ -582,7 +606,12 @@ export async function createDurableAgentRuntime(
     void execution.then(cleanup, cleanup);
   }
 
-  async function createSession(taskId: string, runId: string, mode: TaskMode): Promise<ActiveTask> {
+  async function createSession(
+    taskId: string,
+    runId: string,
+    mode: TaskMode,
+    existingPermissionBroker: PermissionBroker | null = null,
+  ): Promise<ActiveTask> {
     // The frozen evaluation contract of THIS run is bound through the system
     // prompt; the user message is never modified (durable-context invariant).
     const runSnapshot = await repository.getSnapshot(taskId);
@@ -593,16 +622,17 @@ export async function createDurableAgentRuntime(
       repository,
       runId,
       hilStore,
-      options.hilPreReview ?? null,
+      options.createHilPreReview?.() ?? options.hilPreReview ?? null,
     );
     const workspace = await options.workspaceFactory({
       taskId,
       runId,
       mode,
       approvalGate,
+      existingPermissionBroker,
       recordRunEvent: async (payload) => {
-        // Track the ACTIVE run: sessions outlive runs, so a second run's
-        // core events must carry its own run_id.
+        // Track the active Run; durable continuation work may rebind the
+        // workspace before this closure emits its final Core events.
         const activeRunId = activeTasks.get(taskId)?.activeRunId ?? runId;
         await repository.appendRunEvent(taskId, activeRunId, payload);
       },
@@ -738,18 +768,25 @@ export async function createDurableAgentRuntime(
     });
     if (existingRun !== undefined) return accepted;
     let task = activeTasks.get(taskId);
-    if (task === undefined) {
-      try {
-        task = await createSession(taskId, accepted.run_id, before?.task.mode ?? "agent");
-        activeTasks.set(taskId, task);
-      } catch (error) {
-        await repository.appendRunEvent(taskId, accepted.run_id, {
-          type: "run_failed",
-          error: "Agent session could not start",
-          error_code: "configuration_error",
-        });
-        throw error;
-      }
+    try {
+      task = task === undefined
+        ? await createSession(taskId, accepted.run_id, before?.task.mode ?? "agent")
+        : await replaceIdleTaskSession(
+            taskId,
+            accepted.run_id,
+            before?.task.mode ?? "agent",
+            task,
+          );
+      activeTasks.set(taskId, task);
+    } catch (error) {
+      activeTasks.delete(taskId);
+      options.permissionBrokerRegistry?.unregister(taskId);
+      await repository.appendRunEvent(taskId, accepted.run_id, {
+        type: "run_failed",
+        error: "Agent session could not start",
+        error_code: "configuration_error",
+      });
+      throw error;
     }
     startRun(taskId, accepted.run_id, body.input as string);
     return accepted;
@@ -913,6 +950,7 @@ export async function createDurableAgentRuntime(
             runId,
             mode: snapshot.task.mode,
             approvalGate: new DurableApprovalGate(taskId, repository, runId),
+            existingPermissionBroker: null,
             recordRunEvent: async (payload) => {
               await repository.appendRunEvent(taskId, runId, payload);
             },
@@ -1240,6 +1278,7 @@ export async function createDurableAgentRuntime(
       runId,
       mode: snapshot.task.mode,
       approvalGate,
+      existingPermissionBroker: null,
       recordRunEvent: async (payload) => {
         await repository.appendRunEvent(taskId, runId, payload);
       },

@@ -13,6 +13,7 @@ import { PublicHttpClient } from "../../external/network/http-client.js";
 import { validatePublicHttpUrl } from "../../external/network/url-policy.js";
 import type { DatabaseClient } from "../../persistence/db-client.js";
 import { BRIDGE_OP } from "../../persistence/db-client.js";
+import { formatByteLimit, resolveToolResponseLimit } from "./response-limit.js";
 import { noopHooks, type ToolApprovalGate, type ToolHooks } from "./tool-hooks.js";
 
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
@@ -299,6 +300,8 @@ export interface DeclarativeDatabaseToolDeps {
   /** Injectable HTTP client (tests). */
   client?: PublicHttpClient;
   timeoutMs?: number;
+  /** Host setting may tighten, but never loosen, the intrinsic 10 MiB cap. */
+  maxResponseBytes?: number;
 }
 
 export function collectEnvSecrets(): Record<string, string> {
@@ -319,7 +322,7 @@ export async function loadDeclarativeManifests(db: DatabaseClient): Promise<Decl
 
 export function buildOperationTool(
   operation: HttpOperationManifest,
-  deps: Required<Pick<DeclarativeDatabaseToolDeps, "db" | "client" | "secrets">> & Pick<DeclarativeDatabaseToolDeps, "approval" | "hooks" | "timeoutMs">,
+  deps: Required<Pick<DeclarativeDatabaseToolDeps, "db" | "client" | "secrets">> & Pick<DeclarativeDatabaseToolDeps, "approval" | "hooks" | "timeoutMs" | "maxResponseBytes">,
 ): BioMedAgentTool {
   const hooks = noopHooks(deps.hooks);
   const parameters = [...(() => {
@@ -411,12 +414,18 @@ export function buildOperationTool(
           await response.discard();
           throw new DatabaseValidationError(`HTTP ${response.status} for ${requestUrl}`);
         }
+        const maxResponseBytes = resolveToolResponseLimit(
+          MAX_RESPONSE_BYTES,
+          deps.maxResponseBytes,
+        );
         const chunks: Buffer[] = [];
         let received = 0;
         for await (const chunk of response.body) {
           received += chunk.length;
-          if (received > MAX_RESPONSE_BYTES) {
-            throw new DatabaseValidationError("response exceeds 10 MiB limit");
+          if (received > maxResponseBytes) {
+            throw new DatabaseValidationError(
+              `response exceeds ${formatByteLimit(maxResponseBytes)} limit`,
+            );
           }
           chunks.push(chunk);
         }
@@ -453,6 +462,7 @@ export async function createDeclarativeDatabaseTools(deps: DeclarativeDatabaseTo
         hooks: deps.hooks,
         client,
         timeoutMs: deps.timeoutMs,
+        maxResponseBytes: deps.maxResponseBytes,
       }));
     }
   }

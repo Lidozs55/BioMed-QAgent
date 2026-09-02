@@ -57,6 +57,35 @@ describe("runtime limits settings", () => {
     }));
   });
 
+  it("renders and saves the audit-added model, acquisition, and response limits", async () => {
+    const changed = {
+      ...DEFAULT_RUNTIME_LIMITS,
+      model_request_timeout_seconds: 240,
+      acquisition_max_attempts: 5,
+      api_response_max_mib: 6,
+      vlm_pdf_max_pages: 24,
+      vlm_pdf_max_images: 20,
+      vlm_render_dpi: 240,
+    };
+    const saveSettings = vi.fn().mockResolvedValue({
+      ...SETTINGS,
+      runtime_limits: changed,
+    });
+    render(<RuntimeLimitsSettingsSection api={api(saveSettings)} settings={SETTINGS} />);
+
+    fireEvent.change(screen.getByLabelText("模型请求超时"), { target: { value: "240" } });
+    fireEvent.change(screen.getByLabelText("采集最大尝试次数"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("JSON 响应上限"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("视觉 PDF 页面上限"), { target: { value: "24" } });
+    fireEvent.change(screen.getByLabelText("视觉 PDF 嵌图上限"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("视觉 PDF 渲染分辨率"), { target: { value: "240" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存运行限制" }));
+
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith({
+      runtime_limits: changed,
+    }));
+  });
+
   it("rejects an out-of-range timeout before calling the API", async () => {
     const saveSettings = vi.fn();
     render(<RuntimeLimitsSettingsSection api={api(saveSettings)} settings={SETTINGS} />);

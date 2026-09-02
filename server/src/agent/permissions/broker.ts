@@ -76,7 +76,7 @@ export class PermissionBroker {
   private readonly grants: TemporaryGrantStore;
   private readonly policyStore: PermissionPolicyStore;
   private readonly audit: PermissionAuditSink;
-  private readonly recordRunEvent: (payload: EventPayload) => Promise<void>;
+  private recordRunEvent: (payload: EventPayload) => Promise<void>;
   private readonly maxPendingMs: number;
   private readonly pending = new Map<string, PendingRequest>();
   /** requestIds whose resolve is in flight (concurrent-HTTP guard). */
@@ -96,9 +96,18 @@ export class PermissionBroker {
     return this.runId;
   }
 
-  /** Bind the broker to the currently active run (sessions outlive runs). */
-  bindRun(runId: string): void {
+  /** Bind this task-scoped broker and event sink to a newly created Run. */
+  bindRun(
+    runId: string,
+    recordRunEvent?: (payload: EventPayload) => Promise<void>,
+  ): void {
     this.runId = runId;
+    if (recordRunEvent !== undefined) this.recordRunEvent = recordRunEvent;
+  }
+
+  /** Remove only grants scoped to the completed Run; task grants survive. */
+  clearRunGrants(runId: string): void {
+    this.grants.clearRun(runId);
   }
 
   /** True when a permission decision is currently pending for the run. */

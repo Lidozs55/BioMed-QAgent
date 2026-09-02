@@ -469,13 +469,28 @@ describe("PiAgentAdapter", () => {
     );
   });
 
-  test("keeps retryable provider failures within a bounded long-running retry window", () => {
+  test("derives Pi provider retries from the shared model retry policy", () => {
     expect(resolvePiRetryOverrides()).toEqual({
       retry: {
         enabled: true,
         maxRetries: 6,
         baseDelayMs: 3_000,
         provider: { maxRetryDelayMs: 60_000 },
+      },
+    });
+    expect(resolvePiRetryOverrides({
+      providerMaxRetries: 2,
+      recoveryMaxAttempts: 1,
+      baseDelayMs: 250,
+      maxDelayMs: 5_000,
+      vlmMaxAttempts: 4,
+      vlmBaseDelayMs: 100,
+    })).toEqual({
+      retry: {
+        enabled: true,
+        maxRetries: 2,
+        baseDelayMs: 250,
+        provider: { maxRetryDelayMs: 5_000 },
       },
     });
   });

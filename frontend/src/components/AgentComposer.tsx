@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
+  MAX_IMPORT_FILES,
+  MAX_IMPORT_FILE_BYTES,
+  MAX_IMPORT_TOTAL_BYTES,
+} from "@biomed/contracts";
+import {
   ArrowUpIcon,
   CaretDownIcon,
   FileIcon,
@@ -48,9 +53,7 @@ import { formatSize } from "@/lib/fileUtils";
 import { cn } from "@/lib/utils";
 import type { ModelInfo } from "@/hooks/useAPI";
 
-export const MAX_IMPORT_FILES = 10;
-export const MAX_IMPORT_FILE_BYTES = 500 * 1024 * 1024;
-export const MAX_IMPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+export { MAX_IMPORT_FILES, MAX_IMPORT_FILE_BYTES, MAX_IMPORT_TOTAL_BYTES };
 
 function sanitizeUploadFilename(name: string): string {
   const parts = name.split(/[\\/]/);

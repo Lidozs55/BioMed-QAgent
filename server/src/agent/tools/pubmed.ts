@@ -22,6 +22,8 @@
 
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import type { SourceRecord } from "../../dataset/contracts/source.js";
 import { ContentCache } from "../../external/acquisition/content-cache.js";
 import { acquireSource, CURATED_SOURCE_HOSTS } from "../../external/acquisition/downloader.js";
@@ -375,7 +377,8 @@ function downloadSupplementaryTool(deps: PubmedServiceDeps): BioMedAgentTool {
         },
         max_size_mb: {
           type: "integer",
-          description: "Maximum download size in MiB (default 4096).",
+          description:
+            `Maximum download size in MiB (default ${DEFAULT_RUNTIME_LIMITS.max_download_mib}).`,
         },
       },
       required: ["pmid"],
@@ -385,7 +388,12 @@ function downloadSupplementaryTool(deps: PubmedServiceDeps): BioMedAgentTool {
       const record = argumentsValue as { pmid?: unknown; max_size_mb?: unknown };
       try {
         if (typeof record.pmid !== "string") throw new TypeError("pmid must be a string");
-        const configuredMaxMb = (deps.maxDownloadBytes ?? 8 * 1024 * 1024 * 1024) / (1024 * 1024);
+        // Fallback derives from the RuntimeLimits default so it cannot drift from
+    // the settings default (2026-09-02 audit P0-8); business-tools passes the
+    // live settings value.
+    const configuredMaxMb =
+      (deps.maxDownloadBytes ?? DEFAULT_RUNTIME_LIMITS.max_download_mib * 1024 * 1024) /
+      (1024 * 1024);
         const requestedMaxMb = record.max_size_mb === undefined ? configuredMaxMb : Number(record.max_size_mb);
         const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
         if (!Number.isFinite(maxSizeMb) || maxSizeMb <= 0) {

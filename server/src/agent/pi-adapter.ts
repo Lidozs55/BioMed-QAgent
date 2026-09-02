@@ -13,6 +13,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_MODEL_RETRY_POLICY,
+  DEFAULT_SAFETY_RESERVE_RATIO,
+  type ModelRetryPolicy,
+} from "@biomed/contracts";
+
+import {
   BioMedAgentError,
   type BioMedAgentAdapter,
   type BioMedAgentEvent,
@@ -152,8 +159,6 @@ const DELTA_FLUSH_INTERVAL_MS = 32;
 // new assistant/reasoning/tool progress indicate a degenerate configuration.
 const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
 const MIN_PROGRESS_CHARS = 32;
-/** Default safety-reserve share of the context window (settings default 5%). */
-const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
 /** Minimum recent context kept after compaction, as a fraction of the window. */
 const MIN_KEEP_RATIO = 0.05;
 /** Maximum final compaction target, as a fraction of the window. */
@@ -169,12 +174,9 @@ const LENGTH_CONTINUATION_MESSAGE =
 const STREAM_RECOVERY_MESSAGE =
   "The previous assistant turn was interrupted by a transient provider stream read failure. " +
   "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
-const MAX_STREAM_RECOVERY_ATTEMPTS = 3;
 const PROVIDER_RECOVERY_MESSAGE =
   "The previous assistant turn exhausted its normal retries because the provider was temporarily rate limited or unavailable. " +
   "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
-const MAX_PROVIDER_RECOVERY_ATTEMPTS = 3;
-const PROVIDER_RECOVERY_DELAY_MS = 60_000;
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
 
@@ -552,7 +554,7 @@ export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBu
   const contextWindow = config.contextWindow ?? 131_072;
   return {
     contextWindow,
-    maxTokens: config.maxTokens ?? 8_192,
+    maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
     reserveTokens: config.safetyReserveTokens
       ?? Math.round(contextWindow * DEFAULT_SAFETY_RESERVE_RATIO),
   };
@@ -564,7 +566,9 @@ export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBu
  * window to clear, while Pi's retry classifier still fails non-transient
  * errors immediately.
  */
-export function resolvePiRetryOverrides(): {
+export function resolvePiRetryOverrides(
+  policy: ModelRetryPolicy = DEFAULT_MODEL_RETRY_POLICY,
+): {
   retry: {
     enabled: true;
     maxRetries: number;
@@ -575,9 +579,9 @@ export function resolvePiRetryOverrides(): {
   return {
     retry: {
       enabled: true,
-      maxRetries: 6,
-      baseDelayMs: 3_000,
-      provider: { maxRetryDelayMs: 60_000 },
+      maxRetries: policy.providerMaxRetries,
+      baseDelayMs: policy.baseDelayMs,
+      provider: { maxRetryDelayMs: policy.maxDelayMs },
     },
   };
 }
@@ -797,7 +801,7 @@ async function createRealUpstreamSession(
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: currentWindow(),
-        maxTokens: current.maxTokens ?? 8_192,
+        maxTokens: current.maxTokens ?? DEFAULT_MAX_TOKENS,
       },
     ],
   });
@@ -826,7 +830,8 @@ async function createRealUpstreamSession(
       "Configured Pi model is unavailable",
     );
   }
-  const settingsManager = SettingsManager.inMemory(resolvePiRetryOverrides());
+  const retryPolicy = current.retryPolicy ?? DEFAULT_MODEL_RETRY_POLICY;
+  const settingsManager = SettingsManager.inMemory(resolvePiRetryOverrides(retryPolicy));
   if (
     current.compactionTriggerRatio !== undefined &&
     current.compactionTargetRatio !== undefined
@@ -925,14 +930,17 @@ async function createRealUpstreamSession(
         const streamInterrupted = shouldRecoverInterruptedStream();
         if (streamInterrupted) {
           streamAttempt += 1;
-          if (streamAttempt > MAX_STREAM_RECOVERY_ATTEMPTS) break;
+          if (streamAttempt > retryPolicy.recoveryMaxAttempts) break;
         } else {
           providerAttempt += 1;
-          if (providerAttempt > MAX_PROVIDER_RECOVERY_ATTEMPTS) break;
+          if (providerAttempt > retryPolicy.recoveryMaxAttempts) break;
         }
         const delayMs = streamInterrupted
-          ? 3_000 * 2 ** (streamAttempt - 1)
-          : PROVIDER_RECOVERY_DELAY_MS;
+          ? Math.min(
+              retryPolicy.maxDelayMs,
+              retryPolicy.baseDelayMs * 2 ** (streamAttempt - 1),
+            )
+          : retryPolicy.maxDelayMs;
         const ready = await waitForStreamRecovery(delayMs, controller.signal);
         if (!ready) return;
         lastAssistantOutcome = undefined;
@@ -968,7 +976,7 @@ async function createRealUpstreamSession(
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: next.contextWindow ?? 131_072,
-              maxTokens: next.maxTokens ?? 8_192,
+              maxTokens: next.maxTokens ?? DEFAULT_MAX_TOKENS,
             },
           ],
         });

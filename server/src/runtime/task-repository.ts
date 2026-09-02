@@ -14,6 +14,7 @@ import type {
 } from "@biomed/contracts";
 import { stableTaskExecutionContextJson } from "@biomed/contracts";
 
+import { DEFAULT_HOST_RESOURCE_LIMITS } from "../host-resource-limits.js";
 import { readJsonFileOrNull, writeJsonAtomic } from "../persistence/atomic-json.js";
 import { initializeSemanticRouteState } from "./semantic-route-fence.js";
 import { requireSafeId, SAFE_ID } from "./safe-id.js";
@@ -60,6 +61,8 @@ export class DurableTaskConflictError extends Error {
 export interface DurableTaskRepositoryOptions {
   id?: () => string;
   now?: () => Date;
+  /** Approximate parsed-event memory budget for this Host repository. */
+  eventCacheMaxBytes?: number;
 }
 
 type EventListener = (event: EventEnvelope) => void;
@@ -78,8 +81,6 @@ interface EventCacheEntry {
   lastAccess: number;
 }
 
-/** Global parsed-event cache budget (bytes of FILE content covered). */
-const EVENT_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 
 /**
  * Parsed-object memory estimate factor over raw file bytes: readAllEvents
@@ -179,6 +180,7 @@ export class DurableTaskRepository {
   readonly tasksRoot: string;
   private readonly id: () => string;
   private readonly now: () => Date;
+  private readonly eventCacheMaxBytesValue: number;
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<EventListener>();
   private readonly latestSequence = new Map<string, number>();
@@ -190,6 +192,16 @@ export class DurableTaskRepository {
     this.tasksRoot = path.resolve(tasksRoot);
     this.id = options.id ?? randomUUID;
     this.now = options.now ?? (() => new Date());
+    this.eventCacheMaxBytesValue = options.eventCacheMaxBytes ??
+      DEFAULT_HOST_RESOURCE_LIMITS.eventCacheMaxBytes;
+    if (!Number.isSafeInteger(this.eventCacheMaxBytesValue) || this.eventCacheMaxBytesValue <= 0) {
+      throw new TypeError("eventCacheMaxBytes must be a positive safe integer");
+    }
+  }
+
+  /** Parsed-event cache budget owned by this repository instance. */
+  get eventCacheMaxBytes(): number {
+    return this.eventCacheMaxBytesValue;
   }
 
   subscribe(listener: EventListener): () => void {
@@ -757,7 +769,7 @@ export class DurableTaskRepository {
 
   /** LRU eviction over the global parsed-event budget, protecting the pinned task. */
   private evictOverBudgetCache(pinnedTaskId: string): void {
-    while (this.eventCacheBytes > EVENT_CACHE_MAX_BYTES && this.eventCache.size > 1) {
+    while (this.eventCacheBytes > this.eventCacheMaxBytesValue && this.eventCache.size > 1) {
       let oldestKey: string | null = null;
       let oldestAccess = Number.POSITIVE_INFINITY;
       for (const [key, entry] of this.eventCache) {

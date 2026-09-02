@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 
 import { createPubmedTools, downloadSupplementaryAdapter, searchPubmedAdapter } from "../../src/agent/tools/pubmed.js";
 import { SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-map.js";
@@ -1345,7 +1346,11 @@ describe("createPubmedTools", () => {
       type: "object",
       properties: {
         pmid: { type: "string", description: "PubMed ID (PMID) of the article." },
-        max_size_mb: { type: "integer", description: "Maximum download size in MiB (default 4096)." },
+        max_size_mb: {
+          type: "integer",
+          description:
+            `Maximum download size in MiB (default ${DEFAULT_RUNTIME_LIMITS.max_download_mib}).`,
+        },
       },
       required: ["pmid"],
       additionalProperties: false,

@@ -21,13 +21,14 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 import { PNG } from "pngjs";
 
 import { openPdf, readPdfBytes } from "../pdf/pdfjs.js";
 import { ChartExtractionError } from "./chart-json.js";
 
-/** Maximum images extracted from a single PDF (Python ``_MAX_PDF_IMAGES_PER_FILE``). */
-export const MAX_PDF_IMAGES_PER_FILE = 10;
+/** Default maximum embedded images extracted from one PDF. */
+export const MAX_PDF_IMAGES_PER_FILE = DEFAULT_RUNTIME_LIMITS.vlm_pdf_max_images;
 
 /** Minimal page-raster descriptor shared by both PDF raster tiers. */
 export interface PdfPageRaster {
@@ -53,7 +54,14 @@ export interface PdfImageExtraction {
  * Extract embedded raster images from a PDF into ``destDir``.
  * Throws ``ChartExtractionError`` when the PDF cannot be opened.
  */
-export async function extractPdfImages(pdfPath: string, destDir: string): Promise<PdfImageExtraction> {
+export async function extractPdfImages(
+  pdfPath: string,
+  destDir: string,
+  maxImages = MAX_PDF_IMAGES_PER_FILE,
+): Promise<PdfImageExtraction> {
+  if (!Number.isSafeInteger(maxImages) || maxImages < 1 || maxImages > 100) {
+    throw new ChartExtractionError("PDF maxImages must be an integer between 1 and 100");
+  }
   await mkdir(destDir, { recursive: true });
   const stem = path.basename(pdfPath, path.extname(pdfPath));
 
@@ -72,7 +80,7 @@ export async function extractPdfImages(pdfPath: string, destDir: string): Promis
     for (let pageIndex = 1; pageIndex <= opened.numPages; pageIndex += 1) {
       const page = await opened.page(pageIndex);
       for (const [imageIndex, image] of page.images.entries()) {
-        if (extracted.length >= MAX_PDF_IMAGES_PER_FILE) {
+        if (extracted.length >= maxImages) {
           skippedExtra += 1;
           continue;
         }
@@ -112,7 +120,7 @@ export async function extractPdfImages(pdfPath: string, destDir: string): Promis
 
   if (skippedExtra > 0) {
     console.warn(
-      `PDF ${pdfPath} had ${skippedExtra} additional images beyond the ${MAX_PDF_IMAGES_PER_FILE} cap; skipped`,
+      `PDF ${pdfPath} had ${skippedExtra} additional images beyond the ${maxImages} cap; skipped`,
     );
   }
   return { images: extracted, skippedExtra };

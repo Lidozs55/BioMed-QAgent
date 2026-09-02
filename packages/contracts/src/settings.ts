@@ -40,6 +40,38 @@ export interface RuntimeLimits {
   max_download_mib: number;
   gdc_max_files: number;
   request_interval_ms: number;
+  /**
+   * Wall-clock timeout for a single model-provider HTTP request (VLM chart
+   * extraction, HIL LLM pre-review, model discovery probe, skill iteration).
+   * The main agent session uses its own provider retry/timeout policy.
+   */
+  model_request_timeout_seconds: number;
+  /** Download attempts per core acquisition before failing the operation. */
+  acquisition_max_attempts: number;
+  /** Pi SDK retries for one transient model-provider request. */
+  model_provider_max_retries: number;
+  /** Extra durable recovery turns after exhausted stream/provider failures. */
+  model_recovery_max_attempts: number;
+  /** Base delay for Pi request retries and exponential stream recovery. */
+  model_retry_base_delay_ms: number;
+  /** Maximum Pi retry delay and fixed exhausted-provider recovery delay. */
+  model_retry_max_delay_ms: number;
+  /** Total attempts for one visual-model page request. */
+  vlm_max_attempts: number;
+  /** Base delay for exponential visual-model request retry. */
+  vlm_retry_base_delay_ms: number;
+  /** Maximum caption-selected or fallback PDF pages sent to the visual model. */
+  vlm_pdf_max_pages: number;
+  /** Maximum embedded PDF raster images sent to the visual model. */
+  vlm_pdf_max_images: number;
+  /** PDF page raster resolution; the pixel safety gate remains code-owned. */
+  vlm_render_dpi: number;
+  /**
+   * Host-side ceiling for JSON tool responses: each curated tool's own
+   * response cap is clamped to ``min(tool cap, api_response_max_mib)`` so
+   * lowering the setting bounds every tool (2026-09-02 audit P1).
+   */
+  api_response_max_mib: number;
 }
 
 export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
@@ -57,7 +89,29 @@ export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
   max_download_mib: 8192,
   gdc_max_files: 50,
   request_interval_ms: 500,
+  model_request_timeout_seconds: 120,
+  acquisition_max_attempts: 3,
+  model_provider_max_retries: 6,
+  model_recovery_max_attempts: 3,
+  model_retry_base_delay_ms: 3000,
+  model_retry_max_delay_ms: 60_000,
+  vlm_max_attempts: 3,
+  vlm_retry_base_delay_ms: 1000,
+  vlm_pdf_max_pages: 12,
+  vlm_pdf_max_images: 10,
+  vlm_render_dpi: 216,
+  api_response_max_mib: 16,
 };
+
+/**
+ * Shipped model-settings defaults (2026-09-02 hardcoded-params audit P0-12):
+ * the single source for ``store.defaultRegistry`` and the Pi-adapter fallbacks,
+ * so the settings default and the code fallback can no longer drift apart.
+ */
+export const DEFAULT_MAX_TOKENS = 8192;
+export const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
+export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.85;
+export const DEFAULT_COMPACTION_TARGET_RATIO = 0.45;
 
 export const RUNTIME_LIMIT_RANGES = {
   command_timeout_seconds: { min: 1, max: 86_400 },
@@ -74,7 +128,46 @@ export const RUNTIME_LIMIT_RANGES = {
   max_download_mib: { min: 64, max: 65_536 },
   gdc_max_files: { min: 1, max: 1000 },
   request_interval_ms: { min: 0, max: 10_000 },
+  model_request_timeout_seconds: { min: 10, max: 3600 },
+  acquisition_max_attempts: { min: 1, max: 10 },
+  model_provider_max_retries: { min: 0, max: 20 },
+  model_recovery_max_attempts: { min: 0, max: 10 },
+  model_retry_base_delay_ms: { min: 0, max: 60_000 },
+  model_retry_max_delay_ms: { min: 1000, max: 600_000 },
+  vlm_max_attempts: { min: 1, max: 10 },
+  vlm_retry_base_delay_ms: { min: 0, max: 60_000 },
+  vlm_pdf_max_pages: { min: 1, max: 100 },
+  vlm_pdf_max_images: { min: 1, max: 100 },
+  vlm_render_dpi: { min: 72, max: 300 },
+  api_response_max_mib: { min: 1, max: 256 },
 } as const satisfies Record<keyof RuntimeLimits, { min: number; max: number }>;
+
+export interface ModelRetryPolicy {
+  providerMaxRetries: number;
+  recoveryMaxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  vlmMaxAttempts: number;
+  vlmBaseDelayMs: number;
+}
+
+/** Derive the one model retry policy consumed by Pi, recovery, and VLM. */
+export function modelRetryPolicyFromRuntimeLimits(
+  limits: RuntimeLimits,
+): ModelRetryPolicy {
+  return {
+    providerMaxRetries: limits.model_provider_max_retries,
+    recoveryMaxAttempts: limits.model_recovery_max_attempts,
+    baseDelayMs: limits.model_retry_base_delay_ms,
+    maxDelayMs: limits.model_retry_max_delay_ms,
+    vlmMaxAttempts: limits.vlm_max_attempts,
+    vlmBaseDelayMs: limits.vlm_retry_base_delay_ms,
+  };
+}
+
+export const DEFAULT_MODEL_RETRY_POLICY = Object.freeze(
+  modelRetryPolicyFromRuntimeLimits(DEFAULT_RUNTIME_LIMITS),
+);
 
 /* ---- Model settings ---- */
 export interface ModelSettings extends ContextBudgetSettings {

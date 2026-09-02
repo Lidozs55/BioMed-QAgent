@@ -25,16 +25,17 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { createCanvas, type SKRSContext2D } from "@napi-rs/canvas";
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import { PDFJS_STANDARD_FONTS_URL, readPdfBytes } from "../pdf/pdfjs.js";
 import { ChartExtractionError } from "./chart-json.js";
 
-/** Maximum pages rendered from a single PDF (VLM cost cap). */
-export const MAX_PDF_PAGES_PER_FILE = 12;
+/** Default maximum pages rendered from a single PDF (VLM cost cap). */
+export const MAX_PDF_PAGES_PER_FILE = DEFAULT_RUNTIME_LIMITS.vlm_pdf_max_pages;
 
-/** Default page rendering resolution (2x the 72dpi PDF unit space). */
-export const RENDER_DPI = 144;
+/** Default page rendering resolution, aligned with the governed Gold6 path. */
+export const RENDER_DPI = DEFAULT_RUNTIME_LIMITS.vlm_render_dpi;
 
 /** Bounded DPI range accepted by the in-process renderer. */
 const MIN_RENDER_DPI = 72;
@@ -68,6 +69,8 @@ export interface RenderPdfPagesOptions {
   hint?: string;
   /** Raster resolution. Defaults to RENDER_DPI and is bounded to protect memory. */
   dpi?: number;
+  /** Run-snapshotted page budget. The hard range remains code-owned. */
+  maxPages?: number;
   signal?: AbortSignal;
 }
 
@@ -171,8 +174,16 @@ export async function renderPdfPagesFromBytes(
   destDir: string,
   options: RenderPdfPagesOptions = {},
 ): Promise<PdfPageRendering> {
-  const { signal, hint = "", dpi = RENDER_DPI } = options;
+  const {
+    signal,
+    hint = "",
+    dpi = RENDER_DPI,
+    maxPages = MAX_PDF_PAGES_PER_FILE,
+  } = options;
   throwIfCancelled(sourceLabel, signal);
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 100) {
+    throw extractionError("page rendering maxPages must be an integer between 1 and 100");
+  }
   if (!Number.isInteger(dpi) || dpi < MIN_RENDER_DPI || dpi > MAX_RENDER_DPI) {
     throw extractionError(
       `page rendering DPI must be an integer between ${MIN_RENDER_DPI} and ${MAX_RENDER_DPI}`,
@@ -209,8 +220,8 @@ export async function renderPdfPagesFromBytes(
     const selection: PdfPageRendering["selection"] = candidates.length > 0 ? "caption" : "first_pages";
     const chosen: PageCandidate[] =
       selection === "caption"
-        ? candidates.slice(0, MAX_PDF_PAGES_PER_FILE)
-        : Array.from({ length: Math.min(doc.numPages, MAX_PDF_PAGES_PER_FILE) }, (_, index) => ({
+        ? candidates.slice(0, maxPages)
+        : Array.from({ length: Math.min(doc.numPages, maxPages) }, (_, index) => ({
             pageNumber: index + 1,
             score: 0,
           }));

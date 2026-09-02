@@ -6,15 +6,19 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+import {
+  DEFAULT_MODEL_RETRY_POLICY,
+  DEFAULT_RUNTIME_LIMITS,
+} from "@biomed/contracts";
 
 import { ModelSettingsService } from "../src/settings/model-settings.js";
 
 const servers: Server[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => {
     server.close(() => resolve());
   })));
@@ -81,6 +85,7 @@ describe("TypeScript model settings", () => {
       repetitionPenalty: 1,
       enableSearch: false,
       thinkingMode: false,
+      retryPolicy: DEFAULT_MODEL_RETRY_POLICY,
       params: { max_tokens: 3072, temperature: 0.25, top_p: 0.8 },
     });
     expect(await readFile(path.join(settingsDir, "model-registry.json"), "utf8"))
@@ -223,7 +228,14 @@ describe("TypeScript model settings", () => {
       context_window: 64000,
       params: { max_tokens: 3072, temperature: 0.25 },
     });
-    expect((await service.resolveActiveModel()).maxTokens).toBe(3072);
+    expect(await service.resolveActiveModel()).toMatchObject({
+      maxTokens: 3072,
+      retryPolicy: {
+        providerMaxRetries: DEFAULT_RUNTIME_LIMITS.model_provider_max_retries,
+        recoveryMaxAttempts: DEFAULT_RUNTIME_LIMITS.model_recovery_max_attempts,
+        vlmMaxAttempts: DEFAULT_RUNTIME_LIMITS.vlm_max_attempts,
+      },
+    });
 
     await service.updateModel(model.id, { params: { max_tokens: 2048, temperature: 0.9 } });
     expect(await service.resolveActiveModel()).toMatchObject({ maxTokens: 2048, temperature: 0.9 });
@@ -556,6 +568,9 @@ describe("TypeScript model settings", () => {
         runtime_limits: {
           command_timeout_seconds: 7200,
           gdc_max_files: 200,
+          model_request_timeout_seconds: 240,
+          acquisition_max_attempts: 5,
+          api_response_max_mib: 6,
         },
       }),
     });
@@ -565,11 +580,17 @@ describe("TypeScript model settings", () => {
         ...DEFAULT_RUNTIME_LIMITS,
         command_timeout_seconds: 7200,
         gdc_max_files: 200,
+        model_request_timeout_seconds: 240,
+        acquisition_max_attempts: 5,
+        api_response_max_mib: 6,
       },
     });
     expect(service.resolveRuntimeLimits()).toMatchObject({
       command_timeout_seconds: 7200,
       gdc_max_files: 200,
+      model_request_timeout_seconds: 240,
+      acquisition_max_attempts: 5,
+      api_response_max_mib: 6,
     });
 
     const beforeInvalid = service.getSettings();
@@ -591,6 +612,18 @@ describe("TypeScript model settings", () => {
       body: JSON.stringify({ runtime_limits: { imaginary_limit: 1 } }),
     });
     expect(unknown.status).toBe(422);
+
+    const invalidNewLimit = await fetch(`${baseUrl}/api/v1/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runtime_limits: { acquisition_max_attempts: 11 } }),
+    });
+    expect(invalidNewLimit.status).toBe(422);
+    expect(service.resolveRuntimeLimits()).toMatchObject({
+      model_request_timeout_seconds: 240,
+      acquisition_max_attempts: 5,
+      api_response_max_mib: 6,
+    });
 
     const reset = await fetch(`${baseUrl}/api/v1/settings`, {
       method: "PUT",
@@ -695,6 +728,7 @@ describe("TypeScript model settings", () => {
 
   test("returns frontend-compatible model discovery metadata", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetcher = async (): Promise<Response> => new Response(
       JSON.stringify({ data: [{ id: "custom-128k-chat" }] }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -703,6 +737,9 @@ describe("TypeScript model settings", () => {
       settingsDir,
       fetcher,
       resolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+    await service.updateSettings({
+      runtime_limits: { model_request_timeout_seconds: 240 },
     });
     const baseUrl = await serve(service);
 
@@ -721,6 +758,8 @@ describe("TypeScript model settings", () => {
       capability_source: "api",
       api_available: true,
     })]);
+    expect(timeoutSpy).toHaveBeenCalledWith(240_000);
+    timeoutSpy.mockRestore();
   });
 
   test("enriches known discovery models from the local catalog", async () => {
@@ -1112,6 +1151,7 @@ describe("visual extraction model role", () => {
     const mainModelId = await createModel(mainProviderId, "main-text-chat", false);
     const visionProviderId = await createProvider("Vision Provider", "https://vision.example/v1", "sk-vision-provider");
     const visionModelId = await createModel(visionProviderId, "vision-chat-vl", true);
+    await service.updateModel(visionModelId, { params: { temperature: 0.25 } });
     return { service, baseUrl, settingsDir, mainModelId, visionModelId, visionProviderId };
   }
 
@@ -1123,6 +1163,7 @@ describe("visual extraction model role", () => {
       apiKey: "sk-vision-provider",
       baseUrl: "https://vision.example/v1",
       model: "vision-chat-vl",
+      temperature: 0.25,
     });
     // The main (non-visual) model stays active and untouched.
     expect(fixture.service.getSettings()).toMatchObject({

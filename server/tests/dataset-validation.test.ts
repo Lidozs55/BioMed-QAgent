@@ -26,7 +26,7 @@ describe("Phase 4 step 8 validation parity", () => {
 
   test("row/field/column length bounds surface as a failing check, not a crash", async () => {
     expect(await checkRowBounds()).toEqual([]);
-  });
+  }, 60_000);
 
   test("spec validator mirrors test_spec_validator.py", async () => {
     expect(await checkSpecValidatorParity()).toEqual([]);

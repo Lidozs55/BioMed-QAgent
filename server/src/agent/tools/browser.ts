@@ -35,6 +35,7 @@ import {
   BROWSER_ACQUISITION_POLICY_REVISION,
   BROWSER_ACQUISITION_PROVIDER_ID,
   BROWSER_ACQUISITION_PROVIDER_IMPLEMENTATION_DIGEST,
+  DEFAULT_RUNTIME_LIMITS,
   type BrowserAcquisitionEvidence,
 } from "@biomed/contracts";
 import type { ContentCache } from "../../external/acquisition/content-cache.js";
@@ -42,7 +43,7 @@ import { canonicalRequestHash } from "../../external/acquisition/content-cache.j
 import { ensureAcquisitionDirs, sourceAssetPath, taskWorkDirs, assertSafeFilename } from "../../external/acquisition/workdir.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import type { CrawlerFacade } from "../../external/crawler/index.js";
-import { BROWSER_HEADERS, MAX_CRAWLER_DOWNLOAD_BYTES } from "../../external/crawler/index.js";
+import { BROWSER_HEADERS } from "../../external/crawler/index.js";
 import { MAX_BROWSER_CONTENT_BYTES } from "../../external/browser/index.js";
 import { makeSourceId } from "../../external/sources/fallback.js";
 import { DATA_LEVEL, DATABASE } from "../../dataset/contracts/enums.js";
@@ -737,7 +738,9 @@ export function createBrowserTools(options: BrowserToolsOptions): BioMedAgentToo
           body: response.body,
           startedAt,
           attemptId,
-          maxBytes: options.maxDownloadBytes ?? MAX_CRAWLER_DOWNLOAD_BYTES,
+          // Fallback derives from the RuntimeLimits default (audit P0-8);
+          // business-tools always passes the live settings value.
+          maxBytes: options.maxDownloadBytes ?? DEFAULT_RUNTIME_LIMITS.max_download_mib * 1024 * 1024,
           signal,
         });
         if (hostname !== null) {

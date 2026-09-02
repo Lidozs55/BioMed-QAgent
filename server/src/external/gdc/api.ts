@@ -26,9 +26,6 @@ export const BROWSER_UA =
   "AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Chrome/131.0.0.0 Safari/537.36";
 
-/** Python ``get_runtime_limits().http_timeout_seconds`` default. */
-export const GDC_JSON_TIMEOUT_MS = 30_000;
-
 /**
  * User-friendly data type names → GDC API data_type values
  * (Python ``_DATA_TYPE_MAP``).

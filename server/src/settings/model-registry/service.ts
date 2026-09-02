@@ -13,6 +13,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
 import {
+  DEFAULT_MAX_TOKENS,
   DEFAULT_RUNTIME_LIMITS,
   RUNTIME_LIMIT_RANGES,
   type ModelRegistryListQuery,
@@ -75,12 +76,8 @@ function maskApiKey(value: string): string {
 
 const DEFAULT_PAGE_SIZE = 20;
 
-/**
- * 全局默认最大输出 tokens，与 store.ts ``defaultRegistry`` 的
- * ``max_tokens`` 默认一致；激活三源皆空的模型时回退到它，
- * 保证 ``settings.max_tokens`` 总有明确来源。
- */
-const DEFAULT_MAX_TOKENS = 8192;
+// 激活三源皆空的模型时回退到 contracts 的全局默认 max_tokens
+// （store.ts ``defaultRegistry`` 同源），保证 ``settings.max_tokens`` 总有明确来源。
 
 function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
   const record = asRecord(value);
@@ -202,6 +199,7 @@ export class ModelSettingsService {
     apiKey: string;
     baseUrl: string;
     model: string;
+    temperature?: number;
   }> => {
     const stale = visionAssignmentProblem(this.registry);
     if (stale !== null) {
@@ -780,7 +778,9 @@ export class ModelSettingsService {
     const response = await this.fetcher(target, {
       headers: apiKey === "" ? undefined : { authorization: `Bearer ${apiKey}` },
       redirect: "error",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(
+        this.registry.settings.runtime_limits.model_request_timeout_seconds * 1000,
+      ),
     }).catch(() => {
       throw new HttpError(502, "模型发现失败");
     });

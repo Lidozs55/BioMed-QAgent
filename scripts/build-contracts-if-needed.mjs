@@ -92,7 +92,12 @@ export function syncInstalledContracts(root) {
       continue;
     }
     for (const entry of ["package.json", "src", "dist"]) {
-      cpSync(join(sourceRoot, entry), join(installedRoot, entry), {
+      const dest = join(installedRoot, entry);
+      // pnpm injects workspace packages as hardlink clones: without removing
+      // the dest first, cpSync sees src/dest sharing an inode and throws
+      // "src and dest cannot be the same".
+      rmSync(dest, { recursive: true, force: true });
+      cpSync(join(sourceRoot, entry), dest, {
         recursive: true,
         force: true,
       });

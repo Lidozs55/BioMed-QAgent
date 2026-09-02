@@ -7,7 +7,15 @@
  */
 import path from "node:path";
 
-import { DEFAULT_RUNTIME_LIMITS, RUNTIME_LIMIT_RANGES, type RuntimeLimits } from "@biomed/contracts";
+import {
+  DEFAULT_COMPACTION_TARGET_RATIO,
+  DEFAULT_COMPACTION_TRIGGER_RATIO,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_RUNTIME_LIMITS,
+  DEFAULT_SAFETY_RESERVE_RATIO,
+  RUNTIME_LIMIT_RANGES,
+  type RuntimeLimits,
+} from "@biomed/contracts";
 
 import type { JsonObject } from "../../http/validation.js";
 import { optionalRecord } from "../../http/validation.js";
@@ -199,11 +207,11 @@ export function defaultRegistry(): RegistryState {
       // the settings API, never from environment variables.
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       model_name: "",
-      max_tokens: 8192,
+      max_tokens: DEFAULT_MAX_TOKENS,
       context_window: null,
-      safety_reserve_ratio: 0.05,
-      compaction_trigger_ratio: 0.85,
-      compaction_target_ratio: 0.45,
+      safety_reserve_ratio: DEFAULT_SAFETY_RESERVE_RATIO,
+      compaction_trigger_ratio: DEFAULT_COMPACTION_TRIGGER_RATIO,
+      compaction_target_ratio: DEFAULT_COMPACTION_TARGET_RATIO,
       advanced: { ...ADVANCED_DEFAULTS },
       runtime_limits: { ...RUNTIME_DEFAULTS },
       runtime_limits_version: 1,
