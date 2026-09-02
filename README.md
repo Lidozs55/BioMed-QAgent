@@ -1,87 +1,44 @@
 # BioMed-QAgent
 
-BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可追溯、可验证、可下载的标准化数据集。Pi Agent 负责意图、来源发现和规格生成，确定性的 TypeScript Dataset Core 负责获取、解析、整合、验证和不可变发布。
+BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可追溯、可验证、可下载的标准化数据集。Pi Agent 负责意图理解、来源发现和规格生成，确定性的 TypeScript Dataset Core 负责获取、解析、整合、验证和不可变发布。
 
-当前正式拓扑是单个 TypeScript Application Host：同一端口提供 React/Vite、`/api/v1` HTTP、durable WebSocket、Pi Agent、Dataset Core 和设置 API。Python 只保留 `database/bridge.py` 持久化桥；不存在 FastAPI、Python Dataset Core、`/experimental/pi` 或 rollback feature flags。
+## 核心能力
 
-## 项目状态
-
-- **工程基线：** TypeScript Host、Pi adapter、durable runtime、Dataset Core、React 前端和 Python persistence bridge 已形成单一主线拓扑。
-- **当前阶段：** Family Host/Core 的显式 `in_process_unisolated` publication chain 已进入稳定基线；仍在进行 release evidence、identity/recovery hardening 和产品闭包。
-- **发布判断：** 稳定主线不等于 release gate 已通过。当前开放项与验收条件只在 [`docs/TODO.md`](docs/TODO.md) 维护，已知缺陷只在 [`docs/ISSUES.md`](docs/ISSUES.md) 维护。
-- **历史边界：** `docs/archive/` 与 `docs/migration/` 仅供追溯，不代表当前行为。
-
-## 项目与文档入口
-
-本 README 是仓库的统一首入口。下面直接导航到各类权威信息；更细的文档职责、生命周期和归档规则见 [`docs/README.md`](docs/README.md)。
-
-| 想了解                  | 入口                                                                  |
-| ----------------------- | --------------------------------------------------------------------- |
-| 产品目标与评分要求      | [`PROBLEM.md`](PROBLEM.md)                                           |
-| 现行技术架构            | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       |
-| 功能与能力全景          | [`docs/FEATURES.md`](docs/FEATURES.md)                               |
-| 本地开发                | [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md)       |
-| 当前任务 / 已知问题     | [`docs/TODO.md`](docs/TODO.md) / [`docs/ISSUES.md`](docs/ISSUES.md) |
-| Agent API 调用          | [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)       |
-| ADR、专题章节及历史归档 | [`docs/README.md`](docs/README.md)                                   |
-
-## 核心边界
-
-- 一个 dataset requirement 只有一个主数据 family 和一种 row granularity；复合需求拆为多个 requirement。
-- Agent 提交计划和受控规格，不直接制造科研值，也不能决定发布阈值。
-- SourceAsset、内容 hash、兼容性门、Validation Profile、provenance closure 和原子发布由 Core 强制执行。
-- `RunStatus`、`OperationResult`、`ValidationResult`、`ProductAssessment` 与 `DatasetPublication` 各有独立职责。
-- 正式产物只由 manifest 声明；workspace 文件、Transform output 或历史 artifact 不能绕过 Core 成为 Publication。
-- 动态 Family Host 仅支持显式 `in_process_unisolated` 路线。它不是 sandbox 或安全边界；`node:vm` 只提供同步 timeout。
-
-完整定义和决策依据见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 与 [`docs/adr/README.md`](docs/adr/README.md)。
+- **自然语言 → 数据集**：描述需求即可启动任务；Agent 生成计划与受控规格，Dataset Core 确定性执行获取、解析、整合与验证。
+- **可追溯**：每个发布行都能追溯到采集回执与来源定位；SourceAsset、内容 hash、兼容性门、Validation Profile、provenance closure 与原子发布由 Core 强制执行。
+- **不可变发布**：正式产物只由 manifest 声明，经 hash/验证门后发布；workspace 中间文件不能绕过 Core 成为 Publication。
+- **持久化任务运行**：事件溯源（`events.jsonl`）+ 可重建快照；WebSocket 实时事件，断线后以 HTTP replay 补齐。
+- **Web 控制台**：任务对话、发布浏览、模型设置（密钥掩码存储，不上传）。
+- **内置领域技能**：`.pi/skills/` 内置 UniProt、PubChem、ChEMBL、GEO、GDC、ClinVar、Reactome 等生物医学数据源技能与数据构建规范。
 
 ## 快速开始
 
-要求：Node.js 22.19+、pnpm 11.14、Python 3.12+、uv、Git。
+### 方式一：下载自包含部署包（推荐）
 
-### 环境要求
+前往 [GitHub Releases](https://github.com/Lidozs55/BioMed-QAgent/releases) 下载对应平台的部署包。包内自包含内嵌 Node.js 与 CPython（预装 numpy/scipy），目标机无需预装任何环境：
 
-| 组件            | 要求                                                              |
-| --------------- | ----------------------------------------------------------------- |
-| Python          | 3.12+（仅`database/` persistence bridge 需要）                  |
-| Node.js         | 22.19+                                                            |
-| Python 包管理器 | [uv](https://docs.astral.sh/uv/)（`uv sync` 安装 database 项目） |
-| Node 包管理器   | [pnpm](https://pnpm.io/)（不要使用 npm）                           |
-| LLM             | DashScope API Key，或其他 OpenAI 兼容模型配置                     |
-| 可选            | Playwright Chromium，用于网页视觉证据采集                         |
+1. 解压后启动：
+   - Windows：双击 `start.bat`
+   - Linux/macOS：`chmod +x start.sh` 后执行 `./start.sh`
+2. 访问 `http://127.0.0.1:5173`，在「设置 → 模型」中添加 Provider 和 API key 并激活主模型；图形任务需另选具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。
+3. 如需修改端口，在包目录下创建 `.env` 并设置 `PORT`（默认 5173）。
 
-### 1. 配置应用
+Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时执行：
+`runtime/node/bin/node server/node_modules/playwright/cli.js install chromium`（Windows 为 `runtime\node\node.exe`）。
 
-Windows 首次打开终端时先初始化 UTF-8 环境，避免 PowerShell/cmd/Git Bash 的系统代码页（常见为 GBK）损坏中文 JSON、Python 输出或 Agent steer 文本：
+### 方式二：从源码运行
 
-**PowerShell（仅当前终端）：**
-
-```powershell
-. .\scripts\utf8-init.ps1
-```
-
-**cmd（仅当前终端）：**
-
-```bat
-call scripts\utf8-init.cmd
-```
-
-脚本设置 code page 65001、`PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`、`LANG/LC_ALL=C.UTF-8`。`pnpm dev` 本身仍使用 Node UTF-8 API；服务端还会拒绝包含 U+FFFD 或非法 surrogate 的 task/steer 文本，防止损坏指令继续执行。
-
-完成上述初始化后直接安装并启动：
+要求：Node.js 22.19+、[pnpm](https://pnpm.io/) 11.14、Python 3.12+、[uv](https://docs.astral.sh/uv/)、Git。
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Lidozs55/BioMed-QAgent.git
 cd BioMedQAgent
 pnpm install --frozen-lockfile
 uv sync
 pnpm dev
 ```
 
-首次打开页面后，在右上角 **设置 → 模型** 中添加 Provider 和 API key、添加并激活主模型，并为 Gold6 等视觉任务选择具备图像能力的视觉模型。模型配置只写入本机 `data/settings/model-registry.json` 与权限收紧的 `data/settings/model-auth.json`，不会从环境变量自动引导；不要提交这两个运行期文件或打印其中凭据。
-
-Host 首选 `http://127.0.0.1:5173`；若端口已被占用，则由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。根 `.env` 不是必需项，只用于 `HOST`、`PORT`、`BIOMED_PYTHON_BIN` 等可选部署覆盖，不用于模型凭据。`pnpm dev` 是唯一正常开发入口，`dev:frontend-standalone` 只用于迁移/诊断。
+首次打开页面后在「设置 → 模型」完成模型配置；配置只写入本机 `data/settings/`，不会从环境变量自动引导。Host 首选 `http://127.0.0.1:5173`，端口被占用时由操作系统分配可用端口，实际地址以启动输出 `BIOMED_QAGENT_URL=...` 为准。Windows 终端建议先执行 `. .\scripts\utf8-init.ps1`（或 `call scripts\utf8-init.cmd`）初始化 UTF-8 环境，避免中文内容被系统代码页损坏。
 
 生产构建与启动：
 
@@ -90,50 +47,37 @@ pnpm build
 pnpm start
 ```
 
-生产静态入口按当前 OS 用户禁止多开；已有实例时第二次 `pnpm start` 会提示已在运行并正常退出，不启动第二个 Host。
+生产静态入口按当前 OS 用户禁止多开；已有实例时第二次 `pnpm start` 会提示已在运行并正常退出。
 
-详细安装、Windows smoke test 和故障排查见 [`docs/DEVELOPER_QUICKSTART.md`](docs/DEVELOPER_QUICKSTART.md)。
+## 架构一览
 
-## 质量门
+单一 TypeScript Application Host 拓扑：同一端口提供 React/Vite 前端、`/api/v1` HTTP、durable WebSocket、Pi Agent、Dataset Core 与设置 API；Python 仅保留 stdlib 持久化桥。
 
-默认**定向测试**：只测改动涉及的区域，不要每次提交都跑全量。
-
-```bash
-# 定向测试（按改动区域选择）
-pnpm --filter @biomed/server test     # server/ 改动
-pnpm --filter @biomed/frontend test   # frontend/ 改动
-uv run python database/bridge.py --self-test   # database/ 改动时，连同下面两条
-uv run pytest database/tests
-uv run ruff check database
-
-# 通用门（push / merge 前，workspace 级）
-pnpm lint
-pnpm typecheck
-pnpm build
-
-# 全量测试（仅跨共享边界改动：packages/contracts、根配置、scripts/；CI 会自动跑）
-pnpm test
-```
-
-有失败测试时先只重跑失败用例（`pnpm --filter <pkg> test -- <test-file>` 或 `pytest <file>::<case>`），全部通过后再跑一次该区域定向测试确认。完整策略见 [`AGENTS.md`](AGENTS.md) § Quality Gates。
-
-仓库使用单一 pnpm workspace lockfile。TypeScript 依赖只用 pnpm；Python 只服务根 `pyproject.toml` 下的 `database/` bridge，并用 uv 管理。测试并发策略见 [`docs/architecture/test-concurrency.md`](docs/architecture/test-concurrency.md)。
+| 目录                   | 职责                                         |
+| ---------------------- | -------------------------------------------- |
+| `packages/contracts/`  | TypeScript wire DTO 的唯一来源               |
+| `server/`              | TS Host、Pi adapter、durable runtime、Dataset Core |
+| `frontend/`            | React 19 + Vite + Tailwind v4 + shadcn/ui    |
+| `database/`            | stdlib Python JSONL/SQLite persistence bridge |
+| `.pi/skills/`          | Agent 领域技能（数据源、分析、数据构建规范） |
+| `examples/families/`   | 非生产 family 示例                           |
 
 ## 运行数据
 
-默认数据根位于 `data/output/`：
+默认数据根位于 `data/`（运行期生成，不入库）：
 
 ```text
 data/
-├── workspaces/<task_id>/       # Agent staging workspace
+├── settings/                    # 模型注册与凭据（权限收紧）
+├── workspaces/<task_id>/        # Agent staging workspace
 └── output/tasks/<task_id>/
-    ├── events.jsonl            # 追加写入的权威任务事实
-    ├── snapshot.json           # 可由事件重建
+    ├── events.jsonl             # 追加写入的权威任务事实
+    ├── snapshot.json            # 可由事件重建
     └── dataset_runs/<run_id>/<requirement_id>/
         └── publish/             # 不可变 Publication
 ```
 
-Agent workspace 与 Core publication 物理分离。API 只暴露经 manifest 注册并通过 hash/验证门的正式 artifact。
+Agent workspace 与 Core publication 物理分离；API 只暴露经 manifest 注册并通过 hash/验证门的正式 artifact。
 
 ## API 概览
 
@@ -141,28 +85,27 @@ Agent workspace 与 Core publication 物理分离。API 只暴露经 manifest �
 - `/api/v1/tasks`：创建、读取、续跑和删除终态任务。
 - `/api/v1/tasks/{taskId}/events`：durable 事件重放。
 - `/api/v1/ws`：实时事件；断线后仍以 HTTP replay 补齐。
-- `/api/v1/publications`：发布与产品评估（ProductAssessment 在详情内，artifact 经 `/api/v1/publications/{id}/artifacts/{artifactId}` 下载）；任务产物另有 `/api/v1/tasks/{taskId}/artifacts`。
+- `/api/v1/publications`：发布与产品评估；artifact 经 `/api/v1/publications/{id}/artifacts/{artifactId}` 下载。
 - `/api/v1/settings`：模型与应用设置，密钥始终掩码返回。
 
-可执行调用示例、HIL 和终态处理见 [`docs/AGENT_API_QUICKSTART.md`](docs/AGENT_API_QUICKSTART.md)。
+## 分支与开发
 
-## 目录
+- `main` 是公开发布分支：承载面向使用者的 README 与 release tag，受分支保护，仅通过来自 `dev` 的 PR 更新。
+- `dev` 是开发集成分支：所有功能开发在此进行；架构文档、ADR、开发指南与任务规划也在 `dev` 上维护，见 [dev 分支 docs/ 目录](https://github.com/Lidozs55/BioMed-QAgent/tree/dev/docs)。
 
-```text
-packages/contracts/    TypeScript wire DTO 的唯一来源
-server/                TS Host、Pi adapter、durable runtime、Dataset Core
-frontend/              React 19 + Vite + Tailwind v4 + shadcn/ui
-database/              stdlib Python JSONL/SQLite persistence bridge
-.pi/skills/            Agent curated skills
-examples/families/     非生产 family 示例
-docs/                  架构、指南、证据与历史记录
+开发环境的常见质量门命令：
+
+```bash
+pnpm lint          # workspace lint
+pnpm typecheck     # TypeScript 检查
+pnpm build         # 生产构建
+pnpm test          # 全量测试
+pnpm run pack      # 打自包含部署包到 target/
 ```
-
-贡献前先阅读 [`AGENTS.md`](AGENTS.md)；前端改动还需阅读 [`frontend/AGENTS.md`](frontend/AGENTS.md)。
 
 ## 安全
 
-不要提交 `.env`、API key、Commonly runtime token 或真实凭据。Agent 对 workspace 外的文件和命令访问经过 `allow / ask / deny` 权限系统；权限批准不改变 Core 的发布信任边界。
+不要提交 `.env`、API key 或真实凭据；模型凭据只保存在本机 `data/settings/`。Agent 对 workspace 外的文件和命令访问经过 `allow / ask / deny` 权限系统；权限批准不改变 Core 的发布信任边界。
 
 ## License
 
