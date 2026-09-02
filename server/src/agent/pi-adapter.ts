@@ -448,8 +448,11 @@ function usesDashScopeQwen(selected: BioMedModelConfig): boolean {
   try {
     const target = new URL(selected.baseUrl);
     const modelId = selected.modelId.toLowerCase();
+    // 百炼国内（dashscope）与国际（dashscope-intl）站点的 OpenAI 兼容端点
+    // 共享同一套 Qwen 专属参数语义（enable_search / enable_thinking 等）。
     return (modelId.startsWith("qwen") || modelId.startsWith("qwq")) &&
-      target.hostname === "dashscope.aliyuncs.com" &&
+      (target.hostname === "dashscope.aliyuncs.com" ||
+        target.hostname === "dashscope-intl.aliyuncs.com") &&
       target.pathname.replace(/\/$/, "") === "/compatible-mode/v1";
   } catch {
     return false;
