@@ -799,6 +799,14 @@ describe("registered paper chart evidence extraction", () => {
       expect(fixture.calls).toHaveLength(2);
       expect(fixture.prompts[1]).toContain("no usable chart points");
       expect(fixture.prompts[1]).toMatch(/do not guess/i);
+      expect(result.retry_summary).toEqual({
+        pages_with_retry: 1,
+        pages_degraded_no_points: 0,
+      });
+      expect(result.warnings).toContainEqual(expect.stringContaining("code=retry"));
+      const toolOutputPrefix = JSON.stringify(result, null, 2).slice(0, 200);
+      expect(toolOutputPrefix).toContain('"retry_summary"');
+      expect(toolOutputPrefix).toContain('"pages_with_retry": 1');
       expect(result.rows.chart_points).toBe(2);
       expect(reviewRequests).toEqual([{ reviewType: "vlm_extraction", itemCount: 2 }]);
     } finally {
@@ -823,6 +831,10 @@ describe("registered paper chart evidence extraction", () => {
       });
 
       expect(fixture.calls).toHaveLength(2);
+      expect(result.retry_summary).toEqual({
+        pages_with_retry: 1,
+        pages_degraded_no_points: 1,
+      });
       expect(result.rows.chart_points).toBe(0);
       expect(reviewCallCount).toBe(0);
       const carrier = await readCarrier(fixture, result.carrier.relative_path);

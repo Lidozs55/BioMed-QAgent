@@ -158,6 +158,11 @@ export interface RegisteredPaperChartCarrierSummary {
 
 export interface RegisteredPaperChartEvidenceResult {
   status: "ok";
+  /** Compact retry telemetry kept near the result head for bounded tool events. */
+  retry_summary: {
+    pages_with_retry: number;
+    pages_degraded_no_points: number;
+  };
   carrier: RegisteredPaperChartCarrierSummary;
   model: { provider: string; model: string; model_version: string };
   rows: {
@@ -1402,6 +1407,10 @@ export async function extractRegisteredPaperChartEvidence(
   }
   const warnings: string[] = [];
   const pageFailures: string[] = [];
+  const retrySummary = {
+    pages_with_retry: 0,
+    pages_degraded_no_points: 0,
+  };
   if (pageImages.skippedPages > 0) {
     warnings.push(
       `${pageImages.skippedPages} additional PDF page candidate(s) were not rendered because of the page cap`,
@@ -1441,6 +1450,7 @@ export async function extractRegisteredPaperChartEvidence(
       deficits = retryStructuredDeficits(parsed);
     }
     if (deficits.length > 0) {
+      retrySummary.pages_with_retry += 1;
       warnings.push(pageWarning(image.pageIndex, "retry", deficits.map((d) => d.text).join("; ")));
       try {
         const retryPromptText = retryPrompt(deficits);
@@ -1458,6 +1468,7 @@ export async function extractRegisteredPaperChartEvidence(
         providerModel = retry.model;
         parsed = retryParsed;
         if (retryStructuredDeficits(retryParsed).length > 0) {
+          retrySummary.pages_degraded_no_points += 1;
           warnings.push(pageWarning(
             image.pageIndex,
             "no_points",
@@ -2220,6 +2231,7 @@ export async function extractRegisteredPaperChartEvidence(
 
   return {
     status: "ok",
+    retry_summary: retrySummary,
     carrier: {
       asset_id: receipt.asset_ref.asset_id,
       receipt_id: receipt.receipt_id,
