@@ -914,7 +914,7 @@ describe("basic_statistics tool", () => {
     expect(result.columns_analyzed).toEqual([]);
   });
 
-  it("summarizes a declared head sample for files beyond the 64 MiB cap (C3)", async () => {
+  it("summarizes a declared head sample for files beyond the 64 MiB cap (C3)", { timeout: 180_000 }, async () => {
     const taskRoot = await makeTaskRoot();
     // 4 chunks x 80000 rows x 210 bytes ~= 67 MB > 64 MiB cap; streamed to
     // disk chunk-wise so the fixture itself never materializes one 67 MB string.

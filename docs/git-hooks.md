@@ -23,7 +23,7 @@ pushing/merging; a green commit is not a green test run.
 
 **Deliberate bypass** (use rarely, and say why in the commit): `git commit
 --no-verify`, or `HUSKY=0 <git commit>`. A bypass does not remove the CI
-requirement — the same gates run on every push to `main` / PR.
+requirement — the same gates run on every push to `dev` / PR.
 
 ### `.husky/commit-msg` — conventional commits (commitlint)
 

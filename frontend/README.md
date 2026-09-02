@@ -66,7 +66,7 @@ src/
 
 修改前先读 [`AGENTS.md`](AGENTS.md)。优先复用 `src/components/ui/` 与现有业务组件，并通过仓库 shadcn 工作流查询/添加组件；不要手写第二套 primitive。新增交互需覆盖键盘、aria label、loading/error/empty 状态和亮暗主题。
 
-组件 API 和实际目录以代码为准，不在 README 维护易漂移的逐文件清单。架构说明见 [`../docs/architecture/agent-frontend.md`](../docs/architecture/agent-frontend.md)。
+组件 API 和实际目录以代码为准，不在 README 维护易漂移的逐文件清单。架构说明见 [`docs/architecture/agent-frontend.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/architecture/agent-frontend.md)。
 
 ## 生产构建
 
@@ -74,7 +74,7 @@ src/
 
 ## 相关文档
 
-- [`../docs/DEVELOPER_QUICKSTART.md`](../docs/DEVELOPER_QUICKSTART.md)：全仓开发流程。
-- [`../docs/architecture/agent-frontend.md`](../docs/architecture/agent-frontend.md)：事件投影与前端架构。
-- [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)：系统边界。
-- [`../docs/TODO.md`](../docs/TODO.md)：当前开放工作。
+- [`docs/DEVELOPER_QUICKSTART.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/DEVELOPER_QUICKSTART.md)：全仓开发流程。
+- [`docs/architecture/agent-frontend.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/architecture/agent-frontend.md)：事件投影与前端架构。
+- [`docs/ARCHITECTURE.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/ARCHITECTURE.md)：系统边界。
+- [`docs/TODO.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/TODO.md)：当前开放工作。

@@ -55,7 +55,7 @@ Key invariants:
   `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`).
 - New wire DTOs belong in `@biomed/contracts` first.
 - The explicit `in_process_unisolated` Family Host/Core publication chain is a
-  stable `main` baseline. Continue recovery/resource/identity hardening, family
+  stable `dev` baseline. Continue recovery/resource/identity hardening, family
   product closure, frontend UX, and release evidence on dedicated branches or
   worktrees; do not reopen sandbox/container/IPC work without a new ADR.
 - Always treat code as the source of truth for skill/tool implementation status —
@@ -232,16 +232,16 @@ When told to handle a Commonly board task:
 4. **Verify & commit**: after self-check passes,
    `git commit -m "[TASK-XXX] <type>: description" && git push` (conventional
    format enforced by the commit-msg hook; e.g. `[TASK-123] feat: add retry`).
-5. **Merge & close**: merge to `main` (see Git Workflow), post `[DONE]`
+5. **Merge & close**: merge to `dev` (see Git Workflow), post `[DONE]`
    (branch info required), then complete the board task.
 6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
 
 ### Direct-instruction workflow (non-board task)
 
 1. Before starting, post `[TASK] brief description, working on branch <branch-name>`
-   (for branchless single-file edits: `[TASK] brief description, directly modifying main: <file-path>`).
+   (for branchless single-file edits: `[TASK] brief description, directly modifying dev: <file-path>`).
 2. Execute per Git Workflow.
-3. On completion, post `[DONE] change summary, merged to main` (or `… pushed to main`).
+3. On completion, post `[DONE] change summary, merged to dev` (or `… pushed to dev`).
 
 No claim/complete actions are needed.
 
@@ -267,7 +267,7 @@ Commonly board is the execution-status view. To avoid circular updates:
 
 ### Coordination & message prefixes
 
-- Before a branchless direct edit to `main`, scan recent messages (~10) to confirm
+- Before a branchless direct edit to `dev`, scan recent messages (~10) to confirm
   no other agent is working on the same file; if a conflict is suspected, negotiate
   via `[Q]` or switch to a branch.
 - After pushing/merging a branch, always post `[DONE]` summarizing changes, impact,
@@ -288,10 +288,15 @@ Commonly board is the execution-status view. To avoid circular updates:
 
 ### Branch policy
 
+- **Branch model**: `dev` is the development integration branch — all feature
+  work merges here. `main` is the public release branch: it carries the
+  user-facing README and release tags, is protected, and receives changes only
+  via pull requests from `dev` (typically for releases). Historical/internal
+  content lives only on `dev`.
 - Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
   `fix/summary`.
 - **Single-file small changes** (typos, config tweaks) may be committed directly
-  to `main`, but you must: first `git pull` to sync; and confirm no other agent is
+  to `dev`, but you must: first `git pull` to sync; and confirm no other agent is
   editing the same file (see Commonly Workflow ✓ coordination).
 - Multi-file changes, new features, or changes that may affect other agents
   **must** use a dedicated branch.
@@ -311,19 +316,21 @@ hold:
 
 Merge steps:
 
-- Sync with `main` first: ≤5 commits → `git pull --rebase origin main`; >5 commits
-  or conflict-prone → `git fetch origin main && git merge origin/main`.
+- Sync with `dev` first: ≤5 commits → `git pull --rebase origin dev`; >5 commits
+  or conflict-prone → `git fetch origin dev && git merge origin/dev`.
 - After resolving conflicts, **re-run all Quality Gates**.
-- Check out local `main`, ensure it is clean and up to date, then merge with
-  `git merge --no-ff <branch>`; push `main`.
+- Check out local `dev`, ensure it is clean and up to date, then merge with
+  `git merge --no-ff <branch>`; push `dev`.
 - After merging, post a `[DONE]` message summarizing the result.
 
 Merge constraints:
 
 - **Never force-push to shared branches** (`main`, `dev`). If push is rejected,
   `git pull --rebase` first, then push.
-- One merge to `main` = one complete functional unit; bundle related
+- One merge to `dev` = one complete functional unit; bundle related
   `feat`/`fix`/test/doc changes into the same branch and merge together.
+  `main` receives changes only through PRs from `dev` (branch protection; one
+  PR = one release-ready unit).
 - One feature, one merge: don't chain multiple merges for sub-steps; if not
   complete, keep committing on the branch.
 
@@ -331,7 +338,7 @@ Merge constraints:
 
 **Targeted testing is the default**: test what your changes touch — do not run
 the full suite on every commit or push. All gates below must pass **before
-pushing a branch and before merging to `main`**:
+pushing a branch and before merging to `dev`**:
 
 - Workspace-wide: `pnpm lint`, `pnpm typecheck`, `pnpm build`.
 - Targeted tests, by changed area:
@@ -349,7 +356,7 @@ then re-run the targeted suite for the changed area once to confirm no
 regressions. Avoid full-suite runs inside this loop.
 
 CI runs the full suite plus lint/typecheck/build on every PR and every push to
-`main`. Run the full suite locally only for cross-cutting changes or when the
+`dev`. Run the full suite locally only for cross-cutting changes or when the
 blast radius cannot be determined.
 
 The local pre-commit hook (`.husky/pre-commit`, see `docs/git-hooks.md`) runs
@@ -400,7 +407,7 @@ next round.
    `pnpm test` only where the policy requires cross-cutting coverage.
 2. **Tests** — new behavior is covered by tests, or the fixed bug has a reproducing
    test that now passes.
-3. **Branch & merge** — multi-file work used a dedicated branch; single-file `main`
+3. **Branch & merge** — multi-file work used a dedicated branch; single-file `dev`
    edits occurred only after the pre-check; merge/push followed Self-Serve Merge; no
    force-push to shared branches.
 4. **Commonly check-in** — `[TASK]` was posted at start and `[DONE]` / `[BLOCKED]`
