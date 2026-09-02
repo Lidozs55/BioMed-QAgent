@@ -293,6 +293,15 @@ Commonly board is the execution-status view. To avoid circular updates:
   user-facing README and release tags, is protected, and receives changes only
   via pull requests from `dev` (typically for releases). Historical/internal
   content lives only on `dev`.
+- **Dev-only capabilities must never reach `main`**: the agent self-code
+  access design — the `read_dataset_core_source` tool, agent-authored
+  FamilySpec topology, and the resulting Dataset Core gate relaxations — is
+  visible and usable on `dev` only. When cutting a release PR from `dev`,
+  exclude or revert merge commit `2a0fb4d4` (branch
+  `feat/relax-publication-gates`: `d7f7e8ec`, `cef17009`, `b1fd4e4b`); a
+  `main`-side guard test (same pattern as
+  `server/tests/phase8-architecture-guard.test.ts`) should fail any PR that
+  re-introduces them.
 - Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
   `fix/summary`.
 - **Single-file small changes** (typos, config tweaks) may be committed directly
