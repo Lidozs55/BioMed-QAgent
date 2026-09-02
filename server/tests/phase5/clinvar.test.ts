@@ -78,9 +78,30 @@ describe("lookupClinvarCounts", () => {
 
   it("validates HGNC-style symbols and registers the tool under clinvar", async () => {
     await expect(lookupClinvarCounts(["not a symbol"])).rejects.toThrow(/gene symbol/i);
+    await expect(lookupClinvarCounts(["BRCA1 OR BRCA2"])).rejects.toThrow(/gene symbol/i);
     const [tool] = createClinvarTools();
     expect(tool?.name).toBe("lookup_clinvar_counts");
     expect(SKILL_TOOL_NAMES.has("lookup_clinvar_counts")).toBe(true);
     expect(toolOwner("lookup_clinvar_counts")).toBe("clinvar");
+  });
+
+  it("accepts HGNC symbols with '_' and '@' cluster suffixes (Y1 alignment)", async () => {
+    const fixture = await startFixtureServer((req, res) => {
+      const url = new URL(req.url ?? "", "https://eutils.ncbi.nlm.nih.gov");
+      const term = url.searchParams.get("term") ?? "";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ esearchresult: { count: term.includes("CLNSIG") ? "7" : "14", idlist: [] } }));
+    });
+    servers.push(fixture);
+
+    const result = await lookupClinvarCounts(["SNORD116@", "GTF2H2C_2"], {
+      client: client(fixture.port),
+      limiter: immediateLimiter,
+    });
+
+    expect(result.failures).toEqual([]);
+    expect(result.succeeded_count).toBe(2);
+    expect(result.records.map((record) => record.gene_symbol)).toEqual(["SNORD116@", "GTF2H2C_2"]);
+    expect(decodeURIComponent(fixture.requests[0]!.url)).toContain("SNORD116@[SYM]");
   });
 });
