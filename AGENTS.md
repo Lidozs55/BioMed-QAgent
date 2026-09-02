@@ -80,8 +80,8 @@ Before starting any task, consult:
   historical records (retired Python runtime, Phase 0-8 migration, past reviews and
   plans). **Nothing was deleted** - files were moved or archived, and can be restored
   from git history. For why/history questions, consult them explicitly; never treat
-  them as current behavior. Moved paths are indexed in `docs/ARCHITECTURE.md` 文档地图
-  (§ 文档位置变更对照).
+  them as current behavior. Moved paths are documented in `docs/README.md`
+  (文档地图, "本轮归档说明").
 - **Prefer topic files over whole indexes**: for a specific boundary read the matching
   `docs/adr/NNN-*.md` and `docs/architecture/*.md` chapter instead of loading the
   whole `ARCHITECTURE.md`.
@@ -293,15 +293,23 @@ Commonly board is the execution-status view. To avoid circular updates:
   user-facing README and release tags, is protected, and receives changes only
   via pull requests from `dev` (typically for releases). Historical/internal
   content lives only on `dev`.
-- **Dev-only capabilities must never reach `main`**: the agent self-code
-  access design — the `read_dataset_core_source` tool, agent-authored
-  FamilySpec topology, and the resulting Dataset Core gate relaxations — is
-  visible and usable on `dev` only. When cutting a release PR from `dev`,
-  exclude or revert merge commit `2a0fb4d4` (branch
-  `feat/relax-publication-gates`: `d7f7e8ec`, `cef17009`, `b1fd4e4b`); a
-  `main`-side guard test (same pattern as
+- **Dev-only capabilities must never reach `main`**: the agent self-code access
+  design is visible and usable on `dev` only. Identify it by capability and
+  path, not by commit hash (hashes rot on amend/rebase):
+  - the `read_dataset_core_source` tool: `server/src/agent/tools/core-source.ts`
+    plus its registrations in `business-tools.ts` / `tools/index.ts` /
+    `skill-tool-map.ts` / dataset-construction `SKILL.md`;
+  - the execution-prompt authorizations to author FamilySpec topology and to
+    fix rejections by reading Core source (`server/src/agent/phase1-prompt.ts`).
+  Release PRs from `dev` must exclude or revert exactly these capabilities
+  (introduced by branch `feat/relax-publication-gates`, commits `cef17009`,
+  `b1fd4e4b`); a `main`-side guard test (pattern:
   `server/tests/phase8-architecture-guard.test.ts`) should fail any PR that
   re-introduces them.
+- **Releasable from the same branch**: the Dataset Core gate relaxations
+  (`d7f7e8ec`: empty-table partial publish, report-only gene coverage,
+  authored-topology requirement derivation) are a legitimate product fix that
+  MUST ship to `main` — do not revert them together with the dev-only set.
 - Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
   `fix/summary`.
 - **Single-file small changes** (typos, config tweaks) may be committed directly
