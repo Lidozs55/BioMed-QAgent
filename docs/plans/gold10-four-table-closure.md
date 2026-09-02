@@ -187,7 +187,7 @@ per-taxon 端点迁移（`gut_microbiome.gmrepo_taxon_phenotypes_json.v1`）+ pr
      --evidence-dir data/gold-runs/<commit>-gold10-r1 \
      --case-label gold10 --expected-commit <full-commit> --timeout 14400000
    ```
-   协议细节（HIL 停审、`--resume`、closure 分类）见 [`docs/gold-formal-rerun.md`](../gold-formal-rerun.md)。
+   协议细节（HIL 停审、`--resume`、closure 分类）见 [`data/gold/README.md`（评测与正式重跑指南）](../../data/gold/README.md)。
 4. **验收（TODO 原文）**：单一 fresh run 内 `completed` 且 `artifact_count>0`、
    `current_publication_id` 非空、产物经 Artifact API 字节/SHA-256 校验、
    supervisor closure `succeeded_publication`。允许 XLS/DOCX/PDF 维度结构化 blocked

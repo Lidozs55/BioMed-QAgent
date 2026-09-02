@@ -22,7 +22,7 @@
 
 campaign 初期曾把 prepare/submit 契约细节写进用户提示词（"已知良好骨架"、
 "两阶段 digest 规则"等）；经裁决废除。**正式测试方法**（详见
-[../gold-formal-rerun.md](../gold-formal-rerun.md) §Test-prompt methodology）：
+[data/gold/README.md](../../data/gold/README.md) §Test-prompt methodology）：
 
 1. **直问**：`POST /api/v1/tasks` 直接以真实研究问题建任务，自动启动的 Run 1
    就是被测 Run（废除 bootstrap 占位任务——残留指令曾被轻量模型在收尾时服从，
@@ -74,7 +74,7 @@ campaign 初期曾把 prepare/submit 契约细节写进用户提示词（"已知
    （数据不可见、错误不点名、逃生门太顺手），已按此顺序修复；
    遗留项见 [TODO.md](../TODO.md)（end-of-run publication gate 等）。
 4. **方法学资产**：直问 + `--adopt` + 人类可信提示词的评测方法已固化
-   （[../gold-formal-rerun.md](../gold-formal-rerun.md)），后续评测可直接复用。
+   （[data/gold/README.md](../../data/gold/README.md)），后续评测可直接复用。
 
 ## 6. 证据索引
 
@@ -83,4 +83,4 @@ campaign 初期曾把 prepare/submit 契约细节写进用户提示词（"已知
   `57af4fec-gold7-qwen38flash-r{5,6}`、`b98db211/635025ba/22d87d15/1336428a-gold7-*-direct-*`、
   `635025ba-gold7-dsflash-direct-r{1,2-temp02}`
 - 关联：[ISSUES.md](../ISSUES.md) 占位符 P1、[TODO.md](../TODO.md) end-of-run gate、
-  [../gold-formal-rerun.md](../gold-formal-rerun.md) 测试方法学
+  [data/gold/README.md](../../data/gold/README.md) 测试方法学

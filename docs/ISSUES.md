@@ -112,7 +112,7 @@
 - **实际后果：** gold7 rerun2（32,918 事件、零绕路）与 gold8 rerun2（15,866 事件、已走 openFDA）均在 22:17 被外部 8000 实例重启扫断；`continue` 续跑约 4 分钟后再次被扫断；两个任务的事件文件被撕裂后已手工修复（截断到各自 `run_interrupted`，原件备份为 `events.jsonl.corrupt-20260827*.bak`）。
 - **最小复现：** 同一 data 目录起两个 Host（A、B），在 A 上发起 run，再启动 B：A 的 run 立即被标记 `run_interrupted`。
 - **影响：** 单机协作开发/评测时，任何会话启动 `pnpm dev`/`pnpm start` 或第二个实例都会静默杀掉他人活跃 run，且可能留下使下一个 Host 无法启动的损坏事件文件。
-- **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（已在 `docs/gold-formal-rerun.md` 增加警示）；**已实现（`main@ac2ffaba`）**：runtime 启动即获取 tasks-root 排他 lease（`.host-lease.json`，含持有 pid），第二个**活**实例 fail-fast 拒绝启动（`HostLeaseHeldError`），死 pid 视为陈旧租约可接管；该保护只对新代码实例生效——升级期间仍在运行的旧实例没有 lease，仍需人工确认单实例。事件撕裂的追加级独占锁/单写者队列与撕裂自愈暂不做，lease 已消除并发写者来源。
+- **下一步：** 短期约定——同一 data 目录同时只允许一个 Host 实例（警示现位于 `data/gold/README.md` 单实例要求节）；**已实现（`main@ac2ffaba`）**：runtime 启动即获取 tasks-root 排他 lease（`.host-lease.json`，含持有 pid），第二个**活**实例 fail-fast 拒绝启动（`HostLeaseHeldError`），死 pid 视为陈旧租约可接管；该保护只对新代码实例生效——升级期间仍在运行的旧实例没有 lease，仍需人工确认单实例。事件撕裂的追加级独占锁/单写者队列与撕裂自愈暂不做，lease 已消除并发写者来源。
 
 ### [P2] 本机稳定失败的 2 个环境性红测（干净 HEAD 复现，2026-09-01 实证）
 
