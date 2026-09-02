@@ -91,6 +91,7 @@ coverage.xml
 .cache/
 .trae/
 .pi-subagents/
+.pi/subagents.json
 .zcode/
 .claude/
 
