@@ -28,3 +28,9 @@ export function resolveCoreProductTopologyRequirements(
   }
   return requirements;
 }
+
+export function tryResolveCoreProductTopologyRequirements(
+  profileRef: string,
+): CoreProductTopologyRequirements | null {
+  return DEFAULT_REQUIREMENTS.get(profileRef) ?? null;
+}

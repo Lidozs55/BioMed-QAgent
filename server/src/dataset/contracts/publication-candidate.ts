@@ -122,7 +122,12 @@ export function parsePublicationCandidate(value: unknown): PublicationCandidate 
     throw new TypeError("PublicationCandidate must declare exactly one primary table");
   }
   for (const table of tables) {
-    if (table.definition.required && !table.definition.allow_empty && table.row_count === 0) {
+    if (
+      table.definition.role === "primary"
+      && table.definition.required
+      && !table.definition.allow_empty
+      && table.row_count === 0
+    ) {
       throw new TypeError(`required table '${table.definition.table_id}' must not be empty`);
     }
   }
