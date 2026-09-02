@@ -274,6 +274,7 @@ export const SKILL_TOOL_MAP: readonly SkillToolMapping[] = Object.freeze([
       "execute_dataset_execution",
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
+      "read_dataset_core_source",
     ],
   ),
 ]);
