@@ -364,9 +364,9 @@ pushing a branch and before merging to `dev`**:
 then re-run the targeted suite for the changed area once to confirm no
 regressions. Avoid full-suite runs inside this loop.
 
-CI runs the full suite plus lint/typecheck/build on every PR and every push to
-`dev`. Run the full suite locally only for cross-cutting changes or when the
-blast radius cannot be determined.
+CI runs the full suite plus lint/typecheck/build on every pull request (pushes
+to `dev` do not trigger CI; the PR is the gate). Run the full suite locally only
+for cross-cutting changes or when the blast radius cannot be determined.
 
 The local pre-commit hook (`.husky/pre-commit`, see `docs/git-hooks.md`) runs
 typecheck/lint (plus ruff when `database/` Python sources change) — it does not
