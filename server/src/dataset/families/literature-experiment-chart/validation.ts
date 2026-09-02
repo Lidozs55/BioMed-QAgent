@@ -127,14 +127,26 @@ export async function validateLiteratureExperimentChartProfile(input: {
     }
     semanticFailure("literature_experiment_chart requires a Core-owned VLM evidence asset");
   }
-  if (archiveInputs.length === 0) {
-    semanticFailure("literature_experiment_chart requires a Core-owned supplementary member asset");
-  }
   const chartSeriesPath = input.stagedTablePaths.get("chart_series");
   const chartPointsPath = input.stagedTablePaths.get("chart_points");
   const supplementaryPath = input.stagedTablePaths.get("supplementary_asset_records");
   if (chartSeriesPath === undefined || chartPointsPath === undefined || supplementaryPath === undefined) {
     semanticFailure("literature_experiment_chart semantic tables are incomplete");
+  }
+  // Archive-member gate (conditional per the 2026-09-02 approved topology
+  // change): when the staged supplementary table carries rows, every row must
+  // match Core archive-member provenance and at least one archive input must
+  // exist. When it is empty, the empty selection is legal ONLY when no
+  // archive input is present either — an empty table with archive inputs
+  // available means the transform dropped provenance-backed rows, which stays
+  // a rejection.
+  if (archiveInputs.length === 0) {
+    const supplementaryRowCount = (await csvRecords(supplementaryPath!, input.signal)).length;
+    if (supplementaryRowCount > 0) {
+      semanticFailure(
+        "literature_experiment_chart supplementary rows require a Core-owned archive-member input",
+      );
+    }
   }
   const vlmFacts = vlmInputs.map((item) => {
     const evidence = evidenceRecord(item);

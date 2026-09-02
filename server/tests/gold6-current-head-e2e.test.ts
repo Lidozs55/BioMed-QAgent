@@ -77,7 +77,7 @@ import {
 } from "./phase5/helpers.js";
 
 const GOLD_ROOT = path.resolve(import.meta.dirname, "..", "..", "docs", "evaluation", "gold-v1");
-const FROZEN_PROMPT_SHA256 = "f30ab31099da23c75a3e0037ee303b8814c7c124bc1e84be149d2c6f4c8fc298";
+const FROZEN_PROMPT_SHA256 = "2267815c0bab859bc0b7488837bd4682ca4248d6fcf84b15e4af8414ab34c92e";
 const PMCIDS = ["PMC10408569", "PMC5355725", "PMC5094958"] as const;
 // The governed paper-evidence gate requires a registered supplementary carrier
 // for every paper; the fixture acquires one per PMCID (the frozen inventory
