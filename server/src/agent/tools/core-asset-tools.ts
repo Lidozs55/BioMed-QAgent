@@ -24,6 +24,12 @@ import { mediaTypeFor } from "./import-tools.js";
 
 const ASSET_ID_PATTERN = /^asset_[0-9a-f]{64}$/;
 const PREVIEW_HEAD_CHARS = 8192;
+// Same per-call ceiling as workspace_read's maxReadCharacters (M2: large
+// carriers like a 153 MB SOFT file must be paged, not just headed).
+const PREVIEW_MAX_PAGE_CHARS = 64 * 1024;
+// Upper bound for decoding asset bytes into pageable text; matches the gzip /
+// zip-member extraction ceilings. Assets beyond it page only their prefix.
+const PREVIEW_MAX_DECODE_BYTES = 256 * 1024 * 1024;
 const SAFE_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export interface CoreAssetToolOptions {
@@ -55,10 +61,45 @@ async function loadAssetBytes(options: CoreAssetToolOptions, assetId: string): P
   return { bytes, relativePath: registration.relative_path, mediaType: registration.media_type, sha256: registration.sha256 };
 }
 
-function textHead(bytes: Uint8Array): { head: string; truncated: boolean } {
-  const slice = bytes.subarray(0, PREVIEW_HEAD_CHARS);
-  const head = Buffer.from(slice).toString("utf8");
-  return { head, truncated: bytes.byteLength > PREVIEW_HEAD_CHARS };
+/**
+ * Decode asset bytes into pageable text and select one character window.
+ * Offset/length are CHARACTERS of the decoded UTF-8 text (workspace_read
+ * semantics — model-blockers M2: a fixed head window left the middle of a
+ * 153 MB SOFT carrier unreachable, and the model chose to report without the
+ * field rather than fabricate it). When the asset exceeds the decode ceiling
+ * only the prefix is decodable and ``truncated`` stays true.
+ */
+function decodePage(bytes: Buffer, offset: number, length: number): {
+  head: string;
+  offset: number;
+  characters: number;
+  truncated: boolean;
+} {
+  const clamped = bytes.byteLength > PREVIEW_MAX_DECODE_BYTES;
+  const text = (clamped ? bytes.subarray(0, PREVIEW_MAX_DECODE_BYTES) : bytes).toString("utf8");
+  const selected = text.slice(offset, offset + length);
+  return {
+    head: selected,
+    offset,
+    characters: selected.length,
+    truncated: clamped || offset + selected.length < text.length,
+  };
+}
+
+function parsePreviewWindow(value: { offset?: unknown; length?: unknown }): {
+  offset: number;
+  length: number;
+} {
+  const offset = value.offset ?? 0;
+  const length = value.length ?? PREVIEW_HEAD_CHARS;
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+    throw new TypeError("offset must be a non-negative integer");
+  }
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length <= 0
+    || length > PREVIEW_MAX_PAGE_CHARS) {
+    throw new TypeError(`length must be an integer between 1 and ${PREVIEW_MAX_PAGE_CHARS}`);
+  }
+  return { offset, length };
 }
 
 function isZipArchive(bytes: Uint8Array): boolean {
@@ -212,29 +253,35 @@ export function createPreviewCoreAssetTool(
     name: "preview_core_asset",
     label: "Preview Core Asset",
     description:
-      "Read-only window into a task-owned Core asset. For a binary_archive (zip) asset without 'member', returns the member listing (names and sizes); with 'member', returns that member's decoded head text. For text assets returns the head text. Use this to inspect downloaded archives and see the exact text a transform would receive — never use python/shell/workspace_exec for this.",
+      "Read-only window into a task-owned Core asset. For a binary_archive (zip) asset without 'member', returns the member listing (names and sizes); with 'member', returns that member's decoded text. For text and gzip assets returns the decoded text. Text is paged with 'offset'/'length' in CHARACTERS of the decoded UTF-8 text (like workspace_read; default offset 0, length 8192; at most 65536 characters per call — page with larger offsets to reach the middle of large files, and use 'truncated' to see whether text remains). Use this to inspect downloaded archives and see the exact text a transform would receive — never use python/shell/workspace_exec for this.",
     parameters: {
       type: "object",
       properties: {
         asset_id: { type: "string", pattern: ASSET_ID_PATTERN.source },
         member: { type: "string", minLength: 1, maxLength: 256 },
+        offset: { type: "integer", minimum: 0, description: "Character offset into the decoded text (0 = start)." },
+        length: { type: "integer", minimum: 1, maximum: 65536, description: "Max characters to return (default 8192)." },
       },
       required: ["asset_id"],
       additionalProperties: false,
     },
     async execute(value): Promise<BioMedToolResult> {
       try {
-        const request = value as { asset_id?: unknown; member?: unknown };
+        const request = value as { asset_id?: unknown; member?: unknown; offset?: unknown; length?: unknown };
         if (typeof request.asset_id !== "string" || !ASSET_ID_PATTERN.test(request.asset_id)) {
           throw new TypeError("asset_id must be an asset_<sha256> id");
         }
         if (request.member !== undefined && (typeof request.member !== "string" || request.member.length === 0)) {
           throw new TypeError("member must be a non-empty string when provided");
         }
+        const { offset, length } = parsePreviewWindow(request);
         const { bytes, relativePath, mediaType } = await loadAssetBytes(options, request.asset_id);
         if (isZipArchive(bytes)) {
           const members = zipMembers(bytes);
           if (request.member === undefined) {
+            if (request.offset !== undefined || request.length !== undefined) {
+              throw new TypeError("offset/length page text content; omit them for the member listing");
+            }
             return {
               content: JSON.stringify({
                 ok: true,
@@ -253,21 +300,21 @@ export function createPreviewCoreAssetTool(
             };
           }
           const memberBytes = zipMemberBytes(bytes, request.member);
-          const head = textHead(memberBytes);
+          const page = decodePage(memberBytes, offset, length);
           return {
             content: JSON.stringify({
               ok: true,
               asset_id: request.asset_id,
               member: request.member,
               size_bytes: memberBytes.byteLength,
-              ...head,
+              ...page,
             }),
             details: { ok: true },
           };
         }
         if (isGzipArchive(bytes)) {
           const decoded = gunzipMemberBytes(bytes);
-          const head = textHead(decoded);
+          const page = decodePage(decoded, offset, length);
           return {
             content: JSON.stringify({
               ok: true,
@@ -276,13 +323,13 @@ export function createPreviewCoreAssetTool(
               is_gzip: true,
               decoded_size_bytes: decoded.byteLength,
               media_type: mediaTypeFor(bareGzipName(relativePath)),
-              ...head,
+              ...page,
             }),
             details: { ok: true },
           };
         }
         {
-          const head = textHead(bytes);
+          const page = decodePage(bytes, offset, length);
           return {
             content: JSON.stringify({
               ok: true,
@@ -290,7 +337,7 @@ export function createPreviewCoreAssetTool(
               relative_path: relativePath,
               media_type: mediaType,
               size_bytes: bytes.byteLength,
-              ...head,
+              ...page,
             }),
             details: { ok: true },
           };

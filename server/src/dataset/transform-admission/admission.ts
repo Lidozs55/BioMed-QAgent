@@ -913,7 +913,13 @@ function assertInspection(
   descriptor: ExpectedTransformOutputDescriptor,
 ): void {
   if (inspection.sha256 !== receipt.sha256 || inspection.sizeBytes !== receipt.size_bytes) {
-    rejection("OUTPUT_BYTES_MISMATCH", `output bytes do not match receipt for ${descriptor.relative_path}`);
+    rejection(
+      "OUTPUT_BYTES_MISMATCH",
+      `output bytes do not match receipt for ${descriptor.relative_path}; a common cause is the JSON newline ` +
+        "trap — a newline written as \\n inside the transform_source JSON can reach the sandbox as the two " +
+        "literal characters backslash and n, so emitted bytes differ from the receipt digest you computed; " +
+        "emit newlines at runtime with String.fromCharCode(10) (e.g. rows.join(String.fromCharCode(10)))",
+    );
   }
   if (!exactArray(inspection.header, descriptor.header, (left, right) => left === right)) {
     rejection("OUTPUT_HEADER_MISMATCH", `output header does not match schema descriptor ${descriptor.schema_ref}`);

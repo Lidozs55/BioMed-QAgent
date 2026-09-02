@@ -21,7 +21,7 @@
  * failure.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { BioMedAgentTool } from "../contracts.js";
@@ -193,6 +193,52 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
       absolute,
       rawText,
     };
+  }
+
+  // C3: decoding a very large CSV into one string hits V8's single-string cap
+  // and hard-crashes the Host. basic_statistics therefore summarizes a
+  // declared head-prefix sample beyond this cap; the other analysis tools
+  // keep exact whole-file semantics.
+  const BASIC_STATS_FULL_PARSE_CAP_BYTES = 64 * 1024 * 1024;
+
+  async function readCsvForStats(csvPath: string): Promise<{
+    table: ReturnType<typeof parseCsv>;
+    absolute: string;
+    sampling: {
+      mode: "head_prefix";
+      sample_rows: number;
+      sample_bytes: number;
+      total_bytes: number;
+    } | null;
+  }> {
+    const absolute = await resolveTaskLocalFile(csvPath, taskRoot);
+    const totalBytes = (await stat(absolute)).size;
+    if (totalBytes <= BASIC_STATS_FULL_PARSE_CAP_BYTES) {
+      const { table } = await readCsv(csvPath);
+      return { table, absolute, sampling: null };
+    }
+    const handle = await open(absolute, "r");
+    try {
+      const buffer = Buffer.alloc(BASIC_STATS_FULL_PARSE_CAP_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const head = buffer.subarray(0, Math.min(bytesRead, BASIC_STATS_FULL_PARSE_CAP_BYTES));
+      // Cut back to the last complete line so stats never see a truncated row.
+      const lastNewline = head.lastIndexOf(0x0a);
+      const sample = lastNewline > 0 ? head.subarray(0, lastNewline) : head;
+      const table = validateCsv(sample.toString("utf8"), absolute, sample.byteLength);
+      return {
+        table,
+        absolute,
+        sampling: {
+          mode: "head_prefix",
+          sample_rows: table.rows.length,
+          sample_bytes: sample.byteLength,
+          total_bytes: totalBytes,
+        },
+      };
+    } finally {
+      await handle.close();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -559,7 +605,10 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
     description:
       "Compute descriptive statistics (count, mean, std, min, quartiles, " +
       "max, missing counts) for numeric CSV columns, mirroring pandas " +
-      "describe(), and write a stats report CSV under staging/analysis/.",
+      "describe(), and write a stats report CSV under staging/analysis/. " +
+      "Files up to 64 MiB are analyzed exactly; larger files are summarized " +
+      "from a declared head-prefix sample (the result then carries a " +
+      "`sampling` block with sample_rows/sample_bytes/total_bytes).",
     parameters: {
       type: "object",
       properties: {
@@ -591,7 +640,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
         const columns = record.columns === undefined || record.columns === null
           ? null
           : toPythonIterable(record.columns);
-        const { table, absolute } = await readCsv(csvPath);
+        const { table, absolute, sampling } = await readCsvForStats(csvPath);
         const numCols = numericColumnSelectionAll(table.headers, table.numericColumns, columns);
         if (numCols.length === 0) {
           throw new Error("no numeric columns found to analyze");
@@ -633,6 +682,7 @@ export function createAnalysisTools(deps: AnalysisToolDeps): BioMedAgentTool[] {
           stats_report: "",
           summary,
           outputs: [] as string[],
+          ...(sampling === null ? {} : { sampling }),
         };
         const writes = await writeStaging({
           "stats_report.csv": Buffer.from(reportCsv, "utf8"),

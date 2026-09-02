@@ -554,6 +554,9 @@ describe("Core transform quarantine admission", () => {
 
     expect(evidence.decision).toBe("rejected");
     expect(evidence.rejection_code).toBe("OUTPUT_BYTES_MISMATCH");
+    // K3: the mismatch message names the JSON newline trap workaround so the
+    // model self-corrects instead of retrying the same signature (gold9).
+    expect(evidence.rejection_detail).toContain("String.fromCharCode(10)");
     await expect(readdir(fixture.commitParent)).resolves.toEqual([]);
   });
 

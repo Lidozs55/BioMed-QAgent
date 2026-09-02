@@ -39,6 +39,15 @@
 > - **销案（复核发现文档滞后）**：supervisor `--adopt` 持久化 run_id——代码已修（`gold-formal-supervisor.mjs` adopt 分支 writeState），旧待办撤销。
 >
 > **2026-09-02 复核新增 S 级待办（均非架构、保留 fail-closed，按杠杆率排序）**：①`agent/tools/clinvar.ts:11` GENE_SYMBOL 与 A 案对齐（`@` 现被工具层拒）；②**M2** preview_core_asset 加 offset/length 分块（gold2-r2 实证 153MB SOFT 中段不可达，链 1 最后一段）；③**K3 文案半**：prepare 工具描述与 admission 报错补 JSON 换行 workaround（String.fromCharCode(10)），gold9 实测烧 10+ 轮；④**C3 最小版**：basic_statistics 声明大表上限+抽样统计（`analysis.ts:190` 整文件进单串必炸）；⑤**X1** deny hint 附最近似合法路径（`agent/workspace/tools.ts`）；⑥**H1 口径复核**：`chembl-provider.ts` 的 spec.entities 通道疑已可用，gold5 的"11 形态全拒"可能全打在 binding.parameters 上，先复测再立项。另：**H2 收窄**（validate 已做 required_fields×schema 前置校验，残留仅未声明场景）、**K2/L5 定位未核实**（server 侧上限 256KB 且找不到 4096 代码落点，疑模型/传输层）、**L2 guidance 半边部分已覆盖**（execute 报错已点名 xlsx→csv 绑定姿势）。
+>
+> **2026-09-02 S 级批量落地（分支 fix/triage-s-quick-wins，①②③④ 四项，均保留 fail-closed）**：
+> - **① clinvar 工具层符号门 → 已落地**：`agent/tools/clinvar.ts` GENE_SYMBOL 增补 `_`/`@`（GTF2H2C_2/SNORD116@ 放行，与 Y1 两处 provider 门对齐；字符集仍禁空格/括号等查询语法字符，注入防护不变）。
+> - **② M2 preview 分块 → 已落地**：`preview_core_asset` 增加 offset/length 字符分页（workspace_read 同形态：默认 head 8192 字符、单次上限 65536 字符；zip member/gzip/纯文本三面生效；member listing 拒绝 offset/length；解码上限 256MiB 与既有提取上限一致）。链 1 最后一段缺口闭合。
+> - **③ K3 文案半 → 已落地**：prepare 的 transform_source 参数描述与 transform-admission `OUTPUT_BYTES_MISMATCH`（bytes≠receipt）报错均补 JSON 换行陷阱说明 + `String.fromCharCode(10)` workaround。
+> - **④ C3 最小版 → 已落地**：`basic_statistics` 超 64MiB 改头部前缀采样（切最后完整行），结果显式声明 `sampling` 块（mode/sample_rows/sample_bytes/total_bytes）；≤64MiB 行为逐字节不变（pandas parity 金测试通过）；其余 analysis 工具不动共享 readCsv，精确语义保留。
+> - **⑤ X1（deny hint 最近似合法路径）→ 本轮暂缓**：仅 1 例低危（deny+resume 即恢复），"最近似合法路径"需合法路径清单这一尚不存在的一等概念，错误近似提示比保守通用提示更有害；落点备查 `agent/workspace/tools.ts` readPathHint + PermissionDeniedError.resource。
+> - **⑥ H1 口径复核 → 仍开放**：需 live ChEMBL 复测（spec.entities 通道 vs binding.parameters），非代码改动。H2 收窄 / K2·L5 定位核实 / L2 guidance 剩余半边同批未动，仍按上行原样开放。
+>
 
 各 run 表格里历史标注的"prompt/产品/接口陷阱"归类保留作记录，分流修复时**以本节为准**。
 

@@ -8,7 +8,11 @@ export const LOOKUP_CLINVAR_COUNTS_TOOL_NAME = "lookup_clinvar_counts";
 const CLINVAR_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
 const MAX_GENE_SYMBOLS = 20;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const GENE_SYMBOL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+// HGNC current symbols legitimately contain '_' (e.g. GTF2H2C_2) and the '@'
+// cluster suffix on snoRNA/scaRNA genes (e.g. SNORD116@); rejecting them here
+// would fail-close real symbols the Y1-relaxed providers accept. Keep in sync
+// with families/inherited-disease-evidence and acquisition/gold9-providers.
+const GENE_SYMBOL = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,31}$/;
 const PROCESS_CLINVAR_LIMITER = new HostRateLimiter({ minInterval: 1 / 3 });
 
 interface ClinvarDeps {
