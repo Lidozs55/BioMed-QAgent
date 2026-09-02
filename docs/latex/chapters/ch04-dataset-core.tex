@@ -11,9 +11,9 @@ Agent 的自主决策面见 \ref{sec:agent-autonomy} 节。决策进入 Core 后
   \label{fig:core-deterministic-flow}
 \end{figure}
 
-详图展开 Core 内部的两条路线。A 路线使用已注册数据家族的固定操作骨架；B 路线处理动态规格：变换方只交付候选字节，隔离区和 Core 再通过重新计算摘要、检查闭合条件等方式统一校验。变换方不能选择校验、评估或发布模块，这构成贡献二的机制基础。该限定准入检查的拦截实效见 \ref{sec:multimodel} 节运行矩阵。
+详图展开 Core 内部的两条路线。A 路线使用已注册数据家族的固定操作骨架；B 路线处理动态规格：变换方只交付候选字节，隔离区和 Core 再通过重新计算摘要、检查闭合条件等方式统一校验。变换方不能选择校验、评估或发布模块，这构成贡献二的机制基础。
 
-表头与声明差一字段的变换被隔离区（quarantine）以 \code{OUTPUT\_\allowbreak{}HEADER\_\allowbreak{}MISMATCH} 拒绝（r5），占位符空壳 r4 曾是唯一穿透，随后以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 内容筛查封堵。
+表头与声明差一字段的变换被隔离区（quarantine）以 \code{OUTPUT\_\allowbreak{}HEADER\_\allowbreak{}MISMATCH} 拒绝；占位符空壳曾是内容筛查落地前的唯一穿透，随后以 \code{PLACEHOLDER\_\allowbreak{}CONTENT} 内容筛查封堵。
 
 八个阶段运行在共同的可靠性基座上（\ref{sec:reliability-base} 节）。此外，系统使用明确的结束状态区分“运行完成”和“正式发布”：拿不准就拒绝，终态包括 Rejected /\allowbreak{} NO\_\allowbreak{}DATA /\allowbreak{} Failed /\allowbreak{} Cancelled。以下按八个阶段依次说明。
 
@@ -84,7 +84,7 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 值一致时合并血缘并保留双来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}）；同一坐标的两个来源值以双列并排保留而非静默取舍——这些字段对齐与冲突记录由规范化、兼容性阶段与整合器的确定性规则共同完成，冲突审计随产物交付，
 无法自动裁决时才发起人工确认（\ref{sec:hil} 节）。
 
-真正需要“二选一”的少数同键冲突，表达整合采用先到优先（first source wins）作为可复现的终局裁决；裁真仍显式保留给研究者与人工确认（边界定性见 \ref{sec:boundaries} 节边界 5）。
+真正需要“二选一”的少数同键冲突，表达整合采用先到优先（first source wins）作为可复现的终局裁决；裁真仍显式保留给研究者与人工确认。
 
 \section{阶段 6：多表组装（derive）}\label{sec:stage6-derive}
 
@@ -104,7 +104,7 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 置信度按证据类型受到上限约束。确定性、受版本约束的解析可以获得较高可信等级；VLM、LLM、OCR 和网页抽取等非确定性来源最高封顶为 medium，并可按记录进入人工审核。系统关注的是“该记录由何种证据和处理产生”，而不是让模型自由输出一个看似精确的概率。
 
-验证结论还与明确的结束状态绑定。Rejected、NO\_\allowbreak{}DATA、Failed、Cancelled 四类结束状态相互独立，并遵循“拿不准就拒绝”原则。空主数据、兼容性失败或验证失败的结果一律不可发布；“运行完成”也不等于“发布物生成”（对抗样本及其拦截记录见 \ref{sec:multimodel} 节）。
+验证结论还与明确的结束状态绑定。Rejected、NO\_\allowbreak{}DATA、Failed、Cancelled 四类结束状态相互独立，并遵循“拿不准就拒绝”原则。空主数据、兼容性失败或验证失败的结果一律不可发布；“运行完成”也不等于“发布物生成”。
 
 \section{阶段 8：不可变发布与消费时重验（publish）}\label{sec:stage8-publish}
 
@@ -147,8 +147,8 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 代次围栏 & 发布前复核执行租约，超时或已取消的旧执行不得晚到覆盖新结果 & gold9 前两轮因主机崩溃与资源耗尽中断，新执行安全接管后续测通过 \\
 检查点与重放 & 已完成且输出摘要一致的操作按重放身份复用 & gold9 中断后续测一次通过，未重跑全链路 \\
 超时与取消 & 每个操作有界，取消即时生效 & gold9 会话取消路径的无界等待缺陷被定位并以强制取消修复 \\
-事件溯源 & 全部操作追加事件日志，状态可由日志重建 & qwen3.7-plus 三轮谎报“整合完成”被事件流的终态分类标为未完成（\ref{sec:multimodel} 节） \\
+事件溯源 & 全部操作追加事件日志，状态可由日志重建 & qwen3.7-plus 三轮谎报“整合完成”被事件流的终态分类标为未完成 \\
 Durable HIL & 审批请求与决策落盘；恢复以原调用重放、零 LLM 参与 & 机制与三档审批见 \ref{sec:hil} 节 \\
-内容摘要与重验 & 逐件 SHA-256；读取端每次读取重算，不匹配即拒绝展示 & 三案例全部产物经监督程序逐件重验一致（\ref{sec:eval-protocol} 节） \\
+内容摘要与重验 & 逐件 SHA-256；读取端每次读取重算，不匹配即拒绝展示 & 正式案例全部产物经监督程序逐件重验一致（\ref{sec:eval-protocol} 节） \\
 \bottomrule
 \end{xltabular}
