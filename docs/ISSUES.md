@@ -121,6 +121,7 @@
 - **影响：** 本机 `pnpm --filter @biomed/server test` 恒红 2 个文件，干扰失败测试循环的归因；CI（Linux）不受影响。
 - **最小复现：** 干净 main 上 `pnpm --filter @biomed/server exec vitest run tests/gold-v1-current-run-assertion.test.mjs tests/workspace.test.ts`。
 - **下一步：** (1) 用 vitest 逐行定位 .mjs 收集失败的 token（疑似 shebang 或 unicode 字符在 Vite transform 路径上的解析差异）；(2) workspace 测试按平台断言 Windows 的 EFTYPE/EACCES 差异，或在用例中按平台跳过非可执行 spawn 分支。
+- **追加（2026-09-02，`main` 合入 `ad4bc65e` 语义路由闸后第 3 个环境受限用例）：** `tests/semantic-route-fence.test.ts > rejects symlinked route state paths` 在 Windows 建符号链接即 `EPERM: operation not permitted, symlink`（测试在**建夹具**阶段就失败，fence 拒绝逻辑未被执行）；用例需 Developer Mode/管理员特权才能在本机运行。下一步：用例内按平台跳过 symlink 夹具分支（`process.platform === "win32" && 无特权 → skip`），或在 CI 矩阵标注 Linux-only。另：`ad4bc65e` 给 `writeJsonAtomic` 加的目录 fsync 在 Windows 对目录句柄 `sync()` 抛 EPERM，曾使本机全部持久化写入红测（同日已修：`process.platform !== "win32"` 才做目录 fsync，POSIX 语义不变）。
 
 ## 维护规则
 
