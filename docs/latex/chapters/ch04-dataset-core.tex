@@ -88,12 +88,18 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 \section{阶段 6：多表组装（derive）}\label{sec:stage6-derive}
 
-对于需要多实体关系的数据，数据家族的组装阶段生成多表候选，并检查主键、外键、基数和表角色。
+对于需要多实体关系的数据，数据家族的组装阶段生成多表候选，并检查主键、外键、基数和表角色。\footnote{主键：表中每行的唯一标识。外键：表中指向另一张表主键的字段，如测量表中的化合物编号指向化合物表。基数：两表间一条记录与另一表几条记录的对应关系，即一对一、一对多或多对多。表角色：各表分别承担记录测量值还是提供规范身份。}
 
-单表与多表是规格层可选形态：需求本身是单一粒度观察时（如 gold8 的 FAERS 计数）交付单表；需求横跨多个实体层级时（如 gold7 的研究-位点-映射、gold9 的基因-疾病-证据）才拆分多表——以生物活性数据为例，拆分为测量值表（activities）、实验条件表（assays）、
-化合物与靶点规范身份表（compounds/\allowbreak{}targets）、来源表与化合物交叉映射表（compound crosswalks）等，避免把不同粒度的观测压进重复严重的宽表。
+单表与多表是规格层可选形态：需求本身是单一粒度观察时（如 gold8 的 FAERS 计数）交付单表；需求横跨多个实体层级时（如 gold7 的研究-位点-映射、gold9 的基因-疾病-证据）才拆分多表——以生物活性数据为例，测量值表（activities）按声明的外键关联实验条件表（assays）与化合物规范身份表（compounds），并辅以靶点表、来源表与化合物交叉映射表等（图~\ref{fig:bioactivity-fk}），避免把不同粒度的观测压进重复严重的宽表。例如将实验条件并入测量值表，则同一实验的一千条测量记录须逐行重复相同的实验条件字段。
 
-多表发布清单记录表、关系、溯源引用和置信度引用，下游按显式关系而非列名猜测连接键（join key）；对习惯合并宽表的下游统计流程，研究者可在目标表结构中把交付声明为单表粒度（如 gold8）。
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.75\textwidth]{figures/biomed-qagent-bioactivity-multitable-fk.pdf}
+  \caption{生物活性数据的多表组装：activities 经外键多对一关联 assays 与 compounds}
+  \label{fig:bioactivity-fk}
+\end{figure}
+
+多表发布清单记录表、关系、溯源引用和置信度引用，下游按显式关系而非列名猜测连接键（join key）——如测量表按清单声明的 \code{compound\_\allowbreak{}id} 外键关联化合物表，而非依据两表同名的 \code{name} 列自行连接。若下游统计流程要求单表输入，研究者可在目标表结构中将交付声明为单表粒度（如 gold8）。
 
 \section{阶段 7：校验、置信度与产品评估（validate）}\label{sec:stage7-validate}
 
