@@ -124,7 +124,10 @@ describe("Pi system prompt", () => {
       /never call a provisional workspace CSV validated, published, formally complete, or a Dataset Core Publication/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /static route only for an exact listed family, schema, source, and topology match/i,
+      /if a listed static family exactly matches the product, use the static route/i,
+    );
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /author the FamilySpec topology yourself/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never infer provider availability from static enums/i,
@@ -228,16 +231,15 @@ describe("Pi system prompt", () => {
     );
   });
 
-  test("guides adjusted-parameter retries before switching source or reporting NO_DATA", () => {
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /retry the same route after adjusting the parameters/i,
-    );
+  test("guides read-the-source recovery on repeated errors before switching source or reporting NO_DATA", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/retry only genuinely transient conditions/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(/never repeat an unchanged failing call/i);
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /adjusted[- ]parameter[\s\S]*switch to a genuinely independent reliable source[\s\S]*report NO_DATA or the unavailable source/i,
+      /when the same error repeats[\s\S]*read_dataset_core_source[\s\S]*fix the rejected fact/i,
     );
-    expect(PHASE1_SYSTEM_PROMPT).toMatch(/openFDA FAERS aggregate lookup/i);
+    expect(PHASE1_SYSTEM_PROMPT).toMatch(
+      /switch to an independent source[\s\S]*report NO_DATA or the unavailable source/i,
+    );
   });
 
   test("forbids workspace exec acquisition bypasses and preserves extraction blockers", () => {
@@ -302,9 +304,9 @@ describe("Pi system prompt", () => {
     expect(SYSTEM_BRIEFING).toMatch(/no wall-clock or deadline constraints/i);
     expect(SYSTEM_BRIEFING).toMatch(/never invent any/i);
     expect(SYSTEM_BRIEFING).toMatch(/not reasons to quit early, narrow a request, or report a fake blocker/i);
-    // No spinning: stop same-shape retries, debug minimally, bind plans to calls.
-    expect(SYSTEM_BRIEFING).toMatch(/consecutive identical failure signatures/i);
-    expect(SYSTEM_BRIEFING).toMatch(/minimal single-variable debugging or a genuinely independent route or source/i);
+    // No spinning: on a repeated error, read the implementing source, bind plans to calls.
+    expect(SYSTEM_BRIEFING).toMatch(/when the same error repeats/i);
+    expect(SYSTEM_BRIEFING).toMatch(/call read_dataset_core_source to read the implementing source/i);
     expect(SYSTEM_BRIEFING).toMatch(/bind each stated next step to the tool call that executes it/i);
     // Exhaust before handoff (E3/J4/I1 model-half) and converge after publish
     // (C2/G4 post-publication verification bound).
@@ -463,9 +465,9 @@ describe("PiAgentAdapter", () => {
     expect(isRecoverablePiProviderError(undefined)).toBe(false);
   });
 
-  test("does not switch a selected dynamic requirement back to static execution", () => {
+  test("keeps a requirement on its chosen route unless the route cannot express the product", () => {
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /Once the dynamic route is selected[\s\S]*never authorizes validate_dataset_execution or execute_dataset_execution/i,
+      /fix the exact rejected fact and resubmit on that route[\s\S]*do not hop between routes/i,
     );
   });
 

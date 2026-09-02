@@ -863,12 +863,12 @@ export async function checkValidationProfileParity(options: { outputRoot: string
       outputDir: out,
       probeMappingSummaries: [probeSummary({ total: 10, mapped: 5, unmapped: 5, status: "partial" })],
     });
-    check(issues, result.status === "failed", "profile: coverage below floor fails");
-    check(issues, result.failed_count >= 1, "profile: coverage below floor failed_count >= 1");
+    check(issues, result.status === "passed", "profile: coverage below floor passes (report-only)");
+    check(issues, result.failed_count === 0, "profile: coverage below floor failed_count 0");
     const report = loadReport(out);
     const checks = (report["checks"] as Array<Record<string, unknown>>) ?? [];
     const coverage = checks.find((c) => c["check_id"] === "probe_coverage_required_gene_level");
-    check(issues, coverage !== undefined && coverage["passed"] === false, "profile: coverage below floor check failed");
+    check(issues, coverage !== undefined && coverage["passed"] === true, "profile: coverage below floor check report-only");
   }
 
   // test_gene_profile_zero_coverage_fails
@@ -885,8 +885,8 @@ export async function checkValidationProfileParity(options: { outputRoot: string
       outputDir: out,
       probeMappingSummaries: [probeSummary({ total: 10, mapped: 0, unmapped: 10, status: "unmapped" })],
     });
-    check(issues, result.status === "failed", "profile: zero coverage fails");
-    check(issues, result.failed_count >= 1, "profile: zero coverage failed_count >= 1");
+    check(issues, result.status === "passed", "profile: zero coverage passes (report-only)");
+    check(issues, result.failed_count === 0, "profile: zero coverage failed_count 0");
   }
 
   // test_gene_profile_residual_geo_probe_rows_fail
@@ -906,11 +906,11 @@ export async function checkValidationProfileParity(options: { outputRoot: string
       outputDir: out,
       probeMappingSummaries: null,
     });
-    check(issues, result.status === "failed", "profile: residual geo rows fail");
+    check(issues, result.status === "passed", "profile: residual geo rows pass (report-only)");
     const report = loadReport(out);
     const checks = (report["checks"] as Array<Record<string, unknown>>) ?? [];
     const coverage = checks.find((c) => c["check_id"] === "probe_coverage_required_gene_level");
-    check(issues, coverage !== undefined && coverage["passed"] === false, "profile: residual geo coverage check failed");
+    check(issues, coverage !== undefined && coverage["passed"] === true, "profile: residual geo coverage check report-only");
   }
 
   // test_gene_profile_no_probes_passes
