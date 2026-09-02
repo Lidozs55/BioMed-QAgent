@@ -10,8 +10,16 @@
 
 import { URL } from "node:url";
 
-/** Python ``DEFAULT_RATE_LIMIT_SECONDS``: 2s between requests (hard constraint). */
-export const DEFAULT_RATE_LIMIT_SECONDS = 2.0;
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
+/**
+ * Fallback per-host pacing for callers that omit an interval. Derived from
+ * the ``request_interval_ms`` settings default so the fallback matches the
+ * configured default instead of a second hardcoded value (2026-09-02 audit
+ * P0-4); production wiring (phase3-composition, business-tools) always
+ * passes the live settings value.
+ */
+export const DEFAULT_RATE_LIMIT_SECONDS = DEFAULT_RUNTIME_LIMITS.request_interval_ms / 1000;
 
 /** Python ``_normalized_host``: lowercase hostname without the trailing dot. */
 export function normalizedHost(url: string): string {

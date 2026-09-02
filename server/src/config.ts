@@ -9,13 +9,6 @@ export interface HostConfig {
   publicPort: number;
   shutdownTimeoutMs: number;
   /**
-   * TS Dataset Core per-operation wall-clock timeout in ms
-   * (``DATASET_OPERATION_TIMEOUT_MS``). Unset → the core's built-in default
-   * (120 s in phase3-composition); raise for large streaming builds (multi-GB
-   * GEO batches that cannot canonicalize within the default window).
-   */
-  operationTimeoutMs: number | undefined;
-  /**
    * Migration feature flag (plan §58): overrides the process.exec policy
    * regardless of preset. Removed once the settings layer stabilizes.
    */
@@ -25,7 +18,6 @@ export const DEFAULT_HOST_CONFIG = {
   HOST: "127.0.0.1",
   PORT: "5173",
   SHUTDOWN_TIMEOUT_MS: "10000",
-  DATASET_OPERATION_TIMEOUT_MS: "",
   AGENT_EXEC_POLICY: "",
 } as const;
 
@@ -58,21 +50,10 @@ export function parseHostConfig(environment: Environment): HostConfig {
       "SHUTDOWN_TIMEOUT_MS",
       environment.SHUTDOWN_TIMEOUT_MS ?? DEFAULT_HOST_CONFIG.SHUTDOWN_TIMEOUT_MS,
     ),
-    operationTimeoutMs: parseOptionalPositiveInteger(
-      "DATASET_OPERATION_TIMEOUT_MS",
-      environment.DATASET_OPERATION_TIMEOUT_MS ?? DEFAULT_HOST_CONFIG.DATASET_OPERATION_TIMEOUT_MS,
-    ),
     agentExecPolicy: parseAgentExecPolicy(environment.AGENT_EXEC_POLICY),
   };
 }
 
-function parseOptionalPositiveInteger(
-  name: string,
-  value: string | undefined,
-): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  return parsePositiveInteger(name, value);
-}
 function parseAgentExecPolicy(value: string | undefined): AgentExecPolicy | null {
   if (value === undefined || value.trim() === "") return null;
   if (value === "deny" || value === "ask" || value === "allow") return value;

@@ -13,6 +13,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_SAFETY_RESERVE_RATIO,
+} from "@biomed/contracts";
+
+import {
   BioMedAgentError,
   type BioMedAgentAdapter,
   type BioMedAgentEvent,
@@ -152,8 +157,6 @@ const DELTA_FLUSH_INTERVAL_MS = 32;
 // new assistant/reasoning/tool progress indicate a degenerate configuration.
 const MAX_STALLED_LENGTH_CONTINUATIONS = 3;
 const MIN_PROGRESS_CHARS = 32;
-/** Default safety-reserve share of the context window (settings default 5%). */
-const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
 /** Minimum recent context kept after compaction, as a fraction of the window. */
 const MIN_KEEP_RATIO = 0.05;
 /** Maximum final compaction target, as a fraction of the window. */
@@ -552,7 +555,7 @@ export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBu
   const contextWindow = config.contextWindow ?? 131_072;
   return {
     contextWindow,
-    maxTokens: config.maxTokens ?? 8_192,
+    maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
     reserveTokens: config.safetyReserveTokens
       ?? Math.round(contextWindow * DEFAULT_SAFETY_RESERVE_RATIO),
   };
@@ -797,7 +800,7 @@ async function createRealUpstreamSession(
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: currentWindow(),
-        maxTokens: current.maxTokens ?? 8_192,
+        maxTokens: current.maxTokens ?? DEFAULT_MAX_TOKENS,
       },
     ],
   });
@@ -968,7 +971,7 @@ async function createRealUpstreamSession(
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: next.contextWindow ?? 131_072,
-              maxTokens: next.maxTokens ?? 8_192,
+              maxTokens: next.maxTokens ?? DEFAULT_MAX_TOKENS,
             },
           ],
         });

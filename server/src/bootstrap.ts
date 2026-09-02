@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import type { RuntimeLimits } from "@biomed/contracts";
+import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 
 import type { ApplicationHostOptions } from "./app/create-app.js";
 import { LifecycleRegistry } from "./app/lifecycle.js";
@@ -105,11 +105,24 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
   const hilApprovalPolicy = new JsonHilApprovalPolicyStore(
     path.join(settingsDir, "hil-approval.json"),
   );
-  const database = input.database ?? new DatabaseClient({ cacheDir, databasesDir });
-  const browserPool = input.browserPool ?? new NodeBrowserPool({ maxContexts: 4 });
+  // Settings first: the bridge/browser defaults below must come from the
+  // same RuntimeLimits the user configures (2026-09-02 hardcoded-params
+  // audit P0-1/P0-2), not from divergent hardcoded fallbacks.
   const modelSettings = input.modelSettings ?? await ModelSettingsService.create({
     settingsDir,
     legacyRegistryPath: path.join(settingsDir, "model_registry.db"),
+  });
+  const runtimeLimits = modelSettings.resolveRuntimeLimits?.() ?? {
+    ...DEFAULT_RUNTIME_LIMITS,
+  };
+  const database = input.database ?? new DatabaseClient({
+    cacheDir,
+    databasesDir,
+    timeoutMs: runtimeLimits.database_timeout_seconds * 1000,
+  });
+  const browserPool = input.browserPool ?? new NodeBrowserPool({
+    maxContexts: 4,
+    navigationTimeoutMs: runtimeLimits.browser_timeout_seconds * 1000,
   });
   const productApi = input.productApi ?? await createProductApi({
     tasksRoot,
@@ -149,7 +162,6 @@ export async function createBootstrapOptions(input: BootstrapInput): Promise<Boo
       workspacesRoot,
       repositoryRoot,
       agentExecPolicy: config.agentExecPolicy,
-      operationTimeoutMs: config.operationTimeoutMs,
       permissionPolicyStore,
       permissionBrokerRegistry,
       hilApprovalPolicy,

@@ -13,6 +13,8 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import type { BioMedAgentTool } from "../contracts.js";
 import type { ToolHooks } from "./tool-hooks.js";
 import { createDownloadProgressReporter, noopHooks } from "./tool-hooks.js";
@@ -477,7 +479,7 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
     description:
       "Download a GEO matrix, SOFT, or supplementary file as an immutable " +
       "repository-processed SourceAsset. Compressed files remain compressed. " +
-      "max_size_mb caps the download size (default 4096 MiB — large enough " +
+      `max_size_mb caps the download size (default ${DEFAULT_RUNTIME_LIMITS.max_download_mib} MiB — large enough ` +
       "for real series matrices like GSE33000's 107 MiB file); raise it " +
       "explicitly for very large supplementary files. " +
       "For file_type='suppl', call list_geo_supplementary_files first to get " +
@@ -500,7 +502,8 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
         },
         max_size_mb: {
           type: "number",
-          description: "Maximum download size in MiB (default 4096).",
+          description:
+            `Maximum download size in MiB (default ${DEFAULT_RUNTIME_LIMITS.max_download_mib}).`,
         },
       },
       required: ["accession"],
@@ -517,7 +520,12 @@ export function createDownloadGeoTool(options: GeoToolsOptions): BioMedAgentTool
       const fileType = typeof record.file_type === "string" ? record.file_type : "matrix";
       const filename =
         typeof record.filename === "string" ? record.filename : null;
-      const configuredMaxMb = (options.maxDownloadBytes ?? 8192 * 1024 * 1024) / (1024 * 1024);
+      // Fallback derives from the RuntimeLimits default so it cannot drift from
+      // the settings default (2026-09-02 audit P0-8); business-tools passes the
+      // live settings value.
+      const configuredMaxMb =
+        (options.maxDownloadBytes ?? DEFAULT_RUNTIME_LIMITS.max_download_mib * 1024 * 1024) /
+        (1024 * 1024);
       const requestedMaxMb = typeof record.max_size_mb === "number" ? record.max_size_mb : configuredMaxMb;
       const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
       try {
@@ -637,7 +645,8 @@ export function createDownloadGeoPlatformAnnotationTool(
         },
         max_size_mb: {
           type: "number",
-          description: "Maximum download size in MiB (default 4096).",
+          description:
+            `Maximum download size in MiB (default ${DEFAULT_RUNTIME_LIMITS.max_download_mib}).`,
         },
       },
       required: ["gpl"],
@@ -646,7 +655,10 @@ export function createDownloadGeoPlatformAnnotationTool(
     execute: async (argumentsValue, signal) => {
       const record = argumentsValue as { gpl?: unknown; max_size_mb?: unknown };
       const gpl = typeof record.gpl === "string" ? record.gpl : "";
-      const configuredMaxMb = (options.maxDownloadBytes ?? 8192 * 1024 * 1024) / (1024 * 1024);
+      // Same settings-derived fallback as download_geo (audit P0-8).
+      const configuredMaxMb =
+        (options.maxDownloadBytes ?? DEFAULT_RUNTIME_LIMITS.max_download_mib * 1024 * 1024) /
+        (1024 * 1024);
       const requestedMaxMb = typeof record.max_size_mb === "number" ? record.max_size_mb : configuredMaxMb;
       const maxSizeMb = Math.min(requestedMaxMb, configuredMaxMb);
       if (!GPL_PATTERN.test(gpl || "")) {

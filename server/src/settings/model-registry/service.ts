@@ -13,6 +13,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
 import {
+  DEFAULT_MAX_TOKENS,
   DEFAULT_RUNTIME_LIMITS,
   RUNTIME_LIMIT_RANGES,
   type ModelRegistryListQuery,
@@ -75,12 +76,8 @@ function maskApiKey(value: string): string {
 
 const DEFAULT_PAGE_SIZE = 20;
 
-/**
- * 全局默认最大输出 tokens，与 store.ts ``defaultRegistry`` 的
- * ``max_tokens`` 默认一致；激活三源皆空的模型时回退到它，
- * 保证 ``settings.max_tokens`` 总有明确来源。
- */
-const DEFAULT_MAX_TOKENS = 8192;
+// 激活三源皆空的模型时回退到 contracts 的全局默认 max_tokens
+// （store.ts ``defaultRegistry`` 同源），保证 ``settings.max_tokens`` 总有明确来源。
 
 function runtimeLimitsPatch(value: unknown): Partial<RuntimeLimits> {
   const record = asRecord(value);

@@ -59,6 +59,16 @@ export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
   request_interval_ms: 500,
 };
 
+/**
+ * Shipped model-settings defaults (2026-09-02 hardcoded-params audit P0-12):
+ * the single source for ``store.defaultRegistry`` and the Pi-adapter fallbacks,
+ * so the settings default and the code fallback can no longer drift apart.
+ */
+export const DEFAULT_MAX_TOKENS = 8192;
+export const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
+export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.85;
+export const DEFAULT_COMPACTION_TARGET_RATIO = 0.45;
+
 export const RUNTIME_LIMIT_RANGES = {
   command_timeout_seconds: { min: 1, max: 86_400 },
   command_output_kib: { min: 64, max: 16_384 },

@@ -1,25 +1,36 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import { canonicalizeWithAncestor } from "../permissions/path-normalizer.js";
 import type { PermissionBroker } from "../permissions/broker.js";
 import type { WorkspaceAuditSink } from "./audit.js";
 import { WorkspacePolicyError, type WorkspaceLimits } from "./types.js";
 import { requireSafeId as validateSafeId } from "../ids.js";
 
+/**
+ * Workspace fallback limits. The budget values derive from the
+ * ``RuntimeLimits`` settings defaults so a caller that omits ``limits``
+ * behaves exactly like the shipped settings (2026-09-02 audit P0-5);
+ * production wiring (phase3-composition) always passes the live settings.
+ * ``maxListDepth``/``maxListEntries``/``maxSearchResults``/
+ * ``maxSearchLineChars``/``maxSearchOutputChars`` have no settings surface
+ * yet and stay local invariants.
+ */
 export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
-  maxReadBytes: 64 * 1024,
-  maxReadCharacters: 64 * 1024,
+  maxReadBytes: DEFAULT_RUNTIME_LIMITS.workspace_read_kib * 1024,
+  maxReadCharacters: DEFAULT_RUNTIME_LIMITS.workspace_read_kib * 1024,
   maxListDepth: 3,
   maxListEntries: 200,
-  maxSearchFileBytes: 128 * 1024,
-  maxSearchFiles: 200,
+  maxSearchFileBytes: DEFAULT_RUNTIME_LIMITS.workspace_search_file_mib * 1024 * 1024,
+  maxSearchFiles: DEFAULT_RUNTIME_LIMITS.workspace_search_max_files,
   maxSearchResults: 100,
   maxSearchLineChars: 1_000,
   maxSearchOutputChars: 32 * 1024,
-  maxWriteBytes: 256 * 1024,
-  maxExecOutputBytes: 256 * 1024,
-  defaultExecTimeoutMs: 600_000,
+  maxWriteBytes: DEFAULT_RUNTIME_LIMITS.workspace_write_kib * 1024,
+  maxExecOutputBytes: DEFAULT_RUNTIME_LIMITS.command_output_kib * 1024,
+  defaultExecTimeoutMs: DEFAULT_RUNTIME_LIMITS.command_timeout_seconds * 1000,
   maxExecTimeoutMs: 86_400_000,
 };
 

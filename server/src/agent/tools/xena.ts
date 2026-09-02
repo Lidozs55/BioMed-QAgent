@@ -15,6 +15,8 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import path from "node:path";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 import type { BioMedAgentTool } from "../contracts.js";
 import { noopHooks, createDownloadProgressReporter, type ToolServiceDeps } from "./tool-hooks.js";
 import {
@@ -43,10 +45,13 @@ import {
 import { rateLimit } from "./rate-limit.js";
 import { errorResult } from "./result.js";
 
-/** Python ``MAX_CRAWLER_DOWNLOAD_BYTES``: 4 GiB dataset-scale downloads. */
-export const XENA_MAX_DOWNLOAD_BYTES = 4096 * 1024 * 1024;
-/** Python ``DEFAULT_RATE_LIMIT_SECONDS`` (AGENTS.md: 2s between requests). */
-export const XENA_RATE_LIMIT_MS = 2000;
+/**
+ * Fallbacks for callers that omit the settings-derived deps. Derived from the
+ * ``RuntimeLimits`` defaults so they cannot drift from the configured values
+ * (2026-09-02 audit P0-8); business-tools always passes the live settings.
+ */
+export const XENA_MAX_DOWNLOAD_BYTES = DEFAULT_RUNTIME_LIMITS.max_download_mib * 1024 * 1024;
+export const XENA_RATE_LIMIT_MS = DEFAULT_RUNTIME_LIMITS.request_interval_ms;
 /** Minimum interval between emitted download-progress events. */
 export const XENA_PROGRESS_INTERVAL_MS = 1000;
 /** Progress is also emitted whenever this many new bytes arrive. */

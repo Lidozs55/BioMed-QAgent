@@ -69,6 +69,7 @@ import {
 import type { CoreProductTopologyRequirements } from "../dataset/dynamic-family/product-requirements.js";
 import { TypeScriptDatasetCore } from "../dataset/service/ts-core.js";
 import { BrowserParserRecipeRegistry, createDefaultBrowserParserRecipeRegistry } from "../dataset/acquisition/browser-recipe-registry.js";
+import { MAX_CRAWLER_DOWNLOAD_BYTES } from "../external/crawler/index.js";
 import { PublicHttpClient } from "../external/network/http-client.js";
 import { ContentCache } from "../external/acquisition/content-cache.js";
 import { DatabaseClient } from "../persistence/db-client.js";
@@ -339,9 +340,10 @@ export interface Phase3RuntimeOptions {
   /** Limits are snapshotted whenever a new task workspace/run is created. */
   resolveRuntimeLimits?: () => RuntimeLimits;
   /**
-   * Operation wall-clock timeout in ms for the TS Dataset Core.
-   * Defaults to 120_000 (120 s), matching the retired Python baseline
-   * executor (``backend/app/datasets/runtime/executor.py``).
+   * Composition/test override for the TS Dataset Core per-operation
+   * wall-clock timeout. Production does not set it: the default comes from
+   * the ``dataset_operation_timeout_seconds`` setting (audit P0-10 retired
+   * the legacy ``DATASET_OPERATION_TIMEOUT_MS`` env bypass on 2026-09-02).
    */
   operationTimeoutMs?: number;
   /** Business capabilities: DB bridge, browser pool, secrets. */
@@ -397,6 +399,9 @@ export function createPhase3AcquisitionRuntime(options: {
   client: PublicHttpClient;
   sourceAssetRegistry?: SourceAssetRegistry;
   registrar?: CacheRegistrar | null;
+  /** RuntimeLimits-derived download budgets (audit P0-6/P0-7). */
+  maxDownloadBytes?: number;
+  downloadTimeoutMs?: number;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
   for (const provider of createCoreAcquisitionProviders()) registry.registerProvider(provider);
@@ -530,6 +535,8 @@ export async function createPhase3Runtime(
         client,
         sourceAssetRegistry,
         registrar,
+        maxDownloadBytes: limits.max_download_mib * 1024 * 1024,
+        downloadTimeoutMs: limits.download_timeout_seconds * 1000,
       });
       const service = createDatasetCoreService({
         tsCore,
@@ -546,6 +553,9 @@ export async function createPhase3Runtime(
           client,
           minInterval: limits.request_interval_ms / 1000,
           browserTimeoutMs: limits.browser_timeout_seconds * 1000,
+          // Clamp the crawler download cap with max_download_mib so lowering
+          // the setting bounds every download path (audit P0-3).
+          downloadCap: Math.min(MAX_CRAWLER_DOWNLOAD_BYTES, limits.max_download_mib * 1024 * 1024),
         });
         browser = {
           crawler,

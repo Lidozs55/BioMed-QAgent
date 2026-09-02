@@ -21,6 +21,8 @@
 
 import { DEFAULT_RUNTIME_LIMITS, type RuntimeLimits } from "@biomed/contracts";
 
+import { defaultNcbiClientConfig } from "../../external/ncbi/client.js";
+import { HostRateLimiter } from "../../external/ncbi/retry.js";
 import { PublicHttpClient } from "../../external/network/http-client.js";
 import { ContentCache } from "../../external/acquisition/content-cache.js";
 import type { BrowserFallback } from "../../external/sources/fallback.js";
@@ -126,12 +128,23 @@ export async function createBusinessToolBundle(
   const client = context.browser?.client ?? new PublicHttpClient({ timeoutMs: limits.http_timeout_seconds * 1000 });
   const cache = context.browser?.cache ?? new ContentCache(`${taskRoot}/cache`);
   const disabled = context.disabledTools ?? new Set<string>();
+  // NCBI contact identity is env-driven (NCBI_EMAIL/NCBI_TOOL/...) so each
+  // deployment sends a real contact address; previously the GEO eutils client
+  // hardcoded a divergent identity that ignored NCBI_EMAIL (audit P0-11).
+  const ncbiIdentity = defaultNcbiClientConfig();
   const geoEutils = {
-    email: "biomed-agent@example.com",
-    tool: "biomed-qagent",
-    userAgent: "BioMed-QAgent/1.0",
+    email: ncbiIdentity.email,
+    tool: ncbiIdentity.tool,
+    userAgent: ncbiIdentity.userAgent,
+    apiKey: ncbiIdentity.apiKey ?? null,
     totalTimeoutMs: limits.http_timeout_seconds * 1000,
   };
+  // dbSNP/ClinVar/openFDA/GWAS Catalog pace through private process-wide
+  // limiters; hand each tool a settings-paced limiter so the user's
+  // request_interval_ms applies here too (audit P0-4/P0-11 sibling wiring).
+  const ncbiToolPacing = () => new HostRateLimiter({
+    minInterval: limits.request_interval_ms / 1000,
+  });
   const tools: BioMedAgentTool[] = [];
   const unavailable = new Set<string>();
   const ownerOf = new Map<string, string>();
@@ -170,11 +183,11 @@ export async function createBusinessToolBundle(
     downloadTimeoutMs: limits.download_timeout_seconds * 1000,
     config: { totalTimeoutMs: limits.http_timeout_seconds * 1000 },
   }), "pubmed");
-  register(createDbsnpTools({ client }), "dbsnp");
-  register(createOpenFdaTools({ client }), "openfda");
-  register(createClinvarTools({ client }), "clinvar");
+  register(createDbsnpTools({ client, limiter: ncbiToolPacing() }), "dbsnp");
+  register(createOpenFdaTools({ client, limiter: ncbiToolPacing() }), "openfda");
+  register(createClinvarTools({ client, limiter: ncbiToolPacing() }), "clinvar");
   register(createMgnifyTools({ client }), "mgnify");
-  register(createGwasCatalogTools({ client }), "gwas_catalog");
+  register(createGwasCatalogTools({ client, limiter: ncbiToolPacing() }), "gwas_catalog");
   register(createGeoTools({
     taskRoot,
     cache,

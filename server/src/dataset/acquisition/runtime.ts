@@ -256,8 +256,47 @@ export interface CoreAcquisitionRuntimeOptions {
   sourceAssetRegistry: SourceAssetRegistry;
   registry: CoreAcquisitionRegistry;
   maxAttempts?: number;
+  /**
+   * Host-side download budget from ``RuntimeLimits.max_download_mib``: every
+   * provider plan's ``maxBytes`` is clamped down to it (2026-09-02 audit
+   * P0-7), so lowering the setting bounds all providers even when their
+   * per-provider caps are larger. Provider caps remain authoritative when
+   * smaller.
+   */
+  maxDownloadBytes?: number;
+  /**
+   * Host-side download budget from ``RuntimeLimits.download_timeout_seconds``:
+   * a provider plan's measured ``timeoutMs`` floor is raised to it
+   * (2026-09-02 audit P0-6), so raising the setting honors the user's intent
+   * even for providers that hardcode a measured wall-clock floor (Orphanet).
+   * Plans without a floor keep the generic HTTP timeout.
+   */
+  downloadTimeoutMs?: number;
   /** Global cache registrar (raw downloads → data/cache). */
   registrar?: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
+}
+
+/**
+ * Apply the host-side download budgets to a provider plan (audit P0-6/P0-7):
+ * ``maxBytes`` is clamped to ``min(provider cap, max_download_mib)`` and a
+ * provider ``timeoutMs`` floor is raised to ``max(floor, download_timeout)``.
+ */
+export function clampAcquisitionDownloadBudget(
+  plan: Pick<AcquisitionDownloadPlan, "maxBytes" | "timeoutMs">,
+  budgets: { maxDownloadBytes?: number; downloadTimeoutMs?: number },
+): Pick<AcquisitionDownloadPlan, "maxBytes" | "timeoutMs"> {
+  return {
+    maxBytes:
+      budgets.maxDownloadBytes === undefined
+        ? plan.maxBytes
+        : Math.min(plan.maxBytes, budgets.maxDownloadBytes),
+    timeoutMs:
+      plan.timeoutMs === undefined
+        ? undefined
+        : budgets.downloadTimeoutMs === undefined
+          ? plan.timeoutMs
+          : Math.max(plan.timeoutMs, budgets.downloadTimeoutMs),
+  };
 }
 
 export class CoreAcquisitionRuntime {
@@ -268,6 +307,8 @@ export class CoreAcquisitionRuntime {
   readonly #assets: SourceAssetRegistry;
   readonly #registry: CoreAcquisitionRegistry;
   readonly #maxAttempts: number;
+  readonly #maxDownloadBytes: number | undefined;
+  readonly #downloadTimeoutMs: number | undefined;
   readonly #registrar: import("../../persistence/cache-registrar.js").CacheRegistrar | null;
   #attemptAppendQueue: Promise<void> = Promise.resolve();
 
@@ -279,6 +320,8 @@ export class CoreAcquisitionRuntime {
     this.#assets = options.sourceAssetRegistry;
     this.#registry = options.registry;
     this.#maxAttempts = options.maxAttempts ?? 3;
+    this.#maxDownloadBytes = options.maxDownloadBytes;
+    this.#downloadTimeoutMs = options.downloadTimeoutMs;
     this.#registrar = options.registrar ?? null;
   }
 
@@ -318,6 +361,10 @@ export class CoreAcquisitionRuntime {
       const partial = await stat(partPath).catch(() => null);
       const result = await acquireSource({
         ...plan,
+        ...clampAcquisitionDownloadBudget(plan, {
+          maxDownloadBytes: this.#maxDownloadBytes,
+          downloadTimeoutMs: this.#downloadTimeoutMs,
+        }),
         workdirRoot: this.#taskRoot,
         cache: this.#cache,
         client: this.#client,

@@ -16,6 +16,8 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_RUNTIME_LIMITS } from "@biomed/contracts";
+
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROTOCOL_VERSION = "1";
 
@@ -66,7 +68,12 @@ export interface DatabaseClientOptions {
   bridgePath?: string;
   cacheDir?: string;
   databasesDir?: string;
-  /** Default per-request timeout (ms). */
+  /**
+   * Default per-request timeout (ms). Falls back to the RuntimeLimits
+   * ``database_timeout_seconds`` default so the fallback can never drift
+   * from the settings default (2026-09-02 audit P0-1); production callers
+   * pass the live settings value explicitly.
+   */
   timeoutMs?: number;
   onLog?: (line: string) => void;
 }
@@ -113,7 +120,7 @@ export class DatabaseClient {
     this.bridgePath = options.bridgePath ?? defaultBridgePath();
     this.cacheDir = options.cacheDir;
     this.databasesDir = options.databasesDir;
-    this.timeoutMs = options.timeoutMs ?? 120_000;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_RUNTIME_LIMITS.database_timeout_seconds * 1000;
     this.onLog = options.onLog;
   }
 
