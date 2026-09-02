@@ -56,11 +56,26 @@ files with `download_supplementary`.
   paper_records, experiment_records, primary activity_value_records,
   chart_series, chart_points, and supplementary_asset_records.
 - Preserve raw value, raw unit, relation, original text, source locator,
-  extraction method, and confidence. The chart_series.human_review_status and
-  chart_points.review_status fields are mandatory for chart evidence.
-- Estimated or uncertain chart evidence remains human_review_pending until a
-  genuine evidence-bound HIL acceptance. Credential-use approval is not a data
-  review and cannot release the publication.
+  extraction method, and confidence.
+- Formal quantitative products accept only exact published chart coordinates:
+  explicit numeric tokens unambiguously bound to the figure, panel, series,
+  dose/condition, and measurement. Search, in order, article tables and text,
+  supplementary files, official publisher source data, the paper's Data
+  Availability statement, and an author-declared repository/accession. A
+  search page may discover a source, but only the registered official or
+  author-declared asset supplies formal values.
+- Do not digitize raster pixels or vector geometry, interpolate or fit a curve,
+  infer points from an IC50, or reconstruct an unstated dilution series. Human
+  review can confirm an explicit published token but cannot make an estimate
+  exact.
+- If the bounded source search finds no exact coordinates, keep chart-series
+  discovery and locator facts, leave chart_points empty, and publish the
+  independently exact records such as tabulated IC50 values. The final report
+  must name the skipped figure/panel, list the searched source classes, state
+  that no exact point data were published or found, and recommend that the user
+  provide author source data or contact the authors. If exact data are found
+  but inaccessible or lack a formal carrier, request the specific upload,
+  access, or registration needed instead of substituting estimates.
 
 ## Citations
 

@@ -66,7 +66,15 @@ measurement semantics, identity rules, and valid artifact projections. A
 requirement manifest may require a complete or partial closure of a package, but
 it cannot introduce an unregistered topology.
 
-### Figure/chart evidence publication route (implemented)
+### Figure/chart evidence publication route (implemented; estimated-point path deprecated)
+
+[ADR-043](../adr/043-exact-only-chart-values.md) now requires formal chart
+coordinates to come from explicit numeric source data. The VLM estimated-point
+and point-correction behavior described below remains implementation history and
+temporary compatibility code; it is deprecated and must not be used for new
+formal products. Current behavior and the removal inventory are authoritative in
+[Exact-only chart data policy](chart-exact-data-policy.md). Figure/series
+identification, axis/legend validation and locators remain active capabilities.
 
 The `figure_evidence` capability is realized by the
 `bioactivity-measurement/chart-evidence` module and now runs inside the same
@@ -96,18 +104,19 @@ Core trust boundary as every other family:
   match exactly; conflicting duplicates remain a hard rejection, while the
   first page locator is retained deterministically. A carrier with no admitted
   chart points is marked `not_required`, rechecked against the publication-stage
-  chart gate, and may receive deterministic extraction provenance directly;
-  any carrier containing estimated points remains non-formal until human review
-  produces a separate review-closed carrier.
-- **Provenance retention.** The formal publication keeps, per series and per
-  point: source asset, page/bbox locator, extraction model name and pinned
-  version, every transform step (`vlm_extract`, `coordinate_transform`,
-  `unit_transform`, `human_correction`) with input/output digests and prompt
-  parameters, point-level confidence with reason, and review state.
-- **Review state machine.** `not_required | pending | accepted | corrected |
-  rejected`; human review may change values (corrected) but never upgrades
-  source or extraction reliability. Estimated or low-confidence primary points
-  require `accepted`/`corrected` review; rejected rows never publish.
+  chart gate, and may receive deterministic extraction provenance directly.
+  The former review-closed estimated carrier remains legacy code only; new
+  products must reject/skip it and never bind it.
+- **Provenance retention.** Formal series keep their registered paper asset,
+  page/bbox locator and VLM model/prompt identity. Formal non-empty points keep
+  the explicit numeric source-data asset plus cell/record locator and any
+  deterministic unit transform; pixel coordinate transforms and human
+  corrections cannot establish exact numeric provenance.
+- **Legacy review state machine (deprecated for chart coordinates).**
+  `not_required | pending | accepted | corrected | rejected`; this remains only
+  while estimated-point code is removed. Human review never makes a digitized
+  value exact, and estimated/low-confidence chart points no longer qualify for
+  new formal publication regardless of review status.
 - **Fail-closed gates.** The chart gate (`evaluateChartEvidencePublication`)
   runs before assembly and again inside validation; provenance gaps, missing
   transform digests, invalid locators, or pending reviews fail the build with a
@@ -196,19 +205,18 @@ maximum 12 pages and 25 million pixels per page); it does not rely on embedded
 image XObjects, browser screenshots or the Chromium PDF viewer. Rendered PNGs
 remain task staging and never become publication inputs by themselves.
 
-After point-level `vlm_extraction` HIL, the processing layer writes a
-content-addressed evidence manifest containing source asset IDs, page/bbox,
-model and version, prompt digest, axis/legend facts, point values, confidence,
-review IDs, evidence digests, reviewer, review time and corrections. Dataset
-Core registers that manifest as a derived SourceAsset and persists the matching
-OperationResult. Publication rechecks every chart/point row against the manifest
-bytes and provenance before B3; model output copied into a workspace CSV is not
-accepted.
+The processing layer writes a content-addressed VLM evidence manifest for
+figure/series discovery containing source asset IDs, page/bbox, model/version,
+prompt digest and axis/legend facts. Dataset Core registers it as a derived
+SourceAsset with the matching OperationResult. Non-empty formal points require a
+separate registered numeric source-data carrier and cell/record locator; model
+output copied into a workspace CSV is not accepted.
 
-Review states are `pending -> accepted | corrected | rejected`. Low-confidence
-or estimated points cannot publish while pending. A correction retains original
-values and HIL evidence. Point-level `vlm_extraction` review and final
-`publication_acceptance` are distinct blocking decisions; credential approval
+The old point-review states `pending -> accepted | corrected | rejected` are
+retained temporarily for legacy evidence replay. They are not an exactness
+mechanism: low-confidence or estimated chart coordinates are excluded from new
+formal products regardless of review state. Series/locator review and final
+`publication_acceptance` remain distinct decisions; credential approval
 satisfies neither.
 
 Official supplementary ZIPs are Core-acquired carriers. The bounded ZIP parser
