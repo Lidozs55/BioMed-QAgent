@@ -123,7 +123,11 @@ CSV、JSONL 或 Parquet 的选择需考虑可读性、规模和查询效率。
 
 ### 22.7 人工确认点
 
-字段映射、低置信图表值和单位转换哪些必须触发 HIL，需要按 Demo 交互成本确定。
+字段映射和单位转换的 HIL 触发范围仍需按 Demo 交互成本确定。图表坐标的
+精确性不再是开放设计问题：依据 [ADR-043](../adr/043-exact-only-chart-values.md)，
+HIL 只能确认 figure/series/axis/legend 语义或来源映射，不能把低置信、数字化或
+模型推断的点升级为 exact；没有显式 numeric source-data 时应审计后跳过
+`chart_points` 并报告缺口。
 
 ### 22.8 内置 Python 解释器分发
 

@@ -125,9 +125,10 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 6. **验证（Validate）**：由服务端版本化 Validation Profile 驱动，非提示词约束；
 7. **发布（Publish）**：通过验证才**原子提升**为不可变 `DatasetPublication`。
 
-**自动识别异常**（加分项）：缺失、重复、单位不一致的识别；低置信图表值的坐标轴 /
-图例校验；对论文源数值做末位数 / 末两位数分布与插值规律检测（固定代码卡方检验，
-异常时该图表置信度降级为 low）；需要时请求人工建议后修正（HIL，见 §3.5）。
+**自动识别异常**（加分项）：缺失、重复、单位不一致的识别；图表坐标轴 / 图例
+语义校验；对论文明确发布的数值做末位数 / 末两位数分布与插值规律检测（固定代码
+卡方检验，异常时置信度降级为 low）；需要时请求人工确认来源映射或单位语义（HIL，
+见 §3.5）。像素/矢量数字化、OCR 推断、插值和拟合坐标不作为正式数值。
 
 ### 3.4 来源标注 · 可追溯性
 
@@ -154,18 +155,19 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 ### 3.6 图表 / 图像数据提取 · 视觉证据
 
 - 可选使用 Playwright 对网页 / 论文页面截图；
-- 以 **Qwen-VL / PDF 解析 / caption 文本** 组成**降级链路**提取图表数据；正式输入
-  必须来自 Core asset ID，提取后注册带模型/版本、prompt digest、page/bbox、confidence
-  与点级 HIL 的 evidence manifest 和 OperationResult；
-- 低置信图点先经过 `vlm_extraction` HIL，Core 在 B3 前逐点核对 evidence manifest；
-  最终 Publication 仍需独立 `publication_acceptance`，二者不能由 credential approval 代替。
-- 提取产物带 `estimated` / `axis_unclear` / `legend_unclear` / `human_review_status`
-  质量字段，可复用 Durable HIL / Confidence 协议做人工审核。
-- 能力分两段：**canonical `chart-evidence` 数据 → 生产 `bioactivity_measurement`
-  图表四表的正式发布已闭环**（schema + registered parsers + 组装分派、点级
-  `chart_evidence_gate` fail-closed、HIL correction 与逐件 SHA-256，见
-  [TODO.md](TODO.md) 完成记录）；`extract_chart_data_vlm` 的 workspace CSV →
-  canonical evidence 注册的生产桥接与自然语言端到端案例**仍待办**（[TODO.md](TODO.md) P0）。
+- 以 **Qwen-VL / PDF 解析 / caption 文本** 组成降级链路，发现图表、panel、series、
+  坐标轴、图例和 page/bbox locator；VLM 图像几何不是精确数值来源；
+- 正式 chart coordinates 全局采用 **exact-only**：非空点必须来自正文表格、补充数值
+  文件、官方出版社 source data 或论文/作者明确关联仓库中的显式数值，并闭合到已注册
+  numeric asset；找不到时保留图表定位、跳过 points、继续交付独立精确表格值并报告缺口
+  （[ADR-043](adr/043-exact-only-chart-values.md)）；
+- 旧 `estimated` point + `vlm_extraction` HIL + correction 发布路径已过时。当前代码为
+  历史兼容暂留，新任务必须 reject/skip 估计点 review 且不绑定含估计点的 carrier；
+  人工审核不能把估计升级为 exact；
+- **迁移状态：部分完成。** Prompt/skills 和现行产品规范已切换；Core 对 reviewed
+  estimate 的机械硬拒、官方 source-data acquisition/parser/series mapping 正向路径、
+  frontend/evaluator 清理仍在 [`TODO.md`](TODO.md) P1 跟踪。既有 estimated-point
+  fixture 只证明旧代码闭环，不证明当前产品能力。
 
 ---
 

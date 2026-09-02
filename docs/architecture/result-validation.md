@@ -84,7 +84,7 @@ measurement vocabulary、单位转换等科学语义。
 - provenance 与 confidence；
 - 未解决 blocking HIL 与人工审核状态；
 - `NO_DATA` / `PARTIAL_SUCCESS` 的阈值；
-- 图表 bounding box、模型版本和人工复核状态。
+- 图表 bounding box、模型版本、显式数值来源和人工复核状态；图表坐标须遵循 [exact-only 图表策略](chart-exact-data-policy.md)，人工复核不能把图像估计值升级为精确值。
 
 Agent 只能选择服务端允许的 Profile 引用，不能直接写入发布阈值或放宽门禁。
 
@@ -161,9 +161,10 @@ count；被去重或冲突淘汰的来源记录不能继续影响 low fraction �
 medium，全部 high 才 high；VLM-only、未审核 proposed/string-similarity mapping 与
 跨源冲突使用显式 cap。`requires_human_review` 是 evaluator 派生值，不由 Adapter 设置。
 
-对论文源数值（图表 y 值）另做固定代码数字规律筛查，灵感来自公开的医学论文数据
+对论文明确发布的图表数值另做固定代码数字规律筛查，灵感来自公开的医学论文数据
 打假方法：末位数 / 末两位数分布均匀性卡方检验、插值（等差）规律与重复值检测；
-统计异常时该图表置信度降级为 `low`。
+统计异常时该图表置信度降级为 `low`。像素/矢量几何数字化、OCR 推断、插值或拟合
+值不进入正式数值记录，不能以降低置信度代替 exact-source 门禁。
 
 ### 11.3 与 Validation 的关系
 

@@ -249,9 +249,13 @@ describe(".pi/skills manifest integrity", () => {
     ]) {
       expect(pubmed.body).toContain(tableId);
     }
-    expect(pubmed.body).toContain("human_review_status");
-    expect(pubmed.body).toContain("review_status");
-    expect(pubmed.body).toMatch(/remains human_review_pending/i);
+    expect(pubmed.body).toMatch(/exact published chart coordinates/i);
+    expect(pubmed.body).toMatch(
+      /article tables[\s\S]*supplement[\s\S]*official publisher[\s\S]*author-declared repository/i,
+    );
+    expect(pubmed.body).toMatch(/do not digitize[\s\S]*raster[\s\S]*vector geometry/i);
+    expect(pubmed.body).toMatch(/publish the[\s\S]*independently exact records/i);
+    expect(pubmed.body).toMatch(/contact the authors/i);
     expect(dataset.body).toMatch(/descriptor digest is\s+server-bound/i);
     expect(dataset.body).toMatch(/do not repeat a failure-driven descriptor handshake/i);
   });
@@ -268,6 +272,14 @@ describe(".pi/skills manifest integrity", () => {
     expect(skill.body).toMatch(/only\s+`extract_registered_paper_chart_evidence`/i);
     expect(skill.body).toMatch(/cannot publish/i);
     expect(skill.body).toMatch(/exploratory/i);
+    expect(skill.body).toMatch(/exact-only/i);
+    expect(skill.body).toMatch(/estimated-point[\s\S]*deprecated/i);
+    expect(skill.body).toMatch(/human review cannot[\s\S]*exact/i);
+    expect(skill.body).toMatch(/estimated rows[\s\S]*point-level review[\s\S]*Reject\/skip/i);
+    expect(skill.body).toMatch(/never bind its candidate or[\s\S]*reviewed carrier/i);
+    expect(skill.body).toMatch(/bind a registered VLM carrier[\s\S]*only[\s\S]*chart_points[\s\S]*empty/i);
+    expect(skill.body).toMatch(/Future non-empty exact points[\s\S]*numeric source-data carrier/i);
+    expect(skill.body).toMatch(/search for an\s+explicit numeric source/i);
   });
 
   test("Gold6 closure guidance: frozen context is semantics, blockers replace workspace CSV", async () => {
@@ -282,11 +294,12 @@ describe(".pi/skills manifest integrity", () => {
     const chart = await readSkill("extract_chart_data_vlm");
     expect(chart.body).toMatch(/frozen execution context/i);
     expect(chart.body).toMatch(/never publication authority/i);
-    // Unavailable carrier, visual model, locator, or review must produce a
-    // structured blocker instead of a workspace CSV fallback.
+    // Discovery failures remain structured, but an estimated-point review is
+    // rejected/skipped rather than becoming a publication prerequisite.
     expect(chart.body).toMatch(
-      /If a required carrier \(full-text XML, PDF, supplement\), the visual model, a\s+usable page locator, or the evidence-bound review is unavailable, return the\s+structured blocker/i,
+      /If a required carrier, the visual model, or a usable page locator is\s+unavailable, return the structured discovery blocker/i,
     );
+    expect(chart.body).toMatch(/Point-level review is not required[\s\S]*no exact source exists/i);
     expect(chart.body).toMatch(/workspace\s+CSV/);
   });
 });

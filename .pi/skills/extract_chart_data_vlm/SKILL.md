@@ -11,8 +11,8 @@ Two tools belong to this skill:
   promotion path. It consumes only task-owned registered assets (paper
   full-text XML asset, paper PDF asset, optional registered supplementary
   assets), records resolved model provenance and page/figure/bbox locators,
-  and registers ONE content-addressed evidence carrier for later
-  evidence-bound review.
+  and registers ONE content-addressed discovery/evidence carrier. Any legacy
+  estimated-point review from that call is reject/skip-only under ADR-043.
 - `extract_chart_data_vlm` — exploratory extraction into workspace CSV
   staging. It CANNOT publish and its outputs are never formal artifacts.
 
@@ -52,18 +52,31 @@ Governed promotion:
   chart_points, papers, and sources rows in one registered JSON carrier.
 - With source_asset_id, Dataset Core registers the evidence manifest and a
   matching OperationResult. The manifest binds model/version, prompt digest,
-  page/figure/bbox, confidence and point-level HIL facts.
-- Every VLM-derived chart point is estimated and pending; unclear axis or
-  legend semantics yield an explicit unclear no-points series, never exact
-  points.
+  page/figure/bbox and confidence. Legacy point-review facts may still appear
+  during migration but do not authorize numeric publication.
+- Formal chart-coordinate publication is exact-only. Use VLM output to discover
+  figures, panels, series, axes, legends, and locators, then search for an
+  explicit numeric source as defined by the PubMed skill. VLM-derived geometry
+  is never an exact numeric source.
+- The existing estimated-point candidate and HIL path is deprecated and retained
+  temporarily only for legacy compatibility while its implementation is removed.
+  During this migration, a discovery call may still emit estimated rows or open
+  a point-level review. Reject/skip that review, never bind its candidate or
+  reviewed carrier, and continue the exact-source search; do not accept,
+  correct, or publish those rows. Human review cannot convert digitized or
+  model-estimated coordinates into exact values.
+- Unclear axis or legend semantics yield an explicit unclear no-points series.
+  Clear semantics without explicit numeric source data also yield no points;
+  that is an honest skipped-data outcome, not an extraction failure.
 - The frozen execution context (system prompt) is binding task semantics for
   which papers and tables are required, but it is never publication authority:
   it does not replace registered carriers, review gates, or the Dataset Core
   publication path.
-- If a required carrier (full-text XML, PDF, supplement), the visual model, a
-  usable page locator, or the evidence-bound review is unavailable, return the
-  structured blocker for that paper instead of falling back to a workspace
-  CSV.
+- If a required carrier, the visual model, or a usable page locator is
+  unavailable, return the structured discovery blocker instead of a workspace
+  CSV. Point-level review is not required when estimated rows are rejected and
+  no exact source exists; report the no-exact-data outcome and continue any
+  independently exact records.
 
 Exploratory staging:
 
@@ -89,17 +102,20 @@ Exploratory staging:
   enter a profile-scaffolded formal build.
 - Only `extract_registered_paper_chart_evidence` promotes paper chart evidence
   toward a formal product; `extract_chart_data_vlm` cannot publish.
-- In Dynamic Family publication, bind the reviewed registered evidence carrier
-  as `binding_kind: "transform_input"`. Bind each required binary supplementary
-  member as a separate `binding_kind: "provenance_only"` source. The latter
-  enters the Core dependency/provenance closure but never becomes `in_N` or a
-  UTF-8 Transform Host input; do not infer the kind from media type.
+- During migration, bind a registered VLM carrier as binding kind
+  transform_input only when its chart_points table is empty and it contains no
+  estimated coordinate rows. Never bind either candidate or reviewed carriers
+  that contain estimated points. Future non-empty exact points must come from
+  the separately registered numeric source-data carrier. Bind required binary
+  supplementary members as binding kind provenance_only; they enter Core
+  provenance but never become UTF-8 Host inputs. Do not infer binding kind from
+  media type.
 - A literature-derived quantitative product uses the tables paper_records,
   experiment_records, primary activity_value_records, chart_series,
   chart_points, and supplementary_asset_records; do not collapse it into a
   generic evidence/papers pair.
-- Chart series carry human_review_status, and chart points carry review_status.
-  Estimated or uncertain values remain human_review_pending until genuine
-  evidence-bound HIL acceptance.
-- Approval to use VLM credentials is not chart-data review and must never be
-  treated as publication acceptance.
+- Chart series retain discovery/review status and source locators. Exact chart
+  points retain provenance to the explicit numeric asset; absence of exact
+  points does not invalidate independently exact table measurements.
+- Credential approval, series review, or publication acceptance cannot upgrade
+  a visual estimate to an exact measurement.
