@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -274,7 +275,9 @@ function clone<T>(value: T): T {
 }
 
 describe("bioactivity paper evidence module", () => {
-  it("freezes the gold6 reference table contract exactly", async () => {
+  // The gold6 reference schema ships with the internal docs on dev; the
+  // pruned public release branch skips this freeze check.
+  it.skipIf(!existsSync(GOLD6_REFERENCE))("freezes the gold6 reference table contract exactly", async () => {
     const reference = JSON.parse(await readFile(GOLD6_REFERENCE, "utf8")) as Gold6Reference;
     const referenceTables = reference.tables.filter((table) =>
       [PAPER_RECORDS_TABLE_ID, EXPERIMENT_RECORDS_TABLE_ID, ACTIVITY_VALUE_RECORDS_TABLE_ID, SUPPLEMENTARY_ASSET_RECORDS_TABLE_ID]

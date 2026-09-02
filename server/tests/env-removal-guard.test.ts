@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +44,11 @@ describe("model environment removal guard", () => {
   test("active setup and packaging surfaces do not require the deleted template or model env variables", async () => {
     const violations: string[] = [];
     for (const relativePath of SETUP_AND_PACKAGING_FILES) {
-      const text = await readFile(path.join(REPOSITORY_ROOT, relativePath), "utf8");
+      const absolutePath = path.join(REPOSITORY_ROOT, relativePath);
+      // The public release branch prunes internal docs/agent surfaces; skip
+      // absent files so the guard covers exactly what the checkout ships.
+      if (!existsSync(absolutePath)) continue;
+      const text = await readFile(absolutePath, "utf8");
       if (text.includes(".env.example")) violations.push(`${relativePath}: deleted .env.example reference`);
       const modelEnv = MODEL_ENV_TOKEN.exec(text)?.[0];
       if (modelEnv !== undefined) violations.push(`${relativePath}: model env token ${modelEnv}`);
