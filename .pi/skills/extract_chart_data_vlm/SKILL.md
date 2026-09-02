@@ -21,11 +21,17 @@ Two tools belong to this skill:
 Governed promotion (`extract_registered_paper_chart_evidence`):
 
 - Pass a task-owned Core source_asset_id returned by Core acquisition,
-  `extract_supplementary_archive`, or another governed registration step.
+  `extract_core_archive`, `extract_supplementary_archive`, or another governed
+  registration step. For ZIP supplements, first list members with
+  `preview_core_asset`, then register each required real member with
+  `extract_core_archive`; do not pass the ZIP carrier in place of a required
+  PDF/image/table member.
 - Registered asset ids only (asset_<sha256>): never absolute paths,
   workspace-relative paths, or browser screenshots.
 - One paper full-text XML asset (application/xml or text/xml) and one paper
   PDF asset (application/pdf), plus optional registered supplementary assets.
+  Pass extracted member asset IDs in `supplementary_asset_ids` so the evidence
+  carrier records member-level Core provenance.
 
 Exploratory staging (`extract_chart_data_vlm`):
 
@@ -83,6 +89,11 @@ Exploratory staging:
   enter a profile-scaffolded formal build.
 - Only `extract_registered_paper_chart_evidence` promotes paper chart evidence
   toward a formal product; `extract_chart_data_vlm` cannot publish.
+- In Dynamic Family publication, bind the reviewed registered evidence carrier
+  as `binding_kind: "transform_input"`. Bind each required binary supplementary
+  member as a separate `binding_kind: "provenance_only"` source. The latter
+  enters the Core dependency/provenance closure but never becomes `in_N` or a
+  UTF-8 Transform Host input; do not infer the kind from media type.
 - A literature-derived quantitative product uses the tables paper_records,
   experiment_records, primary activity_value_records, chart_series,
   chart_points, and supplementary_asset_records; do not collapse it into a

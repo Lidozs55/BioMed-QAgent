@@ -194,7 +194,7 @@ describe("ChatPanel", () => {
     expect(compactTask).toHaveBeenCalledWith("task_terminal");
   });
 
-  it("shows active task artifacts before the attachment control", () => {
+  it("shows the unified assets entry before the attachment control", () => {
     seedTerminalTask();
     const state = useAgentStore.getState();
     const task = state.tasksById.task_terminal;
@@ -221,17 +221,16 @@ describe("ChatPanel", () => {
 
     const { container } = render(<ChatPanel startTask={vi.fn()} />);
     const composer = container.querySelector('[data-slot="agent-composer"]');
-    const artifactButton = screen.getByRole("button", {
-      name: "查看 1 个产物",
-    });
+    // 统一“资源”入口取代了原产物 FAB；有活动任务即出现，不依赖产物数量。
+    const assetsButton = screen.getByRole("button", { name: "资源" });
     const attachmentButton = screen.getByRole("button", { name: "添加附件" });
 
-    expect(artifactButton).toBeVisible();
+    expect(assetsButton).toBeVisible();
     expect(
-      artifactButton.compareDocumentPosition(attachmentButton) &
+      assetsButton.compareDocumentPosition(attachmentButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(composer).toContainElement(artifactButton);
+    expect(composer).toContainElement(assetsButton);
   });
 
   it("renders attachments, removes one, and submits the remaining file with its note", async () => {

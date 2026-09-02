@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -70,6 +70,120 @@ function currentTaskId(deps: Pick<ChartDataVlmToolDeps, "taskId">): string {
   return taskId;
 }
 
+interface VlmFormalAssetSummary {
+  asset_id: string;
+  relative_path: string;
+  sha256: string;
+  size_bytes: number;
+  operation_result_id: string;
+  provenance: import("@biomed/contracts").CoreDerivedAssetProvenance;
+}
+
+/**
+ * Deterministic sequential register-and-commit helper (registered-paper
+ * parity, local — no import from the registered-paper module): writes the
+ * output bytes, registers the derived asset with byte-verified receipt, and
+ * records its committed OperationResult BEFORE the asset is used as a parent
+ * for the next registration. Reuse this per stage; never batch-register
+ * descendants before the parent result commits.
+ */
+async function registerVlmDerivedAsset(options: {
+  taskId: string;
+  taskRoot: string;
+  sourceAssetRegistry: SourceAssetRegistry;
+  bytes: Buffer;
+  parentAssetIds: readonly string[];
+  operationKind: import("@biomed/contracts").CoreDerivedAssetOperationKind;
+  requirementId: string;
+  parametersDigest: string;
+  evidence: import("@biomed/contracts").JsonValue;
+}): Promise<VlmFormalAssetSummary & { operationResult: OperationResultManifest }> {
+  const outputDigest = createHash("sha256").update(options.bytes).digest("hex");
+  const operationResultId = `result_vlm_${createHash("sha256")
+    .update(JSON.stringify({
+      requirement_id: options.requirementId,
+      parent_asset_ids: options.parentAssetIds,
+      parameter_digest: options.parametersDigest,
+      output_digest: outputDigest,
+    }))
+    .digest("hex")
+    .slice(0, 32)}`;
+  const sourceId = `vlm_${options.operationKind}_${outputDigest.slice(0, 24)}`;
+  const relativePath = `source_assets/vlm-evidence/${outputDigest}.json`;
+  const destination = path.join(options.taskRoot, ...relativePath.split("/"));
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, options.bytes);
+  const registered = await options.sourceAssetRegistry.registerDerived({
+    sourceId,
+    relativePath,
+    role: "source",
+    mediaType: "application/json",
+    parentAssetIds: options.parentAssetIds,
+    operationKind: options.operationKind,
+    operationResultId,
+    implementationId: "dataset_core.chart_vlm_evidence",
+    implementationVersion: "1.0.0",
+    parametersDigest: options.parametersDigest,
+    evidence: options.evidence,
+  });
+  if (registered.receipt.sha256 !== outputDigest) {
+    throw new Error("VLM evidence registration did not preserve output bytes");
+  }
+  const parentClosures = await Promise.all(options.parentAssetIds.map((assetId) =>
+    options.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId)));
+  const upstreamResultIds = [...new Set(parentClosures.flatMap((closure) =>
+    closure.flatMap((item) => "operation_result_id" in item ? [item.operation_result_id] : [])))];
+  const implementationDigest = createHash("sha256").update("dataset_core.chart_vlm_evidence@1.0.0").digest("hex");
+  const operationResult: OperationResultManifest = {
+    schema_version: "1.0",
+    result_manifest_id: operationResultId,
+    task_id: options.taskId,
+    run_id: "core",
+    requirement_id: options.requirementId,
+    operation_id: operationResultId,
+    operation_kind: "derive",
+    operation_attempt_id: `attempt_${operationResultId}`,
+    attempt: 1,
+    status: "succeeded",
+    input_digest: createHash("sha256").update(options.parentAssetIds.join("\u0000")).digest("hex"),
+    parameter_digest: options.parametersDigest,
+    implementation_digest: implementationDigest,
+    output_digest: outputDigest,
+    output_kind: "derived_evidence",
+    output_summary: {
+      stage: options.operationKind,
+      asset_id: registered.receipt.asset_ref.asset_id,
+      sha256: outputDigest,
+    },
+    output_files: [{
+      relative_path: registered.receipt.relative_path,
+      size_bytes: registered.receipt.size_bytes,
+      sha256: registered.receipt.sha256,
+    }],
+    dependency_closure: {
+      input_asset_ids: [...options.parentAssetIds],
+      upstream_result_manifest_ids: upstreamResultIds,
+      parameter_digest: options.parametersDigest,
+      implementation_digest: implementationDigest,
+    },
+    commit: {
+      state: "committed",
+      commit_id: `commit_${operationResultId}`,
+      committed_at: registered.provenance.created_at,
+    },
+  };
+  await options.sourceAssetRegistry.recordDerivedOperationResult(operationResult);
+  return Object.freeze({
+    asset_id: registered.receipt.asset_ref.asset_id,
+    relative_path: registered.receipt.relative_path,
+    sha256: outputDigest,
+    size_bytes: registered.receipt.size_bytes,
+    operation_result_id: operationResultId,
+    provenance: registered.provenance,
+    operationResult,
+  });
+}
+
 async function mirrorPreparationOutputs(
   result: VlmResult,
   taskRoot: string,
@@ -98,136 +212,147 @@ async function formalizeVlmOutputs(options: {
   taskRoot: string;
   sourceAssetRegistry: SourceAssetRegistry;
   hint: string;
-}) {
-  const parametersDigest = createHash("sha256")
-    .update(JSON.stringify({
-      hint: options.hint,
-      model_name: options.result.model_name,
-      model_version: options.result.model_version,
-      prompt_digest: options.result.prompt_digest,
-    }))
-    .digest("hex");
-  const evidenceManifestFile = path.resolve(
-    options.taskRoot,
-    ...options.result.evidence_manifest.replaceAll("\\", "/").split("/"),
-  );
-  const evidenceOutputSha = createHash("sha256")
-    .update(await readFile(evidenceManifestFile))
-    .digest("hex");
-  const operationResultId = `result_vlm_${createHash("sha256")
-    .update(`${options.parentAssetId}\u0000${parametersDigest}\u0000${evidenceOutputSha}`)
-    .digest("hex")
-    .slice(0, 32)}`;
-  const assets: Array<{
-    asset_id: string;
-    relative_path: string;
-    sha256: string;
-    size_bytes: number;
-    operation_result_id: string;
-    provenance: import("@biomed/contracts").CoreDerivedAssetProvenance;
-  }> = [];
-  for (const output of [options.result.evidence_manifest]) {
-    const source = path.resolve(options.taskRoot, ...output.replaceAll("\\", "/").split("/"));
+}): Promise<{
+  assets: readonly VlmFormalAssetSummary[];
+  operationResult: OperationResultManifest | null;
+}> {
+  const readTaskFile = async (taskRelative: string): Promise<Buffer> => {
+    const source = path.resolve(options.taskRoot, ...taskRelative.replaceAll("\\", "/").split("/"));
     const relative = path.relative(path.resolve(options.taskRoot), source);
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`VLM output escaped the task root: ${output}`);
+      throw new Error(`VLM output escaped the task root: ${taskRelative}`);
     }
-    const bytes = await readFile(source);
-    const manifest = JSON.parse(bytes.toString("utf8")) as import("@biomed/contracts").JsonValue;
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const extension = path.extname(source).toLowerCase().replace(/[^.a-z0-9]/gu, "");
-    const relativePath = `source_assets/vlm-evidence/${sha256}${extension}`;
-    const destination = path.join(options.taskRoot, ...relativePath.split("/"));
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(source, destination, 1).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "EEXIST") throw error;
-    });
-    const registered = await options.sourceAssetRegistry.registerDerived({
-      sourceId: `vlm_evidence_${sha256.slice(0, 24)}`,
-      relativePath,
-      role: "source",
-      parentAssetIds: [options.parentAssetId],
-      operationKind: "vlm_extraction",
-      operationResultId,
-      implementationId: "dataset_core.chart_vlm_evidence",
-      implementationVersion: "1.0.0",
-      parametersDigest,
-      evidence: {
-        source_asset_id: options.parentAssetId,
-        output_kind: path.basename(output),
-        output_sha256: sha256,
-        model_name: options.result.model_name,
-        model_version: options.result.model_version,
-        prompt_digest: options.result.prompt_digest,
-        charts: JSON.parse(JSON.stringify(options.result.charts)) as JsonValue,
-        evidence_manifest: options.result.evidence_manifest,
-        manifest,
-      },
-    });
-    if (registered.receipt.sha256 !== sha256) {
-      throw new Error("VLM evidence registration did not preserve output bytes");
-    }
-    assets.push({
-      asset_id: registered.receipt.asset_ref.asset_id,
-      relative_path: registered.receipt.relative_path,
-      sha256,
-      size_bytes: bytes.length,
-      operation_result_id: operationResultId,
-      provenance: registered.provenance,
-    });
-  }
-  const upstreamResultIds = await options.sourceAssetRegistry
-    .resolveFormalProvenanceClosure(options.parentAssetId)
-    .then((items) => [...new Set(items.flatMap((item) =>
-      "operation_result_id" in item ? [item.operation_result_id] : [],
-    ))])
-    .catch(() => [] as string[]);
-  const operationResult: OperationResultManifest = {
-    schema_version: "1.0",
-    result_manifest_id: operationResultId,
-    task_id: options.taskId,
-    run_id: "core",
-    requirement_id: "vlm_extraction",
-    operation_id: operationResultId,
-    operation_kind: "parse",
-    operation_attempt_id: `attempt_${operationResultId}`,
-    attempt: 1,
-    status: "succeeded",
-    input_digest: options.parentAssetId.slice("asset_".length),
-    parameter_digest: parametersDigest,
-    implementation_digest: createHash("sha256").update("dataset_core.chart_vlm_evidence@1.0.0").digest("hex"),
-    output_digest: createHash("sha256")
-      .update(assets.map((asset) => asset.sha256).join("\u0000"))
-      .digest("hex"),
-    output_kind: "source_asset",
-    output_summary: {
-      model_name: options.result.model_name,
-      model_version: options.result.model_version,
-      prompt_digest: options.result.prompt_digest,
-      evidence_assets: assets.map((asset) => ({
-        asset_id: asset.asset_id,
-        sha256: asset.sha256,
-      })) as JsonValue,
-    },
-    output_files: assets.map((asset) => ({
-      relative_path: asset.relative_path,
-      size_bytes: asset.size_bytes,
-      sha256: asset.sha256,
-    })),
-    dependency_closure: {
-      input_asset_ids: [options.parentAssetId],
-      upstream_result_manifest_ids: upstreamResultIds,
-      parameter_digest: parametersDigest,
-      implementation_digest: createHash("sha256").update("dataset_core.chart_vlm_evidence@1.0.0").digest("hex"),
-    },
-    commit: {
-      state: "committed",
-      commit_id: `commit_${operationResultId}`,
-      committed_at: assets[0]?.provenance.created_at ?? new Date().toISOString(),
-    },
+    return readFile(source);
   };
-  await options.sourceAssetRegistry.recordDerivedOperationResult(operationResult);
-  return Object.freeze({ assets: Object.freeze(assets), operationResult });
+  const identity = {
+    model_name: options.result.model_name,
+    model_version: options.result.model_version,
+    prompt_digest: options.result.prompt_digest,
+  };
+  // Stage 1: the CANDIDATE carrier registers first, directly derived from the
+  // exact Core source asset, and its OperationResult commits BEFORE anything
+  // else derives from it. Without an accepted/corrected review this candidate
+  // stays the only formal asset — it is never silently promoted as reviewed.
+  const candidateBytes = await readTaskFile(options.result.candidate_manifest);
+  const candidateParametersDigest = createHash("sha256")
+    .update(JSON.stringify({
+      stage: "candidate",
+      hint: options.hint,
+      ...identity,
+    }))
+    .digest("hex");
+  const candidate = await registerVlmDerivedAsset({
+    taskId: options.taskId,
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
+    bytes: candidateBytes,
+    parentAssetIds: [options.parentAssetId],
+    operationKind: "vlm_extraction",
+    requirementId: "vlm_extraction",
+    parametersDigest: candidateParametersDigest,
+    evidence: {
+      source_asset_id: options.parentAssetId,
+      output_kind: "candidate_manifest",
+      output_sha256: createHash("sha256").update(candidateBytes).digest("hex"),
+      candidate_manifest: options.result.candidate_manifest,
+      ...identity,
+      charts: JSON.parse(JSON.stringify(options.result.charts)) as JsonValue,
+      manifest: JSON.parse(candidateBytes.toString("utf8")) as JsonValue,
+    },
+  });
+  const review = options.result.review;
+  if (review === undefined) {
+    return Object.freeze({ assets: Object.freeze([candidate]), operationResult: null });
+  }
+
+  // Stage 2 (accepted/corrected only): a deterministic UTF-8 review-evidence
+  // record binds the candidate carrier identity to the HIL review details;
+  // its OperationResult commits before stage 3 derives from it.
+  const reviewEvidenceRecord = {
+    schema_version: "1.0",
+    evidence_kind: "vlm_extraction_review",
+    candidate_carrier: {
+      asset_id: candidate.asset_id,
+      sha256: candidate.sha256,
+      relative_path: candidate.relative_path,
+    },
+    source_asset_id: options.parentAssetId,
+    model_name: identity.model_name,
+    model_version: identity.model_version,
+    prompt_digest: identity.prompt_digest,
+    review,
+  };
+  const reviewEvidenceBytes = Buffer.from(JSON.stringify(reviewEvidenceRecord), "utf8");
+  const reviewEvidenceParametersDigest = createHash("sha256")
+    .update(JSON.stringify({
+      stage: "review_evidence",
+      candidate_carrier_asset_id: candidate.asset_id,
+      request_id: review.request_id,
+      review_id: review.review_id,
+      evidence_digest: review.evidence_digest,
+      action: review.action,
+    }))
+    .digest("hex");
+  const reviewEvidence = await registerVlmDerivedAsset({
+    taskId: options.taskId,
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
+    bytes: reviewEvidenceBytes,
+    parentAssetIds: [candidate.asset_id],
+    operationKind: "review_evidence",
+    requirementId: "vlm_review_evidence",
+    parametersDigest: reviewEvidenceParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: candidate.asset_id,
+      source_asset_id: options.parentAssetId,
+      review_id: review.review_id,
+      request_id: review.request_id,
+      review_action: review.action,
+      review_evidence_digest: review.evidence_digest,
+      output_sha256: createHash("sha256").update(reviewEvidenceBytes).digest("hex"),
+    },
+  });
+
+  // Stage 3: the reviewed terminal manifest re-registers as vlm_extraction
+  // with DIRECT parents [candidate, review_evidence]; its bytes are the
+  // terminal reviewed projection written after HIL.
+  const reviewedBytes = await readTaskFile(options.result.evidence_manifest);
+  const reviewedParametersDigest = createHash("sha256")
+    .update(JSON.stringify({
+      stage: "reviewed",
+      candidate_carrier_asset_id: candidate.asset_id,
+      review_evidence_asset_id: reviewEvidence.asset_id,
+      review_id: review.review_id,
+      review_action: review.action,
+      ...identity,
+    }))
+    .digest("hex");
+  const reviewed = await registerVlmDerivedAsset({
+    taskId: options.taskId,
+    taskRoot: options.taskRoot,
+    sourceAssetRegistry: options.sourceAssetRegistry,
+    bytes: reviewedBytes,
+    parentAssetIds: [candidate.asset_id, reviewEvidence.asset_id],
+    operationKind: "vlm_extraction",
+    requirementId: "vlm_extraction_reviewed",
+    parametersDigest: reviewedParametersDigest,
+    evidence: {
+      candidate_carrier_asset_id: candidate.asset_id,
+      review_evidence_asset_id: reviewEvidence.asset_id,
+      review_id: review.review_id,
+      review_request_id: review.request_id,
+      review_action: review.action,
+      review_evidence_digest: review.evidence_digest,
+      source_asset_id: options.parentAssetId,
+      output_sha256: createHash("sha256").update(reviewedBytes).digest("hex"),
+      ...identity,
+      manifest: JSON.parse(reviewedBytes.toString("utf8")) as JsonValue,
+    },
+  });
+  return Object.freeze({
+    assets: Object.freeze([reviewed] as VlmFormalAssetSummary[]),
+    operationResult: reviewed.operationResult,
+  });
 }
 
 /**

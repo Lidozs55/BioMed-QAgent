@@ -345,6 +345,81 @@ describe("dynamic family prepare/submit preflight", () => {
     expect(receipt.host_descriptor_digest).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("requires required_input_roles to close only the transform_input subset in source-binding order", async () => {
+    // Proposal binding order: provenance_only archive, then transform CSV.
+    const raw = await rawSubmission();
+    const proposal = raw.execution_proposal as {
+      source_bindings: Array<Record<string, unknown>>;
+    };
+    proposal.source_bindings = [
+      {
+        binding_id: "binding_archive",
+        source: "registered_asset",
+        input_requirement_ref: "supplementary",
+        binding_kind: "provenance_only",
+        parameters: {},
+      },
+      { ...proposal.source_bindings[0]! },
+    ];
+    const sources = raw.registered_sources as Record<string, string>;
+    sources.binding_archive = `asset_${"c".repeat(64)}`;
+    // declared_input_roles close ONLY the transform_input subset, in order.
+    (raw.transform_metadata as {
+      declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }>;
+    }).declared_input_roles = [{ role: "source", media_type: "text/csv", constraint_ref: null }];
+    const submission = await parseDynamicFamilyPublicationSubmission(raw);
+    const receipt = await prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0, submission,
+    });
+    expect(receipt.required_input_roles).toEqual(["source"]);
+    const planKinds = new Map(receipt.acquisition_plan.map((entry) => [entry.binding_id, entry.binding_kind]));
+    expect(planKinds.get("binding_archive")).toBe("provenance_only");
+    expect(planKinds.get("binding_1")).toBe("transform_input");
+
+    // The receipt digest must bind binding_kind: flipping it breaks validation
+    // (the flipped submission no longer closes its declared roles / drifts digests).
+    const flippedRaw = structuredClone(raw);
+    (flippedRaw.execution_proposal as { source_bindings: Array<Record<string, unknown>> }).source_bindings[0]!.binding_kind = "transform_input";
+    const flippedSubmission = await parseDynamicFamilyPublicationSubmission(flippedRaw);
+    await expect(validateDynamicFamilyPreflightReceipt({
+      receipt,
+      submission: flippedSubmission,
+      taskId: "task_preflight",
+      requirementId: "build_preflight",
+      generation: 0,
+    })).rejects.toThrow(/declared input roles|roles do not match|drifted/);
+
+    // Mismatch against the transform subset (not the whole binding list) is rejected.
+    const mismatchRaw = structuredClone(raw);
+    (mismatchRaw.transform_metadata as { declared_input_roles: Array<{ role: string }> }).declared_input_roles[0]!.role = "wrong_role";
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0,
+      submission: await parseDynamicFamilyPublicationSubmission(mismatchRaw),
+    })).rejects.toThrow(/binding 'binding_1'.*expected 'source'.*received 'wrong_role'/);
+
+    // Declared roles covering every binding (legacy whole-list shape) is rejected.
+    const extraRoleRaw = structuredClone(raw);
+    (extraRoleRaw.transform_metadata as { declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }> }).declared_input_roles = [
+      { role: "supplementary", media_type: "application/zip", constraint_ref: null },
+      { role: "source", media_type: "text/csv", constraint_ref: null },
+    ];
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0,
+      submission: await parseDynamicFamilyPublicationSubmission(extraRoleRaw),
+    })).rejects.toThrow(/declared input roles \(2\) do not close the transform_input bindings \(1\)/);
+
+    // Zero transform_input bindings is a hostile rejection.
+    const allProvenanceRaw = structuredClone(raw);
+    (allProvenanceRaw.execution_proposal as { source_bindings: Array<Record<string, unknown>> }).source_bindings =
+      (allProvenanceRaw.execution_proposal as { source_bindings: Array<Record<string, unknown>> }).source_bindings.map(
+        (binding) => ({ ...binding, binding_kind: "provenance_only" }),
+      );
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_preflight", requirementId: "build_preflight", generation: 0,
+      submission: await parseDynamicFamilyPublicationSubmission(allProvenanceRaw),
+    })).rejects.toThrow(/at least one transform_input binding/);
+  });
+
   it("composition prepare tool exposes only the receipt and no publication side effects", async () => {
     let acquisitionCalls = 0;
     const raw = await rawSubmission();

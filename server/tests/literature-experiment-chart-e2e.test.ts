@@ -234,9 +234,18 @@ describe("literature experiment chart formal closure", () => {
       prompt_digest: string;
       formal_evidence_assets: Array<{
         asset_id: string;
-        provenance: { evidence: { manifest: { charts: Array<Record<string, unknown>>; points: Array<Record<string, unknown>> } } };
+        provenance: { operation_kind: string; parent_asset_ids: string[]; evidence: { candidate_carrier_asset_id?: string; review_evidence_asset_id?: string; review_id?: string; manifest: { charts: Array<Record<string, unknown>>; points: Array<Record<string, unknown>> } } };
       }>;
     };
+    // R5 closure: the reviewed terminal fact must resolve with the complete
+    // candidate -> review_evidence -> reviewed provenance edges.
+    const closure = await registry.resolveFormalProvenanceClosure(
+      vlmDetails.formal_evidence_assets[0]!.asset_id,
+    );
+    const closureKinds = closure.flatMap((item) =>
+      "operation_kind" in item ? [item.operation_kind] : []);
+    expect(closureKinds).toContain("review_evidence");
+    expect(closureKinds.filter((kind) => kind === "vlm_extraction")).toHaveLength(2);
     const vlmAsset = vlmDetails.formal_evidence_assets[0];
     const chart = vlmAsset?.provenance.evidence.manifest.charts[0];
     const point = vlmAsset?.provenance.evidence.manifest.points[0];
@@ -268,8 +277,16 @@ describe("literature experiment chart formal closure", () => {
       logical_file: image.receipt.relative_path,
       raw_value: String(chart.chart_id),
       page_number: chart.page_number === "" ? null : Number(chart.page_number),
-      figure_id: String(chart.chart_id),
+      figure_id: String(chart.figure_id),
       bbox: String(chart.bbox).split(",").map(Number),
+    };
+    // The staged POINT locator uses the point's OWN manifest locator identity,
+    // never the chart bbox (past P0 finding).
+    const pointLocator = {
+      ...imageLocator,
+      page_number: point.page_number === "" ? null : Number(point.page_number),
+      figure_id: String(point.figure_id),
+      bbox: String(point.bbox).split(",").map(Number),
     };
     const review = {
       review_id: String(point.review_id),
@@ -279,11 +296,18 @@ describe("literature experiment chart formal closure", () => {
       evidence_digest: String(point.review_evidence_digest),
       reason: String(point.review_reason),
     };
+    const pointTransformProvenance = {
+      schema_version: "1.0",
+      model_name: String(point.model_version),
+      model_version: String(point.model_version),
+      steps: [{ operation: "vlm_extract", parameters: { prompt_digest: String(point.prompt_digest) } }],
+      review,
+    };
     const transformProvenance = {
       schema_version: "1.0",
-      model_name: "fixture-vlm",
-      model_version: "fixture-vlm",
-      steps: [{ operation: "vlm_extract" }],
+      model_name: String(chart.model_name),
+      model_version: String(chart.model_version),
+      steps: [{ operation: "vlm_extract", parameters: { prompt_digest: String(chart.prompt_digest) } }],
       review,
     };
     const xmlLocator = {
@@ -335,10 +359,10 @@ describe("literature experiment chart formal closure", () => {
       chart_points: {
         point_id: point.point_id, chart_series_id: chart.chart_id, activity_value_id: "activity_1",
         x_value: point.x_value, y_value: point.y_value, point_type: "point", estimated_or_exact: "estimated",
-        pixel_or_coordinate_locator: imageLocator, extraction_confidence: point.confidence_level,
+        pixel_or_coordinate_locator: pointLocator, extraction_confidence: point.confidence_level,
         confidence_reason: point.confidence_reason, review_status: point.human_review_state,
         review_id: point.review_id, original_x_value: point.original_x_value,
-        original_y_value: point.original_y_value, transform_provenance: transformProvenance,
+        original_y_value: point.original_y_value, transform_provenance: pointTransformProvenance,
       },
       supplementary_asset_records: {
         supplementary_asset_id: "supplement_1", paper_id: "PMC123", paper_id_namespace: "pmc",
@@ -363,6 +387,13 @@ describe("literature experiment chart formal closure", () => {
     const sourceBindings = [
       { binding_id: "fulltext", source: "pubmed", input_requirement_ref: "fulltext_xml", parameters: {} },
       { binding_id: "vlm_evidence", source: "core_vlm", input_requirement_ref: "vlm_evidence", parameters: {} },
+      {
+        binding_id: "supplementary_figure",
+        source: "core_archive",
+        input_requirement_ref: "supplementary_figure",
+        binding_kind: "provenance_only" as const,
+        parameters: {},
+      },
       { binding_id: "supplementary_table", source: "core_archive", input_requirement_ref: "supplementary_table", parameters: {} },
     ];
     const rawPrepare = buildCoreProfilePrepareSubmission({
@@ -372,6 +403,7 @@ describe("literature experiment chart formal closure", () => {
       registeredSources: {
         fulltext: fulltext.asset_ref.asset_id,
         vlm_evidence: vlmAsset.asset_id,
+        supplementary_figure: image.receipt.asset_ref.asset_id,
         supplementary_table: parsedCsv.receipt.asset_ref.asset_id,
       },
       acquisitionRequests: {},
@@ -420,6 +452,17 @@ describe("literature experiment chart formal closure", () => {
       productRequirements,
       isGenerationCurrent: () => true,
     });
+    const transformInputAssetIds = execution.receipt.input_asset_receipts.map(
+      (receipt) => receipt.asset_id,
+    );
+    expect(transformInputAssetIds).toHaveLength(3);
+    expect(transformInputAssetIds).not.toContain(image.receipt.asset_ref.asset_id);
+    expect(execution.operationResult.dependency_closure.input_asset_ids).toContain(
+      image.receipt.asset_ref.asset_id,
+    );
+    expect(execution.materialization.candidate.registered_asset_ids).toContain(
+      image.receipt.asset_ref.asset_id,
+    );
     let publicationReviewCount = 0;
     const outputRoot = path.join(taskRoot, "dataset_runs", "run_literature_chart", "literature_chart_fixture");
     let published: Awaited<ReturnType<typeof publishDynamicFamily>>;

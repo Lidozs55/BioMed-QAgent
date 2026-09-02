@@ -6,6 +6,8 @@
 
 ## A 级 — 该接设置系统的写死（修复候选）
 
+> 状态更新（2026-08-31）：A1/A2 已完成 Settings 接线；下表保留发现时事实与修法方向，不再代表当前运行时。
+
 | # | 位置 | 写死内容 | 影响 | 修法方向 |
 |---|------|---------|------|---------|
 | A1 | `processing/vlm/vlm-client.ts:19` `VL_MODEL_NAME="qwen-vl-max"`；`settings/model-registry/model-resolution.ts:97` fallback；`chart-extraction.ts:212/382/538` | **VLM（图表抽取）模型完全在设置系统之外**：除非 active 模型 `capabilities.image=true`，永远打 qwen-vl-max。换模型对它无效、账单不出现在 active 模型上，与 B7 同族（身份写死+显示层不知情） | 高（图表 gold 案例的计费与可观测性黑洞） | settings 增加 vlm 模型槽（provider/model 二选一来源），`resolveVlmConfig` 读它；错误消息里的模型名改用解析值 |
@@ -23,10 +25,10 @@
 - **egress/SSRF 防线**：`url-policy.ts` 环视/私网拦截、`validateCredentialedPublicUrl`、host→preset 推断（`service.ts:767-774`）
 - **权限 fail-closed 面**：supervisor 固定解析器白名单（`parse*.js` 无参形式）、`SENSITIVE_KEY`/脱敏正则（event-adapter、supervisor `SECRET_KEY`）、protected-paths、workspace_exec 对 curl/wget/URL-bearing 的预拒绝
 - **wire/协议上限**：`event-adapter` 4096/200/depth-3/20-items 截断、`transform-host/protocol.ts` 帧数值上限、`http/body.ts` 1MiB body 上限——DoS 护栏
-- **供给链锚点**：`gold9-providers.ts` 官方导出物的**固定内容 digest**（45/20min 专项预算注释齐全——这是范本，不是坏味道）、`ENV_BOOTSTRAP_PROVIDER_ID/MODEL_ID` 固定幂等 id、`schema_version` 常量
+- **供给链锚点**：`gold9-providers.ts` 官方导出物的**固定内容 digest**（45/20min 专项预算注释齐全——这是范本，不是坏味道）、`schema_version` 常量
 - **来源事实知识表**：`model-catalog.ts`（各模型窗口/能力）、`catalog.ts` VENDORS 与 param-specs、GEO/NCBI/EPMC 官方端点本身（单源化见 A7，事实值没错）
 - **兼容谓词**：`usesDashScopeQwen`/`rejectsSamplingOverrides`（按模型名前缀的方言判定——是 provider 怪癖知识，写死正确；改名风险在注释已标）
-- **PI_\* 环境变量链**：env 是设置系统的合法引导源（上轮已移除其后的臆造默认）
+- **模型配置来源（更新）**：模型 Provider/API key/主模型/视觉模型已统一归属 Web Settings；`PI_*` / `DASHSCOPE_*` 不再是合法引导源。Host、部署和工具专用 env 不在本审计项范围内。
 
 ## C 级 — 内部工程常数（保持现状，注释即可）
 
@@ -34,7 +36,7 @@
 
 ## 结论与去向
 
-1. **真问题集中在 VLM 通道（A1/A2）**：与已出事的 B7 同构——模型身份写死 + 设置层不感知。gold789 图表案例上会直接表现为"计费对不上、换模型无效"。建议进分流清单高优先级。
+1. **VLM 通道（A1/A2）已修**：生产调用现在从持久化 Settings 解析视觉模型、Provider endpoint 与凭据，并在缺失时 fail closed；测试/fixture 仍可显式注入固定配置。
 2. **A3/A6 是"幽灵开关"家族**：settings 里字段存在但被代码常量封顶/旁路 → 与 settings-wiring-audit 剩余项合并处理，逐字段加"改设置必生效"的断言测试。
 3. A4-A7 是收敛/单源化，低风险。
 4. **B 级零改动**——本报告一半价值在于明确"这些不许动"。

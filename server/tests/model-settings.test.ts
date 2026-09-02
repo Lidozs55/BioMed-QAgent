@@ -1038,12 +1038,31 @@ describe("TypeScript model settings", () => {
     expect(providers).toHaveLength(1);
   });
 
-  test("ships no default model name: unconfigured until the user selects one", async () => {
+  test("ignores model environment variables: unconfigured until the user selects one", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
-    const service = await ModelSettingsService.create({ settingsDir });
+    const original = {
+      dashscopeApiKey: process.env["DASHSCOPE_API_KEY"],
+      piApiKey: process.env["PI_API_KEY"],
+      piModel: process.env["PI_MODEL"],
+    };
+    process.env["DASHSCOPE_API_KEY"] = "sk-must-not-bootstrap";
+    process.env["PI_API_KEY"] = "sk-must-not-bootstrap";
+    process.env["PI_MODEL"] = "must-not-bootstrap";
+    let service: ModelSettingsService;
+    try {
+      service = await ModelSettingsService.create({ settingsDir });
+    } finally {
+      if (original.dashscopeApiKey === undefined) delete process.env["DASHSCOPE_API_KEY"];
+      else process.env["DASHSCOPE_API_KEY"] = original.dashscopeApiKey;
+      if (original.piApiKey === undefined) delete process.env["PI_API_KEY"];
+      else process.env["PI_API_KEY"] = original.piApiKey;
+      if (original.piModel === undefined) delete process.env["PI_MODEL"];
+      else process.env["PI_MODEL"] = original.piModel;
+    }
     const baseUrl = await serve(service);
     const settings = await (await fetch(`${baseUrl}/api/v1/settings`)).json() as Record<string, unknown>;
     expect(settings.model_name).toBe("");
+    expect(settings.api_key_configured).toBe(false);
     expect(settings.run_ready).toBe(false);
     expect(settings.run_block_reason).toBe("provider credentials are required");
   });

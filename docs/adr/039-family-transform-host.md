@@ -40,8 +40,10 @@ ProductAssessment 或 Publisher。
 - 调用方显式选择 `execution_backend=in_process_unisolated`；
 - receipt 同样诚实记录 `in_process_unisolated` 和 `securityBoundary=false`；
 - source 由 Host normalize/compile，bundle content-addressed，并在执行前重验 SHA-256；
-- 输入只来自当前 task 的 registered immutable asset/result receipts，按 exact handle/order/
-  owner/size/digest 重新验证；不向 transform 暴露路径、credentials 或 workspace API；
+- 正式来源只来自当前 task 的 registered immutable asset/result receipts。显式
+  `transform_input` 按 exact handle/order/owner/size/digest 重验并进入 Host；显式
+  `provenance_only` 只进入 Core dependency/provenance closure，不产生 Host handle、不解码为
+  UTF-8，也不向 transform 暴露。两类都禁止路径、credentials 或 workspace API；
 - bounded output/log、deadline、generation/cancel fence 在 admission 前生效；
 - `node:vm` 只提供同步 timeout，不提供隔离；
 - 该 backend 不接受 `sandbox`、`secure`、`isolated` 等能力声明。
@@ -59,6 +61,14 @@ multi-table B3、创建 Core evidence、ProductAssessment 和 immutable Publicat
 
 Agent、Transform、FamilySpec、workspace 和 Host receipt 都不能直接创建 Publication。
 
+若 native committed OperationResult/candidate 已存在，且命中显式 typed 产品拒绝
+（literature semantic profile、最终 B3/ProductAssessment 不可发布，或
+`publication_acceptance` 人工 reject/skip），Application Host 可以把 candidate 表逐文件
+重新读取并按 receipt 重验 size/SHA-256，然后**复制**到 task-level untrusted quarantine。
+该旁路仍返回正式拒绝，只产生 `authoritative=false` / `trust=untrusted` 的 `ua_*` receipt；
+不得创建 Publication、正式 Artifact、正式事件或 task outcome。未知异常以及
+cancel/timeout/resource/I/O/stale fence/身份错配/路径或摘要漂移不得降级。
+
 ### 4. 严格 submission 与 identity
 
 `submit_dynamic_family_publication`（本 ADR 撰写时名为 `submit_dynamic_family_build`）只接受 exact-key、descriptor-safe、digest-bound input：
@@ -66,7 +76,9 @@ Agent、Transform、FamilySpec、workspace 和 Host receipt 都不能直接创�
 - valid `FamilySpec` canonical digest 和 selected Projection digest；
 - Host-compiled transform descriptor digest（首次 mismatch 会返回 expected digest，调用方
   必须用该 digest 重提；不能跳过 readmission）；
-- `binding_id → asset_<sha256>` 的 task-owned registered source closure；
+- `binding_id → asset_<sha256>` 的 task-owned registered source closure，以及每个 binding 的
+  显式 `transform_input | provenance_only` kind；kind 是 digest-bound wire fact，缺省仅为旧 wire
+  兼容的 `transform_input`，不得按媒体类型推断；
 - 禁止 direct/workspace paths、discovery response bytes、unknown fields、Proxy/accessor objects、
   example scope 和 sandbox/security claims；
 - `build_id` 只是 execution proposal identity，不能生成 dataset/provider revision identity。

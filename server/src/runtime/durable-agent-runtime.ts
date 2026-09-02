@@ -1671,6 +1671,21 @@ export async function createDurableAgentRuntime(
         response.end(file.content);
         return;
       }
+      // Read-only Assets-panel projection (no events, no artifacts). Exact-key
+      // SourceAssetRegistrationReceipt wire DTOs only; unknown task -> 404.
+      const sourceAssets = /^\/api\/v1\/tasks\/([^/]+)\/source-assets$/.exec(url.pathname);
+      if (request.method === "GET" && sourceAssets !== null) {
+        const taskId = decodeURIComponent(sourceAssets[1] ?? "");
+        if (await repository.getSnapshot(taskId) === null) {
+          sendJson(response, 404, { detail: "Task not found" });
+          return;
+        }
+        const receipts = await repository
+          .sourceAssetRegistry(taskId)
+          .listRegistrations();
+        sendJson(response, 200, { items: receipts });
+        return;
+      }
       const quarantineList = /^\/api\/v1\/tasks\/([^/]+)\/quarantine$/.exec(url.pathname);
       if (request.method === "GET" && quarantineList !== null) {
         sendJson(response, 200, await listQuarantineArtifacts(decodeURIComponent(quarantineList[1] ?? "")));

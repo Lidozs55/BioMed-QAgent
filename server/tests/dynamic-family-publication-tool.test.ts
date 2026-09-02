@@ -1,4 +1,5 @@
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -556,6 +557,182 @@ describe("dynamic family build tool boundary", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("executes a binary provenance_only member alongside a UTF-8 transform input without UTF-8 failure", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "dynamic-family-provenance-only-"));
+    try {
+      await mkdir(path.join(root, "source_assets"), { recursive: true });
+      await writeFile(path.join(root, "source_assets", "source.csv"), "record_id,value\nr1,1\n", "utf8");
+      const binaryBytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x00, 0xff, 0xfe, 0x01]);
+      await writeFile(path.join(root, "source_assets", "figure.pdf"), binaryBytes);
+      const registry = new SourceAssetRegistry("task_dynamic", root);
+      const csvReceipt = await registry.register({
+        sourceId: "source_dynamic",
+        relativePath: "source_assets/source.csv",
+        mediaType: "text/csv",
+      });
+      await registry.registerCoreAcquisitionProvenance(csvReceipt, {
+        provider_id: "fixture.files.v1",
+        implementation_digest: A,
+        request_identity_digest: B,
+      });
+      // Register the binary PDF and derive a Core "extracted member" from it so
+      // the provenance-only binding resolves through resolveFormalInput's
+      // derived path (registered derived asset + committed OperationResult).
+      const binaryAssetId = await (async () => {
+        const carrierReceipt = await registry.register({
+          sourceId: "figure_carrier",
+          relativePath: "source_assets/figure.pdf",
+          mediaType: "application/pdf",
+        });
+        await registry.registerCoreAcquisitionProvenance(carrierReceipt, {
+          provider_id: "fixture.files.v1",
+          implementation_digest: A,
+          request_identity_digest: `c${"".padEnd(63, "0")}`,
+        });
+        const memberRelativePath = "source_assets/parsed-members/figure-member.pdf";
+        await mkdir(path.join(root, "source_assets", "parsed-members"), { recursive: true });
+        await writeFile(path.join(root, ...memberRelativePath.split("/")), binaryBytes);
+        const derived = await registry.registerDerived({
+          sourceId: "figure_member",
+          relativePath: memberRelativePath,
+          role: "source",
+          mediaType: "application/pdf",
+          parentAssetIds: [carrierReceipt.asset_ref.asset_id],
+          operationKind: "registered_parser",
+          operationResultId: "result_provenance_member",
+          implementationId: "fixture.pdf_member.v1",
+          implementationVersion: "1.0.0",
+          parametersDigest: createHash("sha256").update("member").digest("hex"),
+          evidence: { member_path: "figure.pdf" },
+        });
+        await registry.recordDerivedOperationResult({
+          schema_version: "1.0",
+          result_manifest_id: "result_provenance_member",
+          task_id: "task_dynamic",
+          run_id: "core",
+          requirement_id: "archive_extraction",
+          operation_id: "derive_provenance_member",
+          operation_kind: "parse",
+          operation_attempt_id: "attempt_provenance_member",
+          attempt: 1,
+          status: "succeeded",
+          input_digest: carrierReceipt.sha256,
+          parameter_digest: createHash("sha256").update("member").digest("hex"),
+          implementation_digest: createHash("sha256").update("fixture.pdf_member.v1@1.0.0").digest("hex"),
+          output_digest: derived.receipt.sha256,
+          output_kind: "source_asset",
+          output_summary: { member_path: "figure.pdf" },
+          output_files: [{
+            relative_path: derived.receipt.relative_path,
+            size_bytes: derived.receipt.size_bytes,
+            sha256: derived.receipt.sha256,
+          }],
+          dependency_closure: {
+            input_asset_ids: [carrierReceipt.asset_ref.asset_id],
+            upstream_result_manifest_ids: [],
+            parameter_digest: createHash("sha256").update("member").digest("hex"),
+            implementation_digest: createHash("sha256").update("fixture.pdf_member.v1@1.0.0").digest("hex"),
+          },
+          commit: {
+            state: "committed",
+            commit_id: "commit_provenance_member",
+            committed_at: "2026-08-28T00:00:00.000Z",
+          },
+        });
+        return derived.receipt.asset_ref.asset_id;
+      })();
+
+      const raw = await submission();
+      // Binding order: binary provenance_only first, transform CSV second.
+      // declared_input_roles close ONLY the transform_input subset.
+      (raw.transform_metadata as {
+        declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }>;
+      }).declared_input_roles = [{ role: "source", media_type: "text/csv", constraint_ref: null }];
+      raw.registered_sources = {
+        provenance_binding: binaryAssetId,
+        source_binding: csvReceipt.asset_ref.asset_id,
+      };
+      const proposal = raw.execution_proposal as {
+        source_bindings: Array<Record<string, unknown>>;
+      };
+      proposal.source_bindings = [
+        {
+          binding_id: "provenance_binding",
+          source: "registered_asset",
+          input_requirement_ref: "supplementary",
+          binding_kind: "provenance_only",
+          parameters: {},
+        },
+        {
+          binding_id: "source_binding",
+          source: "registered_asset",
+          input_requirement_ref: "source",
+          parameters: {},
+        },
+      ];
+      raw.transform_source = `export const transform = { run({ inputs }) { const [input] = inputs; return { outputs: [{ handle: "out_0", table_id: "records", schema_ref: "schema_records", locator_ref: input.receipt_id, content: "record_id,value\\nr1,1\\n", row_count: 1 }] }; } };`;
+
+      // Legacy wire still parses: absent binding_kind normalizes to transform_input.
+      const legacyParsed = await parseDynamicFamilyPublicationSubmission(await submission());
+      expect(legacyParsed.execution_proposal.source_bindings[0]?.binding_kind).toBe("transform_input");
+
+      const prepared = await prepareForSubmit(raw);
+      const parsed = prepared.submission;
+      expect(parsed.execution_proposal.source_bindings[0]?.binding_kind).toBe("provenance_only");
+      expect(parsed.execution_proposal.source_bindings[1]?.binding_kind).toBe("transform_input");
+
+      const result = await submitDynamicFamilyPublication({
+        taskId: "task_dynamic", runId: "run_dynamic", submission: parsed,
+        sourceAssetRegistry: registry, taskRoot: root, runtimeLimits: DEFAULT_RUNTIME_LIMITS,
+        generation: 0, preflightReceipt: prepared.receipt, preflightSubmission: parsed,
+      });
+
+      // The transform runtime saw exactly one UTF-8 input (in_0 = the CSV),
+      // never the binary member.
+      expect(result.receipt.input_asset_receipts).toHaveLength(1);
+      expect(result.receipt.input_asset_receipts[0]?.asset_id).toBe(csvReceipt.asset_ref.asset_id);
+      expect(result.receipt.input_asset_receipts[0]?.role).toBe("source");
+
+      // The single admitted OperationResult closes over ALL formal source assets.
+      expect(result.operationResult.dependency_closure.input_asset_ids).toEqual(
+        [binaryAssetId, csvReceipt.asset_ref.asset_id].sort(),
+      );
+      const registeredAssets = result.materialization.candidate.registered_asset_ids;
+      expect(registeredAssets).toEqual(expect.arrayContaining([binaryAssetId]));
+      expect(registeredAssets).toEqual(expect.arrayContaining([csvReceipt.asset_ref.asset_id]));
+
+      // Provenance covers the binary member and its full formal closure.
+      const provenanceAssetIds = result.sourceInputProvenance.map((fact) => fact.asset_id);
+      expect(provenanceAssetIds).toContain(binaryAssetId);
+      expect(provenanceAssetIds).toContain(csvReceipt.asset_ref.asset_id);
+      expect(result.sourceAcquisitionProvenance.map((fact) => fact.asset_id)).toContain(csvReceipt.asset_ref.asset_id);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects submissions with zero transform_input bindings before byte resolution", async () => {
+    const raw = await submission();
+    (raw.execution_proposal as {
+      source_bindings: Array<Record<string, unknown>>;
+    }).source_bindings[0]!.binding_kind = "provenance_only";
+    (raw.transform_metadata as {
+      declared_input_roles: Array<{ role: string; media_type: string; constraint_ref: string | null }>;
+    }).declared_input_roles = [];
+    const parsed = await parseDynamicFamilyPublicationSubmission(raw);
+    await expect(prepareDynamicFamilyPublication({
+      taskId: "task_dynamic", requirementId: "build_dynamic", generation: 0, submission: parsed,
+    })).rejects.toThrow(/at least one transform_input binding/);
+  });
+
+  test("rejects a hostile undeclared binding kind value", async () => {
+    const raw = await submission();
+    (raw.execution_proposal as {
+      source_bindings: Array<Record<string, unknown>>;
+    }).source_bindings[0]!.binding_kind = "carrier_evidence";
+    await expect(parseDynamicFamilyPublicationSubmission(raw)).rejects.toThrow(/binding_kind|Invalid binding_kind/i);
   });
 
   test("executes registered bytes through the total unisolated Core composition", async () => {

@@ -2,6 +2,7 @@ import type {
   FamilySpec,
   JsonValue,
   Projection,
+  SourceBindingKind,
 } from "@biomed/contracts";
 
 import { resolveCoreProductProfileDescriptor } from "../families/index.js";
@@ -17,6 +18,12 @@ export interface CoreProfileSubmissionBinding {
   readonly binding_id: string;
   readonly source: string;
   readonly input_requirement_ref: string;
+  /**
+   * Optional explicit binding role; legacy/absent normalizes to
+   * ``transform_input``. provenance_only bindings carry no declared transform
+   * role and are never decoded into runtime inputs.
+   */
+  readonly binding_kind?: SourceBindingKind;
   readonly parameters: Readonly<Record<string, JsonValue>>;
 }
 
@@ -53,17 +60,33 @@ export function buildCoreProfilePrepareSubmission(
 ): Readonly<Record<string, unknown>> {
   const scaffold = coreProductProfileScaffold(input.profileRef);
   safeId(input.requirementId, "requirementId");
-  if (input.sourceBindings.length === 0 || input.sourceBindings.length !== input.transformInputRoles.length) {
-    throw new TypeError("profile scaffold requires one transform input role per source binding");
+  if (input.sourceBindings.length === 0) {
+    throw new TypeError("profile scaffold requires at least one source binding");
+  }
+  if (!input.sourceBindings.some((binding) => (binding.binding_kind ?? "transform_input") === "transform_input")) {
+    throw new TypeError("profile scaffold requires at least one transform_input binding; provenance_only bindings cannot feed the transform runtime");
+  }
+  // transformInputRoles closes ONLY the transform_input bindings, preserving
+  // their source-binding order; provenance-only bindings carry no declared role.
+  const transformBindings = input.sourceBindings.filter(
+    (binding) => (binding.binding_kind ?? "transform_input") === "transform_input",
+  );
+  if (transformBindings.length !== input.transformInputRoles.length) {
+    throw new TypeError(
+      `profile scaffold declared input roles (${input.transformInputRoles.length}) do not close the transform_input bindings (${transformBindings.length})`,
+    );
   }
   const bindingIds = input.sourceBindings.map((binding) => safeId(binding.binding_id, "binding_id"));
   if (new Set(bindingIds).size !== bindingIds.length) throw new TypeError("profile scaffold binding IDs must be unique");
-  input.sourceBindings.forEach((binding, index) => {
-    safeId(binding.source, `sourceBindings[${index}].source`);
-    safeId(binding.input_requirement_ref, `sourceBindings[${index}].input_requirement_ref`);
-    if (input.transformInputRoles[index]?.role !== binding.input_requirement_ref) {
+  let transformRoleIndex = 0;
+  input.sourceBindings.forEach((binding) => {
+    safeId(binding.source, `sourceBindings[${binding.binding_id}].source`);
+    safeId(binding.input_requirement_ref, `sourceBindings[${binding.binding_id}].input_requirement_ref`);
+    if ((binding.binding_kind ?? "transform_input") !== "transform_input") return;
+    if (input.transformInputRoles[transformRoleIndex]?.role !== binding.input_requirement_ref) {
       throw new TypeError(`profile scaffold input role does not match binding '${binding.binding_id}'`);
     }
+    transformRoleIndex += 1;
   });
   const registered = Object.keys(input.registeredSources);
   const acquisitions = Object.keys(input.acquisitionRequests);

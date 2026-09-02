@@ -32,6 +32,14 @@ export default {
     "subject-empty": [0],
     "header-pattern": [2, "always"],
 
+    // Extend @commitlint/config-conventional's allowed types with `merge`, so
+    // merge commits (e.g. `merge: ...`) pass type-enum in addition to the
+    // custom header-pattern rule.
+    "type-enum": [2, "always", [
+      "build", "chore", "ci", "docs", "feat", "fix", "perf",
+      "refactor", "revert", "style", "test", "merge",
+    ]],
+
     // Override @commitlint/config-conventional's 100-char line limit for the
     // body/footer (and each body line), so long commit bodies are not rejected.
     // The default "body-leading-blank" / "footer-leading-blank" formatting
