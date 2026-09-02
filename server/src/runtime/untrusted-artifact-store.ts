@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -36,21 +36,41 @@ export async function storeUntrustedArtifact(
   if (bytes.length === 0) throw new TypeError("Submitted file is empty");
 
   const submissionId = `ua_${randomBytes(12).toString("hex")}`;
+  const root = quarantineRoot(taskRoot);
   const directory = submissionDirectory(taskRoot, submissionId);
-  await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, ARTIFACT_FILENAME), bytes, { flag: "wx" });
-  const receipt: UntrustedArtifactReceipt = {
-    ...metadata,
-    submission_id: submissionId,
-    task_id: taskId,
-    authoritative: false,
-    trust: "untrusted",
-    size_bytes: bytes.length,
-    sha256: sha256Bytes(bytes),
-    submitted_at: new Date().toISOString(),
-  };
-  await writeJsonAtomic(path.join(directory, RECEIPT_FILENAME), receipt);
-  return receipt;
+  const stagingDirectory = path.join(
+    root,
+    `.${submissionId}.${randomBytes(6).toString("hex")}.partial`,
+  );
+  await mkdir(root, { recursive: true });
+  let staged = false;
+  try {
+    await mkdir(stagingDirectory, { recursive: false });
+    staged = true;
+    await writeFile(path.join(stagingDirectory, ARTIFACT_FILENAME), bytes, { flag: "wx" });
+    const receipt: UntrustedArtifactReceipt = {
+      ...metadata,
+      submission_id: submissionId,
+      task_id: taskId,
+      authoritative: false,
+      trust: "untrusted",
+      size_bytes: bytes.length,
+      sha256: sha256Bytes(bytes),
+      submitted_at: new Date().toISOString(),
+    };
+    await writeJsonAtomic(path.join(stagingDirectory, RECEIPT_FILENAME), receipt);
+    await rename(stagingDirectory, directory);
+    staged = false;
+    return receipt;
+  } catch (error) {
+    // The hidden staging directory belongs only to this invocation. The final
+    // ua_* directory becomes visible atomically only after both bytes and its
+    // receipt are complete, so a failed call can never strand a partial ua_*.
+    if (staged) {
+      await rm(stagingDirectory, { recursive: true, force: true });
+    }
+    throw error;
+  }
 }
 
 export async function listUntrustedArtifacts(taskRoot: string): Promise<UntrustedArtifactReceipt[]> {

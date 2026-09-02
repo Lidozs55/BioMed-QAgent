@@ -3,12 +3,11 @@
 //
 // Produces a self-contained, runnable bundle per platform into target/:
 //   target/biomed-qagent-<version>-<win|linux|macos>/
-//     start.bat / start.sh   launcher (creates .env from .env.example on first run)
+//     start.bat / start.sh   launcher (model credentials are configured in the Web settings)
 //     server/                compiled Application Host + pruned production node_modules
 //     frontend/dist/         compiled SPA, served by the host (--static)
 //     database/              stdlib-only Python persistence bridge
 //     .pi/                   agent skills
-//     .env.example           configuration template
 //     runtime/node/          embedded Node.js (portable, nodejs.org)
 //     runtime/python/        embedded CPython (python-build-standalone, same distro uv uses)
 //                            with the pinned scientific stack preinstalled (PYTHON_EXTRAS)
@@ -408,7 +407,6 @@ function startBatScript() {
     "@echo off",
     "setlocal",
     'cd /d "%~dp0"',
-    'if not exist ".env" copy /y ".env.example" ".env" >nul',
     'set "BIOMED_PYTHON_BIN=%~dp0runtime\\python\\python.exe"',
     '"runtime\\node\\node.exe" --env-file-if-exists=.env server\\dist\\index.js --static',
     "",
@@ -420,7 +418,6 @@ function startShScript() {
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'cd "$(dirname "$0")"',
-    "[ -f .env ] || cp .env.example .env",
     `export BIOMED_PYTHON_BIN="$(pwd)/runtime/python/bin/python${PYTHON_MAJOR_MINOR}"`,
     'exec "./runtime/node/bin/node" --env-file-if-exists=.env server/dist/index.js --static',
     "",
@@ -439,14 +436,15 @@ function readmeText(version, platform) {
     `（python-build-standalone ${PYTHON_PBS_TAG}，与 uv 同源；已预装科学计算栈：${extras}）`,
     "",
     "一、启动步骤",
-    "  1. 启动服务（首次运行会自动从 .env.example 生成 .env）：",
+    "  1. 启动服务：",
     "     Windows：双击 start.bat",
     `     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python${PYTHON_MAJOR_MINOR}`,
     "              然后执行 ./start.sh",
     "     macOS  ：与 Linux 相同",
-    "  2. 编辑 .env，至少填写 DASHSCOPE_API_KEY（其余项按需）；改动后重启生效。",
-    "  3. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
-    "     端口可在 .env 中通过 PORT 修改（默认 5173）。",
+    "  2. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
+    "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
+    "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
+    "     如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
     "",
     "二、注意事项",
     "  1. Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时在目标机安装：",
@@ -456,11 +454,11 @@ function readmeText(version, platform) {
     "  3. 平台要求：Linux 需 glibc >= 2.28（Ubuntu 20.04+ / Debian 11+ 等）；",
     "     macOS 需 Apple Silicon（arm64）与 macOS 12 及以上版本。",
     "  4. 内嵌 Python 已预装 numpy/scipy，分析类脚本可直接运行，无需联网安装。",
-    "  5. .env 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
+    "  5. data/settings 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
     "  6. 若安全软件拦截内嵌的 node/python，请将本目录加入信任区。",
     "",
     "三、问题排查",
-    "  - 启动即退出：检查 .env 是否已配置、端口是否被占用。",
+    "  - 启动即退出：检查端口是否被占用；模型未配置时在 Web 设置中完成配置。",
     "  - Linux/macOS 报 Permission denied：见注意事项第 2 条。",
     "",
   ].join("\n");
@@ -566,11 +564,10 @@ for (const key of selected) {
   }
   stageTargetNativeBindings(srcDir, packageDir, key);
 
-  step(5, "stage frontend / database / skills / env template");
+  step(5, "stage frontend / database / skills");
   copyDir(path.join(srcDir, "frontend", "dist"), path.join(packageDir, "frontend", "dist"));
   copyDir(path.join(srcDir, "database"), path.join(packageDir, "database"));
   copyDir(path.join(srcDir, ".pi"), path.join(packageDir, ".pi"));
-  cpSync(path.join(srcDir, ".env.example"), path.join(packageDir, ".env.example"));
   if (!existsSync(path.join(packageDir, "frontend", "dist", "index.html"))) {
     fail("frontend/dist/index.html missing after staging");
   }

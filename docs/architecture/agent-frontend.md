@@ -217,8 +217,8 @@ base64 送 Qwen-VL；PDF 先用 `server/src/processing/vlm/pdf-images.ts` 提取
 **三级降级链**（L1→L2→L3，全部失败抛 `ChartExtractionError`，禁止静默空数据
 降级）：
 
-- L1 — Qwen-VL：主路径，要求 `DASHSCOPE_API_KEY`；返回严格 JSON
-  `{chart_type, axes, data_points, legend}`；
+- L1 — 设置中选择的视觉模型：主路径，要求其 Provider 已保存 API key；返回严格
+  JSON `{chart_type, axes, data_points, legend}`；
 - L2 — PDF 表格提取：仅 PDF 触发，用 pdfjs-dist（`server/src/processing/pdf/`）
   提取矢量 PDF 表格数据；
 - L3 — caption 文本：兜底，正则提取 `Figure N.` / `Table N.` captions，写入

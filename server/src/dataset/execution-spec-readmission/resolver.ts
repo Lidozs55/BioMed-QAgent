@@ -294,6 +294,7 @@ function resolveBinding(
       source: binding.source,
       registered_asset_ref: asset ? record.registered_ref : null,
       registered_result_ref: result ? record.registered_ref : null,
+      binding_kind: binding.binding_kind,
       parameters: binding.parameters,
     },
     record.receipt_digest,

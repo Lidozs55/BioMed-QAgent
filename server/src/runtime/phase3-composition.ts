@@ -82,6 +82,15 @@ import {
 import { createHilGatePreReview } from "./hil-pre-review.js";
 import type { HILApprovalPolicyStore } from "./hil-approval-store.js";
 import { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
+import {
+  LiteratureProfileRejectionError,
+  DynamicProductNotPublishableError,
+  PublicationAcceptanceRejectedError,
+} from "../dataset/dynamic-family/formal-rejections.js";
+import {
+  archiveCommittedDynamicTablesAsUntrustedArtifacts,
+} from "./dynamic-family-untrusted-fallback.js";
+import { createSemanticRouteFence } from "./semantic-route-fence.js";
 
 export { createDynamicFamilyPreflightCoordinator } from "./dynamic-family-preflight-coordinator.js";
 
@@ -444,6 +453,13 @@ export async function createPhase3Runtime(
       const dynamicFamilyPreflight = createDynamicFamilyPreflightCoordinator({
         stateFile: path.join(taskRoot, "state", "dynamic-family-preflight.json"),
       });
+      // Host-owned one-way route fence: once a run commits to Dynamic Family,
+      // static validate/execute stay fenced for the whole task, across
+      // restart, regardless of requirement_id changes or dynamic rejections.
+      const semanticRouteFence = createSemanticRouteFence({
+        taskRoot,
+        stateFile: path.join(taskRoot, "state", "semantic-route.json"),
+      });
       // Permission control plane: persistent user settings + per-task broker.
       const policyStore = options.permissionPolicyStore ?? new JsonPermissionPolicyStore(
         path.join(pathConfig.dataRoot, "settings", "agent-permissions.json"),
@@ -604,6 +620,10 @@ export async function createPhase3Runtime(
             options.dynamicFamilySeams?.resolveProductRequirements
             ?? resolveCoreProductTopologyRequirements
           )(submission.family_spec.assessment_policy_ref);
+          // Commit the one-way route fence before coordinator persistence or
+          // any formal dynamic preparation side effect. A changed
+          // requirement_id can never take the static route after this point.
+          await semanticRouteFence.commitDynamicRoute();
           const preparation = await dynamicFamilyPreflight.beginPrepare(submission.execution_proposal.requirement_id);
           const receipt = await prepareDynamicFamilyPublication({
             taskId,
@@ -741,23 +761,86 @@ export async function createPhase3Runtime(
           if (!dynamicFamilyPreflight.isCurrent(reservation)) {
             throw new Error("dynamic family preflight generation is stale");
           }
-          const product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
-            taskId,
-            taskRoot,
-            workspaceRoot,
-            runId: currentRunId,
-            requirementId: submission.execution_proposal.requirement_id,
-            execution: result,
-            validationProfileRef: submission.family_spec.validation_policy_ref,
-            productRequirements,
-            hilGate: approvalGate,
-            signal,
-            isGenerationCurrent: async () =>
-              reservation !== null
-              && await assertExecutionLockOwned()
-              && dynamicFamilyPreflight.isCurrent(reservation),
-            beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
-          });
+          let product: Awaited<ReturnType<typeof publishDynamicFamily>>;
+          try {
+            product = await (options.dynamicFamilySeams?.publishDynamicFamily ?? publishDynamicFamily)({
+              taskId,
+              taskRoot,
+              workspaceRoot,
+              runId: currentRunId,
+              requirementId: submission.execution_proposal.requirement_id,
+              execution: result,
+              validationProfileRef: submission.family_spec.validation_policy_ref,
+              productRequirements,
+              hilGate: approvalGate,
+              signal,
+              isGenerationCurrent: async () =>
+                reservation !== null
+                && await assertExecutionLockOwned()
+                && dynamicFamilyPreflight.isCurrent(reservation),
+              beforeFinalFence: options.dynamicFamilySeams?.beforeDynamicFamilyFinalFence,
+            });
+          } catch (publicationError) {
+            // Gold6 R4 automatic untrusted-artifact fallback: after a fully
+            // committed dynamic execution, only explicitly typed formal
+            // rejections (literature semantic profile, final B3/Product
+            // Assessment non-publishable, publication_acceptance human
+            // reject/skip) archive the candidate tables into the
+            // non-authoritative quarantine, then rethrow the formal rejection
+            // with ua_* receipts attached for the tool response projection.
+            // Selection is instanceof-based on dataset-layer typed classes —
+            // never string classification — so cancellation/abort, timeout,
+            // resource, filesystem/copy/hash/path, stale generation/fence,
+            // HIL request, identity-mismatch, and unknown errors propagate
+            // unchanged with zero fallback.
+            const allowlisted = publicationError instanceof LiteratureProfileRejectionError
+              || publicationError instanceof DynamicProductNotPublishableError
+              || publicationError instanceof PublicationAcceptanceRejectedError;
+            if (allowlisted) {
+              const message = publicationError instanceof Error
+                ? publicationError.message
+                : String(publicationError);
+              try {
+                const receipts = await archiveCommittedDynamicTablesAsUntrustedArtifacts({
+                  result,
+                  taskId,
+                  taskRoot,
+                  runId: currentRunId,
+                  requirementId: submission.execution_proposal.requirement_id,
+                  rejectionReason: message,
+                  failedChecks: publicationError instanceof DynamicProductNotPublishableError
+                    ? publicationError.failedChecks
+                    : undefined,
+                  signal,
+                  isExecutionCurrent: async () =>
+                    reservation !== null
+                    && await assertExecutionLockOwned()
+                    && dynamicFamilyPreflight.isCurrent(reservation),
+                });
+                publicationError.attachUntrustedArtifacts(receipts);
+              } catch (fallbackError) {
+                // A failed archive (including the helper's own no-TOCTOU
+                // integrity re-verification) stays a hard reject without
+                // ua_* output; the original typed publication error remains
+                // authoritative and carries only a bounded diagnostic.
+                const fallbackNote = `untrusted artifact fallback failed: ${fallbackError instanceof Error ? fallbackError.message.slice(0, 300) : String(fallbackError)}`;
+                console.warn("runtime.dynamic_publication_untrusted_fallback", {
+                  detail: fallbackNote,
+                });
+                // Diagnostic attachment is best-effort only. Never replace
+                // the original typed rejection if an outcome was already
+                // attached to its carrier.
+                if (
+                  publicationError.untrusted_artifacts.length === 0
+                  && publicationError.fallback_failure === null
+                ) {
+                  publicationError.recordFallbackFailure(fallbackNote);
+                }
+              }
+              throw publicationError;
+            }
+            throw publicationError;
+          }
           const publicationManifestSha = product.publication.publication.manifest_sha256;
           if (publicationManifestSha === undefined) {
             throw new Error("dynamic publication is missing its manifest byte receipt");
@@ -821,6 +904,7 @@ export async function createPhase3Runtime(
         taskRoot,
         runId: () => currentRunId,
         piSessionId: () => currentPiSessionId,
+        semanticRouteFence,
         discoveryLedger: () => toolHooks.discoveryLedger?.() ?? null,
         onDiagnostic: (diagnostic) => {
           console.info("tool.dataset_execution", diagnostic);

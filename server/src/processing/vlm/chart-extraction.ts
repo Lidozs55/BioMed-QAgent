@@ -87,12 +87,34 @@ export interface VlmChartSummary {
   source_asset_id: string;
 }
 
+/**
+ * Immutable HIL review metadata for one accepted/corrected review batch
+ * (R5 generic VLM evidence closure). Reject/skip produces no reviewed
+ * terminal carrier, so no such metadata exists in that case.
+ */
+export interface VlmReviewMetadata {
+  request_id: string;
+  review_id: string;
+  action: "accept" | "correct";
+  reviewer: string;
+  reviewed_at: string;
+  evidence_digest: string;
+  reason: string;
+}
+
 export interface VlmResultOk {
   status: "ok";
   source_file: string;
   source_path: string;
   outputs: string[];
   evidence_manifest: string;
+  /**
+   * Task-relative path of the pre-review (candidate) evidence manifest
+   * projected before HIL. Always present on success.
+   */
+  candidate_manifest: string;
+  /** Present only when the review batch was accepted or corrected. */
+  review?: VlmReviewMetadata;
   model_name: string;
   model_version: string;
   prompt_digest: string;
@@ -121,6 +143,52 @@ export interface VlmTools {
   ): Promise<VlmResult>;
 }
 
+/**
+ * R5 generic VLM evidence manifest projection (registered-paper parity, local
+ * helper — no import from the registered-paper module): a pure deterministic
+ * function of the chart/point rows and the resolved extraction identity,
+ * never of model-authored locator substitution. Charts carry exact identity
+ * plus the chart's known visual region; points inherit their owning chart's
+ * region (generic extraction has no per-point locator) and add the R5 point
+ * fields the validator exact-checks.
+ */
+function projectVlmEvidenceManifest(options: {
+  chartRows: readonly ChartRow[];
+  pointRows: readonly ChartPointRow[];
+  modelVersion: string;
+  promptDigest: string;
+}): {
+  charts: Array<Record<string, unknown>>;
+  points: Array<Record<string, unknown>>;
+} {
+  const chartById = new Map(options.chartRows.map((chart) => [chart.chart_id, chart]));
+  const charts = options.chartRows.map((chart) => ({
+    ...chart,
+    figure_id: chart.chart_id,
+    model_version: options.modelVersion,
+    prompt_digest: options.promptDigest,
+  }));
+  const points = options.pointRows.map((point) => {
+    const chart = chartById.get(point.chart_id);
+    return {
+      ...point,
+      point_type: "point" as const,
+      // The point's own locator identity is the KNOWN chart visual region:
+      // generic extraction reads every point from that region, so the region
+      // is represented consistently instead of inventing a distinct bbox.
+      page_number: chart?.page_number ?? "",
+      figure_id: chart?.chart_id ?? "",
+      bbox: chart?.bbox ?? "",
+      model_version: options.modelVersion,
+      prompt_digest: options.promptDigest,
+    };
+  });
+  return JSON.parse(JSON.stringify({ charts, points })) as {
+    charts: Array<Record<string, unknown>>;
+    points: Array<Record<string, unknown>>;
+  };
+}
+
 function correctionObject(value: JsonValue, path: string): Record<string, JsonValue> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new ChartExtractionError(`${path} must be an object`);
@@ -143,7 +211,7 @@ export async function reviewLowConfidencePoints(options: {
   hilGate?: DatasetHILGate | null;
   reviewAllModelPoints?: boolean;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<VlmReviewMetadata | null> {
   const chartById = new Map(options.chartRows.map((chart) => [chart.chart_id, chart]));
   // Every pending model estimate is review-bound. ``reviewAllModelPoints`` is
   // retained for callers from the earlier low-confidence-only API; pending
@@ -152,7 +220,7 @@ export async function reviewLowConfidencePoints(options: {
   const required = options.reviewAllModelPoints
     ? pending.filter((point) => chartById.get(point.chart_id)?.extraction_tier.startsWith("L1") === true)
     : pending;
-  if (required.length === 0) return;
+  if (required.length === 0) return null;
   if (options.hilGate === undefined || options.hilGate === null) {
     throw new ChartExtractionError(
       `${required.length} VLM point(s) require durable human review`,
@@ -202,7 +270,12 @@ export async function reviewLowConfidencePoints(options: {
     const removed = new Set(required.map((point) => point.point_id));
     const retained = options.pointRows.filter((point) => !removed.has(point.point_id));
     options.pointRows.splice(0, options.pointRows.length, ...retained);
-  } else if (review.decision.action === "accept") {
+    // Reject/skip produces NO reviewed terminal carrier: the caller keeps a
+    // candidate-only formal state that must stay unpublishable.
+    return null;
+  }
+  let metadata: VlmReviewMetadata;
+  if (review.decision.action === "accept") {
     for (const point of required) {
       point.human_review_state = "accepted";
       point.review_id = review.review_id;
@@ -211,6 +284,15 @@ export async function reviewLowConfidencePoints(options: {
       point.reviewed_at = review.reviewed_at;
       point.review_reason = review.reason ?? "";
     }
+    metadata = {
+      request_id: review.request_id,
+      review_id: review.review_id,
+      action: "accept",
+      reviewer: review.reviewer,
+      reviewed_at: review.reviewed_at,
+      evidence_digest: review.evidence_digest,
+      reason: review.reason ?? "",
+    };
   } else {
     const root = correctionObject(review.decision.correction, "VLM correction");
     const corrections = correctionObject(root["points"] ?? null, "VLM correction.points");
@@ -238,12 +320,22 @@ export async function reviewLowConfidencePoints(options: {
       point.reviewed_at = review.reviewed_at;
       point.review_reason = review.reason ?? "";
     }
+    metadata = {
+      request_id: review.request_id,
+      review_id: review.review_id,
+      action: "correct",
+      reviewer: review.reviewer,
+      reviewed_at: review.reviewed_at,
+      evidence_digest: review.evidence_digest,
+      reason: review.reason ?? "",
+    };
   }
   for (const chart of options.chartRows) {
     chart.data_point_count = options.pointRows.filter(
       (point) => point.chart_id === chart.chart_id,
     ).length;
   }
+  return metadata;
 }
 
 /** Resolve VLM config from explicit values and code defaults only. */
@@ -863,8 +955,48 @@ export function createVlmTools(options: {
 
       // Persist CSV artifacts (integrity + admission gates inside).
       const chartData = await chartDataDir(taskRoot);
+      const promptDigest = createHash("sha256").update(prompt, "utf8").digest("hex");
+      const tiersUsed = metas.map((meta) => meta.tier);
+      let review: VlmReviewMetadata | null;
+      let candidateManifestPath: string;
+      let reviewedManifestPath: string;
       try {
-        await reviewLowConfidencePoints({
+        // Candidate FIRST: deep-copy the pre-review rows and deterministically
+        // project/write the candidate manifest from rows/config only (never
+        // model-authored locator substitution). The candidate represents the
+        // pending points and the R5 identity fields before HIL mutates rows.
+        const candidateChartRows = structuredClone(chartRows) as ChartRow[];
+        const candidatePointRows = structuredClone(pointRows) as ChartPointRow[];
+        const candidateManifest = projectVlmEvidenceManifest({
+          chartRows: candidateChartRows,
+          pointRows: candidatePointRows,
+          modelVersion: config.model,
+          promptDigest,
+        });
+        const evidenceIdentity = createHash("sha256").update(JSON.stringify({
+          source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
+          source_label: sourceLabel,
+          prompt_digest: promptDigest,
+        })).digest("hex").slice(0, 24);
+        candidateManifestPath = path.join(
+          chartData,
+          `chart_evidence_manifest_${evidenceIdentity}.json`,
+        );
+        await writeFile(candidateManifestPath, `${JSON.stringify({
+          schema_version: "1.0",
+          source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
+          model_name: config.model,
+          model_version: config.model,
+          prompt_digest: promptDigest,
+          extraction_tiers: tiersUsed,
+          charts: candidateManifest.charts,
+          points: candidateManifest.points,
+        })}\n`, "utf8");
+
+        // Evidence-bound review mutates rows in place; the returned metadata
+        // is present ONLY for accept/correct (reject/skip yields no reviewed
+        // terminal carrier and the candidate stays the unpublishable state).
+        review = await reviewLowConfidencePoints({
           chartRows,
           pointRows,
           sourceLabel,
@@ -872,6 +1004,34 @@ export function createVlmTools(options: {
           signal,
           reviewAllModelPoints,
         });
+        const terminalChartRows = structuredClone(chartRows) as ChartRow[];
+        const terminalPointRows = structuredClone(pointRows) as ChartPointRow[];
+        const terminalManifest = projectVlmEvidenceManifest({
+          chartRows: terminalChartRows,
+          pointRows: terminalPointRows,
+          modelVersion: config.model,
+          promptDigest,
+        });
+        // The reviewed terminal manifest gets its own deterministic path so
+        // the candidate bytes stay byte-stable for Core registration; the
+        // result's evidence_manifest points at whichever file is terminal.
+        reviewedManifestPath = path.join(
+          chartData,
+          `chart_evidence_manifest_${evidenceIdentity}_reviewed.json`,
+        );
+        if (review !== null) {
+          await writeFile(reviewedManifestPath, `${JSON.stringify({
+            schema_version: "1.0",
+            source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
+            model_name: config.model,
+            model_version: config.model,
+            prompt_digest: promptDigest,
+            extraction_tiers: tiersUsed,
+            review,
+            charts: terminalManifest.charts,
+            points: terminalManifest.points,
+          })}\n`, "utf8");
+        }
         await writeChartCsvs(
           chartData,
           chartRows,
@@ -889,8 +1049,8 @@ export function createVlmTools(options: {
         throw error;
       }
 
-      hooks.onQuery?.(resolved, "extract_chart_data_vlm", "success", chartRows.length);
-      const tiersUsed = metas.map((meta) => meta.tier);
+      let evidenceManifestPath = candidateManifestPath;
+      if (review !== null) evidenceManifestPath = reviewedManifestPath;
       hooks.onProgress?.("processing", "chart_data_extracted", {
         source: "extract_chart_data_vlm",
         source_file: sourceLabel,
@@ -906,30 +1066,6 @@ export function createVlmTools(options: {
         source_asset_id: row.source_asset_id,
       }));
 
-      const promptDigest = createHash("sha256").update(prompt, "utf8").digest("hex");
-      const evidenceIdentity = createHash("sha256").update(JSON.stringify({
-        source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
-        source_label: sourceLabel,
-        prompt_digest: promptDigest,
-      })).digest("hex").slice(0, 24);
-      const evidenceManifestPath = path.join(
-        chartData,
-        `chart_evidence_manifest_${evidenceIdentity}.json`,
-      );
-      await writeFile(evidenceManifestPath, `${JSON.stringify({
-        schema_version: "1.0",
-        source_asset_ids: [...new Set(chartRows.map((row) => row.source_asset_id))],
-        model_name: config.model,
-        model_version: config.model,
-        prompt_digest: promptDigest,
-        extraction_tiers: tiersUsed,
-        charts: chartRows,
-        points: pointRows.map((point) => ({
-          ...point,
-          estimated_or_exact: point.confidence_level === "not_applicable" ? "exact" : "estimated",
-        })),
-      })}\n`, "utf8");
-
       const result: VlmResultOk = {
         status: "ok",
         source_file: sourceLabel,
@@ -938,9 +1074,12 @@ export function createVlmTools(options: {
           toTaskRelative(path.join(chartData, "chart_data.csv"), taskRoot),
           toTaskRelative(path.join(chartData, "chart_data_points.csv"), taskRoot),
           toTaskRelative(path.join(chartData, CONFIDENCE_ARTIFACT_FILE), taskRoot),
-          toTaskRelative(evidenceManifestPath, taskRoot),
+          toTaskRelative(candidateManifestPath, taskRoot),
+          ...(review !== null ? [toTaskRelative(reviewedManifestPath, taskRoot)] : []),
         ],
         evidence_manifest: toTaskRelative(evidenceManifestPath, taskRoot),
+        candidate_manifest: toTaskRelative(candidateManifestPath, taskRoot),
+        ...(review !== null ? { review } : {}),
         model_name: config.model,
         model_version: config.model,
         prompt_digest: promptDigest,

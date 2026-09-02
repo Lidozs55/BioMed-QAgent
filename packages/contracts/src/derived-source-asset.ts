@@ -11,7 +11,8 @@ import {
 export type CoreDerivedAssetOperationKind =
   | "archive_member_extraction"
   | "vlm_extraction"
-  | "registered_parser";
+  | "registered_parser"
+  | "review_evidence";
 
 export interface CoreDerivedAssetProvenance {
   schema_version: "1.0";
@@ -34,7 +35,7 @@ const KEYS = new Set([
   "parameters_digest", "output_digest", "evidence", "created_at",
 ]);
 const KINDS = new Set<CoreDerivedAssetOperationKind>([
-  "archive_member_extraction", "vlm_extraction", "registered_parser",
+  "archive_member_extraction", "vlm_extraction", "registered_parser", "review_evidence",
 ]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const ASSET_ID = /^asset_[0-9a-f]{64}$/u;

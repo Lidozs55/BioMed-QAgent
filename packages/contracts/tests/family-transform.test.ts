@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildImplementationDigestCanonical,
   computeImplementationDigest,
+  normalizeSourceBindingKind,
   parseAuditArtifactDefinition,
+  parseDatasetExecutionProposal2,
   parseResolvedDatasetExecutionSpec2,
   parseDatasetIdentity,
   parseDatasetTransform,
@@ -148,6 +150,125 @@ describe("A-T1 DatasetExecutionSpec 1.0 snapshot untouched + 2.0 separated", () 
       schema_refs: ["x"],
     } as unknown as ResolvedDatasetExecutionSpec2;
     expect(() => parseResolvedDatasetExecutionSpec2(bad, "$")).toThrow(/Unknown field|schema_refs/);
+  });
+
+  it("normalizes legacy bindings without binding_kind to transform_input", () => {
+    const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
+    const legacyProposal = {
+      schema_version: "2.0",
+      spec_kind: "proposal",
+      requirement_id: "build_1",
+      family_spec_ref: ref,
+      projection_ref: "proj_gene",
+      source_bindings: [{
+        binding_id: "binding_legacy",
+        source: "geo",
+        input_requirement_ref: "input_geo",
+        parameters: { accession: "GSE1" },
+      }],
+      transform_refs: [ref],
+      policy_refs: [],
+      output_format: "multitable",
+      idempotency_identity: "idem_1",
+    };
+    const parsed = parseDatasetExecutionProposal2(legacyProposal, "$");
+    expect(parsed.source_bindings[0]?.binding_kind).toBe("transform_input");
+
+    const legacyResolved = {
+      ...legacyProposal,
+      spec_kind: "resolved",
+      source_bindings: [{
+        binding_id: "binding_legacy",
+        source: "geo",
+        registered_asset_ref: ASSET_ID,
+        registered_result_ref: null,
+        parameters: {},
+      }],
+    };
+    const parsedResolved = parseResolvedDatasetExecutionSpec2(legacyResolved, "$");
+    expect(parsedResolved.source_bindings[0]?.binding_kind).toBe("transform_input");
+  });
+
+  it("parses an explicit provenance_only binding_kind without media-type inference", () => {
+    const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
+    const proposal = parseDatasetExecutionProposal2({
+      schema_version: "2.0",
+      spec_kind: "proposal",
+      requirement_id: "build_1",
+      family_spec_ref: ref,
+      projection_ref: "proj_gene",
+      source_bindings: [{
+        binding_id: "binding_supplement",
+        source: "europepmc",
+        input_requirement_ref: "supplementary",
+        binding_kind: "provenance_only",
+        parameters: {},
+      }],
+      transform_refs: [ref],
+      policy_refs: [],
+      output_format: "multitable",
+      idempotency_identity: "idem_1",
+    }, "$");
+    expect(proposal.source_bindings[0]?.binding_kind).toBe("provenance_only");
+    // Same media_type never implies a binding kind in the other direction.
+    expect(normalizeSourceBindingKind(undefined, "$")).toBe("transform_input");
+  });
+
+  it("rejects hostile binding_kind values as unknown fields or invalid enums", () => {
+    const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
+    const base = {
+      schema_version: "2.0",
+      spec_kind: "proposal",
+      requirement_id: "build_1",
+      family_spec_ref: ref,
+      projection_ref: "proj_gene",
+      source_bindings: [{
+        binding_id: "binding_1",
+        source: "geo",
+        input_requirement_ref: "input_geo",
+        binding_kind: "carrier_evidence",
+        parameters: {},
+      }],
+      transform_refs: [ref],
+      policy_refs: [],
+      output_format: "multitable",
+      idempotency_identity: "idem_1",
+    };
+    expect(() => parseDatasetExecutionProposal2(base, "$")).toThrow(/binding_kind/);
+    expect(() => parseDatasetExecutionProposal2({
+      ...base,
+      source_bindings: [{ ...(base.source_bindings[0] as Record<string, unknown>), binding_kind: 1 }],
+    }, "$")).toThrow(/binding_kind/);
+  });
+
+  it("binds binding_kind into the resolved spec digest input", async () => {
+    const ref: ScopeQualifiedRef = { scope: "curated", id: "fs_x", version: "2.0.0", digest: HEX };
+    const bindings = (bindingKind: string) => ([{
+      binding_id: "binding_1",
+      source: "geo",
+      registered_asset_ref: ASSET_ID,
+      registered_result_ref: null,
+      binding_kind: bindingKind,
+      parameters: {},
+    }]);
+    const specA = await import("../src/family-transform").then((module) => module.parseResolvedDatasetExecutionSpec2({
+      schema_version: "2.0",
+      spec_kind: "resolved",
+      requirement_id: "build_1",
+      family_spec_ref: ref,
+      projection_ref: "proj_gene",
+      source_bindings: bindings("transform_input"),
+      transform_refs: [ref],
+      policy_refs: [],
+      output_format: "multitable",
+      idempotency_identity: "idem_1",
+    }, "$"));
+    const specB = await import("../src/family-transform").then((module) => module.parseResolvedDatasetExecutionSpec2({
+      ...specA,
+      source_bindings: bindings("provenance_only"),
+    }, "$"));
+    expect(stableStringify(specA.source_bindings)).not.toBe(stableStringify(specB.source_bindings));
+    expect(stableStringify(specB.source_bindings)).toContain("provenance_only");
   });
 });
 

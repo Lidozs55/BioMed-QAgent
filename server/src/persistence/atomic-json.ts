@@ -5,7 +5,7 @@
  * ``product-api.ts`` (``readPersonalization``/``writePersonalization``).
  */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 
 /** Temp files older than this are considered crashed-write leftovers. */
@@ -80,10 +80,20 @@ export async function writeJsonAtomic(
   await mkdir(path.dirname(filePath), { recursive: true });
   await sweepStaleTempFiles(filePath);
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: options.private ? 0o600 : undefined,
-  });
-  if (options.private) await chmod(temporary, 0o600).catch(() => undefined);
+  const body = `${JSON.stringify(value, null, 2)}\n`;
+  const handle = await open(temporary, "w", options.private ? 0o600 : 0o666);
+  try {
+    if (options.private) await chmod(temporary, 0o600);
+    await handle.writeFile(body, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
   await rename(temporary, filePath);
+  const directoryHandle = await open(path.dirname(filePath), "r");
+  try {
+    await directoryHandle.sync();
+  } finally {
+    await directoryHandle.close();
+  }
 }

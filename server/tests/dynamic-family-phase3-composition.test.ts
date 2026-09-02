@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { canonicalDigest } from "../src/dataset/adapters/identity.js";
 import { submitDynamicFamilyPublication } from "../src/dataset/dynamic-family/submission.js";
 import { publishDynamicFamily } from "../src/dataset/dynamic-family/publication.js";
+import { PublicationAcceptanceRejectedError } from "../src/dataset/dynamic-family/formal-rejections.js";
 import type { BioMedAgentAdapter, BioMedAgentSession, BioMedSessionConfig } from "../src/agent/contracts.js";
 import {
   createPhase3Runtime,
@@ -22,6 +23,7 @@ import {
   type Phase3DynamicFamilySeams,
 } from "../src/runtime/phase3-composition.js";
 import type { CoreAcquisitionResult } from "../src/dataset/acquisition/runtime.js";
+import { listUntrustedArtifacts } from "../src/runtime/untrusted-artifact-store.js";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -276,6 +278,146 @@ describe("dynamic family phase3 composition fencing", () => {
     await expect(readdir(publishRoot)).resolves.toEqual([]);
     const events = await runtime.repository.listEvents(accepted.task_id, 0);
     expect(events.some((event) => event.payload.type === "publication_created")).toBe(false);
+    await runtime.close();
+  });
+
+  test("archives a real committed candidate while the tool stays failed and no formal product exists", async () => {
+    const tasksRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-fallback-"));
+    roots.push(tasksRoot);
+    const workspacesRoot = await mkdtemp(path.join(os.tmpdir(), "phase3-dynamic-fallback-workspaces-"));
+    roots.push(workspacesRoot);
+    let acquisitionCalls = 0;
+    let submittedError: Record<string, unknown> | null = null;
+    const actualSubmit = submitDynamicFamilyPublication;
+    const acquisitionRuntimeFactory: NonNullable<Phase3DynamicFamilySeams["createAcquisitionRuntime"]> = ({
+      taskRoot,
+      sourceAssetRegistry,
+    }): Phase3AcquisitionRuntime => ({
+      plan: async () => ({
+        requestIdentityDigest: REQUEST_DIGEST,
+        providerId: "geo.files.v1",
+        implementationDigest: IMPLEMENTATION_DIGEST,
+        recipe: null,
+      }),
+      acquire: async (request): Promise<CoreAcquisitionResult> => {
+        acquisitionCalls += 1;
+        const sourceDir = path.join(taskRoot, "source_assets");
+        await mkdir(sourceDir, { recursive: true });
+        await writeFile(path.join(sourceDir, "geo.csv"), "record_id,value\nr1,1\n", "utf8");
+        const receipt = await sourceAssetRegistry.register({
+          sourceId: `geo_fallback_${acquisitionCalls}`,
+          relativePath: "source_assets/geo.csv",
+        });
+        await sourceAssetRegistry.registerCoreAcquisitionProvenance(receipt, {
+          provider_id: request.provider_id!,
+          implementation_digest: IMPLEMENTATION_DIGEST,
+          request_identity_digest: REQUEST_DIGEST,
+        });
+        return {
+          requestIdentityDigest: REQUEST_DIGEST,
+          attempts: [],
+          sourceAsset: receipt.asset_ref,
+          extractionAssets: [],
+        };
+      },
+    });
+    const adapter: BioMedAgentAdapter = {
+      async createSession(config: BioMedSessionConfig): Promise<BioMedAgentSession> {
+        const tools = config.tools ?? [];
+        const prepareTool = tools.find((tool) => tool.name === "prepare_dynamic_family_publication");
+        const submitTool = tools.find((tool) => tool.name === "submit_dynamic_family_publication");
+        if (prepareTool === undefined || submitTool === undefined) {
+          throw new Error("dynamic tools were not injected");
+        }
+        return {
+          piSessionId: `pi_fallback_${config.taskId}`,
+          taskId: config.taskId,
+          runId: config.runId,
+          run: async function* run(): AsyncIterable<import("../src/agent/contracts.js").BioMedAgentEvent> {
+            const prepared = await prepareTool.execute(await rawSubmission());
+            if (prepared.isError === true) throw new Error(`prepare failed: ${prepared.content}`);
+            const receipt = (JSON.parse(prepared.content) as {
+              preflight_receipt: DynamicFamilyPreflightReceipt;
+            }).preflight_receipt;
+            const submitted = await submitTool.execute({ preflight_receipt: receipt });
+            expect(submitted.isError).toBe(true);
+            submittedError = (JSON.parse(submitted.content) as {
+              error: Record<string, unknown>;
+            }).error;
+            yield { type: "turn_completed" };
+          },
+          cancel: async () => undefined,
+          dispose: async () => undefined,
+        };
+      },
+    };
+    const runtime = await createPhase3Runtime({
+      tasksRoot,
+      workspacesRoot,
+      repositoryRoot: path.resolve("."),
+      agentExecPolicy: null,
+      adapter,
+      database: null,
+      browserPool: null,
+      resolveRuntimeLimits: () => ({ ...DEFAULT_RUNTIME_LIMITS, build_timeout_seconds: 30 }),
+      dynamicFamilySeams: {
+        resolveProductRequirements: () => PRODUCT_REQUIREMENTS,
+        createAcquisitionRuntime: acquisitionRuntimeFactory,
+        submitDynamicFamilyPublication: actualSubmit,
+        publishDynamicFamily: async () => {
+          throw new PublicationAcceptanceRejectedError(
+            "reject",
+            "reviewer rejected the formal candidate",
+          );
+        },
+      },
+    });
+    const server = createServer((request, response) => { void runtime.handle(request, response); });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("phase3 fallback test server has no address");
+    }
+    const created = await fetch(`http://127.0.0.1:${address.port}/api/v1/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        request_id: "phase3_dynamic_fallback",
+        input: "reject a committed candidate and preserve its untrusted bytes",
+        databases: [],
+        mode: "agent",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const accepted = await created.json() as { task_id: string; run_id: string };
+    await expect.poll(async () => {
+      const snapshot = await runtime.repository.getSnapshot(accepted.task_id);
+      return snapshot?.runs.find((run) => run.run_id === accepted.run_id)?.status;
+    }, { timeout: 30_000 }).toBe("completed");
+
+    expect(submittedError).toMatchObject({
+      code: "dynamic_publication_rejected",
+      formal_status: "rejected",
+      message: expect.stringContaining("reviewer reason: reviewer rejected"),
+      untrusted_artifacts: [expect.objectContaining({
+        table_id: "records",
+        authoritative: false,
+        trust: "untrusted",
+      })],
+    });
+    const taskRoot = path.join(tasksRoot, accepted.task_id);
+    const quarantine = await listUntrustedArtifacts(taskRoot);
+    expect(quarantine).toHaveLength(1);
+    expect(quarantine[0]).toMatchObject({
+      authoritative: false,
+      trust: "untrusted",
+      name: "records.csv",
+    });
+    const events = await runtime.repository.listEvents(accepted.task_id, 0);
+    expect(events.some((event) => event.payload.type === "publication_created")).toBe(false);
+    expect(events.some((event) => event.payload.type === "artifact_produced")).toBe(false);
+    expect((await runtime.repository.getSnapshot(accepted.task_id))?.current_publication_id).toBeNull();
     await runtime.close();
   });
 

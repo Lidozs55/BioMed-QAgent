@@ -1,0 +1,377 @@
+{
+  "schema_version": "1.0",
+  "attempt_count": 8,
+  "typed_semantic_rejections_with_fallback": 5,
+  "control_rejections_without_fallback": 3,
+  "attempts": [
+    {
+      "message_id": "01936c03",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "Core VLM provenance requires an embedded evidence manifest",
+      "formal_status": "rejected",
+      "untrusted_artifacts": [
+        {
+          "submission_id": "ua_785fcaeaca684e9c0e3bbeb4",
+          "table_id": "activity_value_records",
+          "name": "activity_value_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 106317,
+          "sha256": "11427880156e35744caaef49644950d06a2d52d4d83aadd7357e4db5faae21c6",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_bc6b159e854d5d6e18cebc4b",
+          "table_id": "paper_records",
+          "name": "paper_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 1099,
+          "sha256": "36950161627a7c69bd6c8a50c4b3fb746e68110c334b56f9183f5216b00bc8c2",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_ca23b412a00c54f1a96e33e8",
+          "table_id": "experiment_records",
+          "name": "experiment_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 82478,
+          "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_92b0421baad813985809fc3e",
+          "table_id": "chart_series",
+          "name": "chart_series.csv",
+          "media_type": "text/csv",
+          "size_bytes": 141714,
+          "sha256": "867a1512982705329ef84c3299fedbcec73b6759a2e5c730ea6d91425aa75581",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_9bc709075644db46f7adf357",
+          "table_id": "supplementary_asset_records",
+          "name": "supplementary_asset_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 2481,
+          "sha256": "4d0428a6c550462eb32a6cadb26eabe1caa010b432f3dc5944cd00a8cba73f47",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_6d12e03a40967df48aa9889f",
+          "table_id": "chart_points",
+          "name": "chart_points.csv",
+          "media_type": "text/csv",
+          "size_bytes": 266,
+          "sha256": "0f9a672c5bb834f8395dc615df673a168cbb2a2aa82049a68eb0bc9117c81df5",
+          "authoritative": false,
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "message_id": "5aec6c15",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "Core VLM provenance requires an embedded evidence manifest",
+      "formal_status": "rejected",
+      "untrusted_artifacts": [
+        {
+          "submission_id": "ua_32db58645fed159fc3add4c7",
+          "table_id": "activity_value_records",
+          "name": "activity_value_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 106317,
+          "sha256": "11427880156e35744caaef49644950d06a2d52d4d83aadd7357e4db5faae21c6",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_714a5f8b422f517c51e92ebf",
+          "table_id": "paper_records",
+          "name": "paper_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 1099,
+          "sha256": "36950161627a7c69bd6c8a50c4b3fb746e68110c334b56f9183f5216b00bc8c2",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_628fb696080b7fe40966654f",
+          "table_id": "experiment_records",
+          "name": "experiment_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 82478,
+          "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_fcf4be645d75446e8175dd60",
+          "table_id": "chart_series",
+          "name": "chart_series.csv",
+          "media_type": "text/csv",
+          "size_bytes": 141714,
+          "sha256": "867a1512982705329ef84c3299fedbcec73b6759a2e5c730ea6d91425aa75581",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_5e7d0c3783fe7e87ba8f5eae",
+          "table_id": "supplementary_asset_records",
+          "name": "supplementary_asset_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 2481,
+          "sha256": "4d0428a6c550462eb32a6cadb26eabe1caa010b432f3dc5944cd00a8cba73f47",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_1b8861fe62e3b99173bff2cc",
+          "table_id": "chart_points",
+          "name": "chart_points.csv",
+          "media_type": "text/csv",
+          "size_bytes": 266,
+          "sha256": "0f9a672c5bb834f8395dc615df673a168cbb2a2aa82049a68eb0bc9117c81df5",
+          "authoritative": false,
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "message_id": "5e4ad894",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "Core VLM provenance requires an embedded evidence manifest",
+      "formal_status": "rejected",
+      "untrusted_artifacts": [
+        {
+          "submission_id": "ua_b4f8102bf7febe3d863cd7ae",
+          "table_id": "activity_value_records",
+          "name": "activity_value_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 106317,
+          "sha256": "11427880156e35744caaef49644950d06a2d52d4d83aadd7357e4db5faae21c6",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_f8fd8f34c34959bd304217af",
+          "table_id": "paper_records",
+          "name": "paper_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 1099,
+          "sha256": "36950161627a7c69bd6c8a50c4b3fb746e68110c334b56f9183f5216b00bc8c2",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_776b7c8f26890851f6c068de",
+          "table_id": "experiment_records",
+          "name": "experiment_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 82478,
+          "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_adb0244eb92632c4c2835e90",
+          "table_id": "chart_series",
+          "name": "chart_series.csv",
+          "media_type": "text/csv",
+          "size_bytes": 157796,
+          "sha256": "3e4b92ebac50cbb553426b7e4eacedf2a10be786ad03cdae9fa4fa61bb75baa0",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_984307313663e7bb6112d964",
+          "table_id": "supplementary_asset_records",
+          "name": "supplementary_asset_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 2481,
+          "sha256": "4d0428a6c550462eb32a6cadb26eabe1caa010b432f3dc5944cd00a8cba73f47",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_230280b4d81c1ab687a6543a",
+          "table_id": "chart_points",
+          "name": "chart_points.csv",
+          "media_type": "text/csv",
+          "size_bytes": 266,
+          "sha256": "0f9a672c5bb834f8395dc615df673a168cbb2a2aa82049a68eb0bc9117c81df5",
+          "authoritative": false,
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "message_id": "72f5e2df",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "Core VLM provenance requires an embedded evidence manifest",
+      "formal_status": "rejected",
+      "untrusted_artifacts": [
+        {
+          "submission_id": "ua_c1eb672fa46e31da0d8d690e",
+          "table_id": "activity_value_records",
+          "name": "activity_value_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 106317,
+          "sha256": "11427880156e35744caaef49644950d06a2d52d4d83aadd7357e4db5faae21c6",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_759ca95eaf316507c1884bf5",
+          "table_id": "paper_records",
+          "name": "paper_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 1099,
+          "sha256": "36950161627a7c69bd6c8a50c4b3fb746e68110c334b56f9183f5216b00bc8c2",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_ddeb7bd506a395e120be304d",
+          "table_id": "experiment_records",
+          "name": "experiment_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 82478,
+          "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_38416bd459dfb6d90fe8ec75",
+          "table_id": "chart_series",
+          "name": "chart_series.csv",
+          "media_type": "text/csv",
+          "size_bytes": 208669,
+          "sha256": "5cdfd0888a21c3152c12a3863503020ce84a5888f19f84cd6d53a4cf97e21a71",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_3b96f4f748f0bc5e8ddaccba",
+          "table_id": "supplementary_asset_records",
+          "name": "supplementary_asset_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 2481,
+          "sha256": "4d0428a6c550462eb32a6cadb26eabe1caa010b432f3dc5944cd00a8cba73f47",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_2a3d4711031dec6481752624",
+          "table_id": "chart_points",
+          "name": "chart_points.csv",
+          "media_type": "text/csv",
+          "size_bytes": 266,
+          "sha256": "0f9a672c5bb834f8395dc615df673a168cbb2a2aa82049a68eb0bc9117c81df5",
+          "authoritative": false,
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "message_id": "b95054c0",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "In-process quarantine admission rejected: OUTPUT_CLOSURE_MISMATCH: receipt output 0 does not match its Core descriptor",
+      "formal_status": null,
+      "untrusted_artifacts": []
+    },
+    {
+      "message_id": "4519ed43",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "Core VLM provenance requires an embedded evidence manifest",
+      "formal_status": "rejected",
+      "untrusted_artifacts": [
+        {
+          "submission_id": "ua_c2c054cdbbc502cdb4c2ff1f",
+          "table_id": "activity_value_records",
+          "name": "activity_value_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 106317,
+          "sha256": "11427880156e35744caaef49644950d06a2d52d4d83aadd7357e4db5faae21c6",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_d066236817b7b67db26987f3",
+          "table_id": "paper_records",
+          "name": "paper_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 1099,
+          "sha256": "36950161627a7c69bd6c8a50c4b3fb746e68110c334b56f9183f5216b00bc8c2",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_0c886f58fccd6837a4ffc57d",
+          "table_id": "experiment_records",
+          "name": "experiment_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 82478,
+          "sha256": "49062792ee4e0b9d4b58dd11f14632627809de94bb04429cb987c6fcf464db62",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_5da8f03e06f05259d24127b0",
+          "table_id": "chart_series",
+          "name": "chart_series.csv",
+          "media_type": "text/csv",
+          "size_bytes": 137709,
+          "sha256": "7dae77926adb99b08cdc97d451eedb4588a702de9ec8d2d96e51d9d3afdeaae8",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_23002a9a0221ece4c93d9d06",
+          "table_id": "supplementary_asset_records",
+          "name": "supplementary_asset_records.csv",
+          "media_type": "text/csv",
+          "size_bytes": 2481,
+          "sha256": "4d0428a6c550462eb32a6cadb26eabe1caa010b432f3dc5944cd00a8cba73f47",
+          "authoritative": false,
+          "trust": "untrusted"
+        },
+        {
+          "submission_id": "ua_cce48299faa307fe399c2a0f",
+          "table_id": "chart_points",
+          "name": "chart_points.csv",
+          "media_type": "text/csv",
+          "size_bytes": 266,
+          "sha256": "0f9a672c5bb834f8395dc615df673a168cbb2a2aa82049a68eb0bc9117c81df5",
+          "authoritative": false,
+          "trust": "untrusted"
+        }
+      ]
+    },
+    {
+      "message_id": "8690295c",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "In-process quarantine admission rejected: OUTPUT_CLOSURE_MISMATCH: receipt output 0 does not match its Core descriptor",
+      "formal_status": null,
+      "untrusted_artifacts": []
+    },
+    {
+      "message_id": "f054d48f",
+      "is_error": true,
+      "code": "dynamic_publication_rejected",
+      "message": "In-process quarantine admission rejected: OUTPUT_CLOSURE_MISMATCH: receipt output 0 does not match its Core descriptor",
+      "formal_status": null,
+      "untrusted_artifacts": []
+    }
+  ]
+}

@@ -102,6 +102,16 @@ const EXECUTION_BACKENDS: readonly ExecutionBackend[] = [
   "windows_job_object",
   "in_process_unisolated",
 ];
+
+/**
+ * Explicit role of a dynamic source binding. ``transform_input`` bindings are
+ * decoded and handed to the transform runtime; ``provenance_only`` bindings
+ * are formally verified and published as provenance but their bytes are never
+ * exposed to transform code. Legacy wires without the field keep their
+ * historical meaning (a transform input); it is never inferred from media_type.
+ */
+export type SourceBindingKind = "transform_input" | "provenance_only";
+const SOURCE_BINDING_KINDS: readonly SourceBindingKind[] = ["transform_input", "provenance_only"];
 const MAPPING_STATUSES = ["mapped", "unmapped", "ambiguous"] as const;
 
 const MAX_ID_LENGTH = 256;
@@ -139,6 +149,16 @@ function strictObject(
 function ownValue(object: Record<string, unknown>, key: string, path: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
   if (!descriptor || !("value" in descriptor)) {
+    throw new APIError(502, `Missing required own data property "${key}" at ${path}`);
+  }
+  return descriptor.value;
+}
+
+/** Optional-field twin of ``ownValue``: absent stays undefined, accessors fail. */
+function optionalOwnValue(object: Record<string, unknown>, key: string, path: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor)) {
     throw new APIError(502, `Missing required own data property "${key}" at ${path}`);
   }
   return descriptor.value;
@@ -244,6 +264,15 @@ function assertEnum<T extends string>(
     throw new APIError(502, `Invalid ${label} "${string}" at ${path}`);
   }
   return found;
+}
+
+/**
+ * Parses the optional binding_kind field. Absent (legacy) wires normalize to
+ * ``transform_input``; any present value must be an exact enum member.
+ */
+export function normalizeSourceBindingKind(value: unknown, path: string): SourceBindingKind {
+  if (value === undefined) return "transform_input";
+  return assertEnum(value, path, SOURCE_BINDING_KINDS, "binding_kind");
 }
 
 function getSafeId(object: Record<string, unknown>, key: string, path: string): string {
@@ -1347,6 +1376,12 @@ export interface DatasetExecutionProposal2SourceBinding {
   binding_id: string;
   source: string;
   input_requirement_ref: string;
+  /**
+   * Normalized binding role. Legacy wires without the field parse as
+   * ``transform_input``; provenance-only bindings join formal provenance and
+   * publication closure but are never decoded into transform runtime inputs.
+   */
+  binding_kind: SourceBindingKind;
   parameters: Record<string, JsonValue>;
 }
 
@@ -1355,6 +1390,8 @@ export interface ResolvedDatasetExecutionSpec2SourceBinding {
   source: string;
   registered_asset_ref: string | null;
   registered_result_ref: string | null;
+  /** Same normalization contract as the proposal binding. */
+  binding_kind: SourceBindingKind;
   parameters: Record<string, JsonValue>;
 }
 
@@ -1384,6 +1421,7 @@ const PROPOSAL_BINDING_KEYS = new Set([
   "binding_id",
   "source",
   "input_requirement_ref",
+  "binding_kind",
   "parameters",
 ]);
 const RESOLVED_BINDING_KEYS = new Set([
@@ -1391,6 +1429,7 @@ const RESOLVED_BINDING_KEYS = new Set([
   "source",
   "registered_asset_ref",
   "registered_result_ref",
+  "binding_kind",
   "parameters",
 ]);
 
@@ -1400,6 +1439,10 @@ function parseProposalBinding(value: unknown, path: string): DatasetExecutionPro
     binding_id: getSafeId(object, "binding_id", path),
     source: getSafeId(object, "source", path),
     input_requirement_ref: getSafeRef(object, "input_requirement_ref", path),
+    binding_kind: normalizeSourceBindingKind(
+      optionalOwnValue(object, "binding_kind", path),
+      `${path}.binding_kind`,
+    ),
     parameters: assertJsonRecord(ownValue(object, "parameters", path), `${path}.parameters`),
   };
 }
@@ -1428,6 +1471,10 @@ function parseResolvedBinding(value: unknown, path: string): ResolvedDatasetExec
     source: getSafeId(object, "source", path),
     registered_asset_ref: registeredAssetRef,
     registered_result_ref: registeredResultRef,
+    binding_kind: normalizeSourceBindingKind(
+      optionalOwnValue(object, "binding_kind", path),
+      `${path}.binding_kind`,
+    ),
     parameters: assertJsonRecord(ownValue(object, "parameters", path), `${path}.parameters`),
   };
 }

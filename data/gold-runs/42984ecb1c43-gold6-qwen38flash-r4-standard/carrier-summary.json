@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "count": 3,
+  "totals": {
+    "paper_records": 3,
+    "experiment_records": 107,
+    "activity_value_records": 185,
+    "supplementary_asset_records": 4,
+    "chart_series": 86,
+    "chart_points": 0
+  },
+  "carriers": [
+    {
+      "file": "evidence_3f467458bcc9.json",
+      "asset_id": "asset_3f467458bcc915dae3a3bff49f75e8d5b2f268f2ecec1524c8088569f74850bb",
+      "paper_id": "PMC10408569",
+      "rows": {
+        "paper_records": 1,
+        "experiment_records": 17,
+        "activity_value_records": 48,
+        "supplementary_asset_records": 1,
+        "chart_series": 10,
+        "chart_points": 0
+      },
+      "has_top_level_evidence_manifest": false
+    },
+    {
+      "file": "evidence_4de01481fae7.json",
+      "asset_id": "asset_4de01481fae795ab2bed0c0d4dd7c1c870c79cf63198c5f9eea47da344cb90d4",
+      "paper_id": "PMC5355725",
+      "rows": {
+        "paper_records": 1,
+        "experiment_records": 73,
+        "activity_value_records": 117,
+        "supplementary_asset_records": 2,
+        "chart_series": 67,
+        "chart_points": 0
+      },
+      "has_top_level_evidence_manifest": false
+    },
+    {
+      "file": "evidence_c03edef98e90.json",
+      "asset_id": "asset_c03edef98e90f52a0670dd3334fcf40c8715b246b3500af72dd74c4bb457606f",
+      "paper_id": "PMC5094958",
+      "rows": {
+        "paper_records": 1,
+        "experiment_records": 17,
+        "activity_value_records": 20,
+        "supplementary_asset_records": 1,
+        "chart_series": 9,
+        "chart_points": 0
+      },
+      "has_top_level_evidence_manifest": false
+    }
+  ]
+}

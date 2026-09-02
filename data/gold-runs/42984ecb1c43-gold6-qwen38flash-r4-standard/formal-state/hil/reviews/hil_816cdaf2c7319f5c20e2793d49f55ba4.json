@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "review_id": "review_bbc0540e7c7f07568b9b8dfa1c4fcdb0",
+  "request_id": "hil_816cdaf2c7319f5c20e2793d49f55ba4",
+  "decision": {
+    "action": "approve"
+  },
+  "reviewer": "user",
+  "reviewed_at": "2026-08-31T23:47:31.236Z",
+  "evidence_digest": "afdc51b161fba535b698cf8a17f51c0accc5d71ff65b99a8e87597bfd44eed37",
+  "reason": "Approved once for the exact PMC5355725 archive-member correction request after matching task/run/request identity, byte-verifying XML/PDF/parent ZIP/derived JPEG, and confirming the JPEG archive_member_extraction parent/member digest closure. This authorizes credential use only; no VLM data or Publication acceptance is implied."
+}

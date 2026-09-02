@@ -8,6 +8,7 @@ import type {
 } from "@biomed/contracts";
 import { parseCleaningRulePreflightReceipt, parseJsonTextStrict } from "@biomed/contracts";
 
+import type { SemanticRouteFence } from "../../runtime/semantic-route-fence.js";
 import { saveExecutionContinuation } from "../../runtime/execution-continuation.js";
 import { ArtifactIntegrityError, readLatestSourceCoverageReport } from "../../runtime/artifact-store.js";
 import { fixedBiomedicalAcquisitionParameters } from "../../dataset/acquisition/biomedical-providers.js";
@@ -71,6 +72,12 @@ export interface DatasetExecutionToolOptions {
   taskRoot: string;
   runId: () => string;
   piSessionId: () => string;
+  /**
+   * Host-owned route fence. When the run has committed to the Dynamic Family
+   * route, static validate/execute are rejected before any Core validation,
+   * acquisition, or filesystem write.
+   */
+  semanticRouteFence?: SemanticRouteFence;
   /** Runtime discovery observations for the source coverage evidence. */
   discoveryLedger?: () => import("@biomed/contracts").DiscoveryQueryRecord[] | null;
   onDiagnostic?: (diagnostic: DatasetExecutionToolDiagnostic) => void;
@@ -521,6 +528,7 @@ export function createDatasetExecutionTools(
         const started = (options.now ?? Date.now)();
         let response: DatasetBridgeResponse | undefined;
         try {
+          options.semanticRouteFence?.assertStaticRouteAllowed();
           response = await options.client.validate({
             taskId: options.taskId,
             runId: options.runId(),
@@ -566,6 +574,7 @@ export function createDatasetExecutionTools(
         let response: DatasetBridgeResponse | undefined;
         let requirementId: string | undefined;
         try {
+          options.semanticRouteFence?.assertStaticRouteAllowed();
           const args = object(value);
           const spec = specArgument(args);
           requirementId = spec.requirement_id;

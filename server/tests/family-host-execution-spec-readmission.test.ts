@@ -85,12 +85,14 @@ async function fixture(overrides: {
         binding_id: "asset_binding",
         source: "geo_gse",
         input_requirement_ref: "input_geo",
+        binding_kind: "transform_input",
         parameters: { accession: "GSE1" },
       },
       {
         binding_id: "result_binding",
         source: "prior_result",
         input_requirement_ref: "input_result",
+        binding_kind: "transform_input",
         parameters: {},
       },
     ],
@@ -164,6 +166,7 @@ describe("dataset execution spec Core readmission", () => {
         source: "geo_gse",
         registered_asset_ref: `asset_${A}`,
         registered_result_ref: null,
+        binding_kind: "transform_input",
         parameters: { accession: "GSE1" },
       },
       {
@@ -171,6 +174,7 @@ describe("dataset execution spec Core readmission", () => {
         source: "prior_result",
         registered_asset_ref: null,
         registered_result_ref: "result_prior",
+        binding_kind: "transform_input",
         parameters: {},
       },
     ]);

@@ -1,4 +1,5 @@
 import { stableStringify } from "./family-transform.js";
+import { normalizeSourceBindingKind, type SourceBindingKind } from "./family-transform.js";
 import type { JsonValue } from "./json.js";
 import {
   assertArray,
@@ -21,6 +22,8 @@ export interface DynamicFamilyPreflightAcquisitionPlanEntry {
   input_requirement_ref: string;
   source: string;
   mode: "registered" | "builtin";
+  /** Normalized binding role; acquisition planning still covers every binding. */
+  binding_kind: SourceBindingKind;
   asset_id: string | null;
   provider_id: string | null;
   request_digest: string;
@@ -36,6 +39,7 @@ export interface DynamicFamilyPreflightReceipt {
   product_requirement_digest: string;
   host_descriptor_digest: string;
   submission_digest: string;
+  /** Runtime transform-input roles only; provenance-only bindings are excluded. */
   required_input_roles: string[];
   output_closure: string[];
   topology_diagnostics: DynamicFamilyPreflightTopologyDiagnostic[];
@@ -50,7 +54,7 @@ const RECEIPT_KEYS = new Set([
 ]);
 const DIAGNOSTIC_KEYS = new Set(["code", "path", "message", "object_id"]);
 const PLAN_KEYS = new Set([
-  "binding_id", "input_requirement_ref", "source", "mode", "asset_id", "provider_id", "request_digest",
+  "binding_id", "input_requirement_ref", "source", "mode", "binding_kind", "asset_id", "provider_id", "request_digest",
 ]);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+\-]{0,255}$/u;
 const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,1023}$/u;
@@ -120,6 +124,7 @@ function parsePlan(value: unknown, path: string): DynamicFamilyPreflightAcquisit
     input_requirement_ref: safeRef(object.input_requirement_ref, `${path}.input_requirement_ref`),
     source: safeId(object.source, `${path}.source`),
     mode,
+    binding_kind: normalizeSourceBindingKind(object.binding_kind, `${path}.binding_kind`),
     asset_id: assetId,
     provider_id: providerId,
     request_digest: assertHex64(object.request_digest, `${path}.request_digest`),

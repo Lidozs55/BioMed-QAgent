@@ -67,6 +67,7 @@ export interface ChartSeriesInput {
   source_locator: SourceLocatorV2;
   model_name: string;
   model_version: string;
+  prompt_digest: string;
   extraction_method: "vlm";
   extraction_confidence: ChartConfidenceLevel;
   source_reliability: ChartReliabilityLevel;

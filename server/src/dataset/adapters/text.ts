@@ -74,8 +74,11 @@ export async function* delimitedRowsFromFileAsync(
   const maxRowChars = options?.maxRowChars ?? null;
   const maxFieldChars = options?.maxFieldChars ?? null;
   const maxRowFields = options?.maxRowFields ?? null;
-  const source = createReadStream(path);
+  // Probe before constructing the stream. If opening the path fails (for
+  // example ENOENT), creating the stream first would leave its asynchronous
+  // error event unobserved while hasGzipMagic rejects.
   const gzip = await hasGzipMagic(path);
+  const source = createReadStream(path);
   const input = gzip ? source.pipe(createGunzip()) : source;
   const decoder = new StringDecoder("utf8");
   let pending = "";

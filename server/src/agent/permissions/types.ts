@@ -108,11 +108,12 @@ export const PRESET_MATRICES: Record<PermissionPreset, PolicyMatrix> = {
 /**
  * Sensitive resource names: environment files and credential material that
  * must never be covered by an ordinary project/external grant (round-3
- * audit). Matched case-insensitively on the canonical path's basename;
- * ``.env.example`` is a committed template and stays readable.
+ * audit). Matched case-insensitively on the canonical path's basename.
+ * Every ``.env*`` file is sensitive; the repository no longer ships a
+ * readable template exception.
  */
 const SENSITIVE_RESOURCE_PATTERN =
-  /^(?:\.env(?!\.example$)(?:\..*)?|.*\.(?:key|pem|p12|pfx)|credentials\.json|secrets\.json)$/iu;
+  /^(?:\.env(?:\..*)?|.*\.(?:key|pem|p12|pfx)|credentials\.json|secrets\.json)$/iu;
 
 export function isSensitiveResource(canonicalPath: string): boolean {
   const basename = canonicalPath.split(/[\\/]+/u).at(-1) ?? canonicalPath;

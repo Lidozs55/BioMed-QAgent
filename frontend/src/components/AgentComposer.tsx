@@ -9,10 +9,9 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 
+import { AssetsEntry } from "@/components/AssetsSheet";
 import { ContextUsageInline } from "@/components/ContextUsageInline";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
-import { ArtifactFab } from "@/components/ArtifactFab";
-import { QuarantineSheet } from "@/components/QuarantineSheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -334,8 +333,7 @@ export function AgentComposer({
         </AttachmentGroup>
       )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 py-2">
-        <ArtifactFab />
-        <QuarantineSheet />
+        <AssetsEntry />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={

@@ -19,6 +19,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  CoreDerivedAssetOperationKind,
   HILSubject,
   JsonValue,
   OperationResultManifest,
@@ -473,12 +474,73 @@ interface PageExtraction {
   parsed: RegisteredPaperChartResponse;
   inputDigest: string;
   outputDigest: string;
-  providerModel: string | null;
+  /** SHA-256 of the ACTUAL prompt whose parsed response survived. */
+  promptDigest: string;
+  /**
+   * Provider-returned model of the surviving call; already coalesced to the
+   * configured model when the provider returned null.
+   */
+  providerModel: string;
 }
 
 const MAX_WARNING_LENGTH = 320;
 const MAX_RETRY_DEFICITS = 4;
+/** Maximum figure-associated activity keys surfaced for one deficit series. */
+const MAX_RETRY_ACTIVITY_KEYS = 6;
+/** Per-field UTF-8 byte cap for retry focus text (ellipsis suffix included). */
+const MAX_RETRY_FIELD_BYTES = 64;
+/** Hard UTF-8 byte budget for a corrective retry prompt. */
+const RETRY_PROMPT_MAX_BYTES = 8192;
+/** Per-deficit-line byte cap; keeps at least one line inside the budget. */
+const RETRY_DEFICIT_MAX_BYTES = 1024;
 const DOSE_RESPONSE_TERMS = /\b(?:dose|concentration|conc\.?|ic50|ec50|ki|inhibition|inhibitor|ligand|compound|drug|response)\b/i;
+
+/**
+ * Documented figure-association normalization (R5): lowercase, strip control
+ * characters, then collapse whitespace AND underscore runs to a single
+ * underscore. ``"Figure 2A"`` and ``"Figure_2A"`` therefore both normalize to
+ * ``"figure_2a"`` and associate with the same figure, while
+ * ``"none"``/absent tokens never do. This single rule is used both for the
+ * retry focus's legal activity keys and for actual point admission; linkage
+ * is never guessed beyond it.
+ */
+/** Strip ASCII control characters (replace with spaces) without regex. */
+function stripControlChars(value: string, replacement = " "): string {
+  return Array.from(value)
+    .map((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f ? replacement : char;
+    })
+    .join("");
+}
+
+function associatedFigureToken(value: string): string {
+  return stripControlChars(value).replaceAll(/[\s_]+/gu, "_").replaceAll(/^_+|_+$/gu, "").toLowerCase();
+}
+
+export function isActivityAssociatedWithFigure(tableOrFigure: string, figureId: string): boolean {
+  const figure = associatedFigureToken(figureId);
+  if (figure === "" || figure === "none" || figure === "unknown") return false;
+  const token = associatedFigureToken(tableOrFigure);
+  return token !== "" && token !== "none" && token === figure;
+}
+
+/**
+ * Strip control characters, collapse whitespace, and cap a focus field to at
+ * most ``cap`` UTF-8 bytes INCLUDING the "..." suffix, so the advertised cap
+ * is never exceeded by truncation markers.
+ */
+function retrySafeText(value: string | null | undefined, cap = MAX_RETRY_FIELD_BYTES): string {
+  const cleaned = stripControlChars(value ?? "").replaceAll(/\s+/gu, " ").trim();
+  if (byteLength(cleaned) <= cap) return cleaned;
+  const suffix = "...";
+  let capped = "";
+  for (const char of Array.from(cleaned)) {
+    if (byteLength(capped + char) + byteLength(suffix) > cap) break;
+    capped += char;
+  }
+  return `${capped}${suffix}`;
+}
 
 function finiteNumericToken(value: string): boolean {
   return value.trim() !== "" && Number.isFinite(Number(value));
@@ -514,7 +576,16 @@ function hasUsablePointCandidate(
   response: RegisteredPaperChartResponse,
   series: ParsedSeriesCandidate,
 ): boolean {
-  const activityKeys = new Set(response.activities.map((activity) => activity.activity_key));
+  // The candidate point is only "usable" when its activity is associated with
+  // this series' figure under the SAME documented normalization rule the
+  // admission loop applies. A cross-figure candidate must not suppress the
+  // corrective retry only to be dropped during admission.
+  const activityKeys = new Set(
+    response.activities
+      .filter((activity) =>
+        isActivityAssociatedWithFigure(activity.table_or_figure, series.figure_id ?? "unknown"))
+      .map((activity) => activity.activity_key),
+  );
   return response.points.some((point) =>
     point.series_key === series.series_key
       && activityKeys.has(point.activity_key)
@@ -526,33 +597,136 @@ function hasUsablePointCandidate(
   );
 }
 
-function retryDeficits(response: RegisteredPaperChartResponse): string[] {
+/** Structured, injection-resistant focus for one deficient series. */
+interface RetrySeriesFocus {
+  seriesKey: string;
+  figureId: string | null;
+  bbox: [number, number, number, number] | null;
+  xAxisName: string;
+  xAxisUnit: string | null;
+  yAxisName: string;
+  yAxisUnit: string | null;
+  xScale: string;
+  yScale: string;
+  legendText: string | null;
+  activityKeys: readonly string[];
+}
+
+/** Deterministic structured focus for one deficient clear dose-response series. */
+function retryFocus(
+  response: RegisteredPaperChartResponse,
+  series: ParsedSeriesCandidate,
+): RetrySeriesFocus {
+  const figureId = series.figure_id ?? "";
+  // Figure-scoped legal activity keys remain ACTUAL identifiers: keys that do
+  // not fit the per-field byte cap are omitted entirely rather than emitted
+  // as an ellipsized key the model could echo back as a non-existent id.
+  const activityKeys = [...new Set(response.activities
+    .filter((activity) => isActivityAssociatedWithFigure(activity.table_or_figure, figureId))
+    .map((activity) => activity.activity_key.trim()))]
+    .filter((key) => key !== "" && byteLength(key) <= MAX_RETRY_FIELD_BYTES)
+    .slice(0, MAX_RETRY_ACTIVITY_KEYS);
+  return {
+    seriesKey: retrySafeText(series.series_key),
+    figureId: figureId === "" ? null : retrySafeText(series.figure_id),
+    bbox: series.bbox,
+    xAxisName: retrySafeText(series.x_axis_name),
+    xAxisUnit: series.x_axis_unit === null ? null : retrySafeText(series.x_axis_unit),
+    yAxisName: retrySafeText(series.y_axis_name),
+    yAxisUnit: series.y_axis_unit === null ? null : retrySafeText(series.y_axis_unit),
+    xScale: retrySafeText(series.x_scale),
+    yScale: retrySafeText(series.y_scale),
+    legendText: series.legend_text === null ? null : retrySafeText(series.legend_text),
+    activityKeys,
+  };
+}
+
+interface RetryDeficit {
+  seriesKey: string;
+  text: string;
+}
+
+function retryStructuredDeficits(response: RegisteredPaperChartResponse): RetryDeficit[] {
   const candidates = response.series.filter((series) =>
     hasClearSeriesEvidence(series) && isDoseResponseCandidate(series, response),
   );
-  const deficits: string[] = [];
+  const deficits: RetryDeficit[] = [];
   for (const series of candidates) {
     if (hasUsablePointCandidate(response, series)) continue;
+    const focus = retryFocus(response, series);
     const seriesPoints = response.points.filter((point) => point.series_key === series.series_key);
-    deficits.push(seriesPoints.length === 0
-      ? `series ${series.series_key}: no usable chart points were returned`
-      : `series ${series.series_key}: point candidates failed finite-coordinate, locator, confidence, or activity-reference validation`);
+    const focusText = [
+      `figure ${focus.figureId ?? "unknown"}`,
+      `bbox ${focus.bbox === null ? "unknown" : `[${focus.bbox.join(", ")}]`}`,
+      `x=${focus.xAxisName}${focus.xAxisUnit === null ? "" : ` (${focus.xAxisUnit})`} ${focus.xScale}`,
+      `y=${focus.yAxisName}${focus.yAxisUnit === null ? "" : ` (${focus.yAxisUnit})`} ${focus.yScale}`,
+      `legend=${focus.legendText ?? "absent"}`,
+      `legal activity_keys: ${focus.activityKeys.length > 0 ? focus.activityKeys.join(", ") : "none"}`,
+    ].join(", ");
+    deficits.push({
+      seriesKey: focus.seriesKey,
+      text: `series ${focus.seriesKey}: ${seriesPoints.length === 0
+        ? "no usable chart points were returned"
+        : "point candidates failed finite-coordinate, locator, confidence, or activity-reference validation"} [validated: ${focusText}]`,
+    });
   }
   return deficits.slice(0, MAX_RETRY_DEFICITS);
 }
 
-function retryPrompt(deficits: readonly string[]): string {
-  const boundedDeficits = deficits.slice(0, MAX_RETRY_DEFICITS);
-  return `${REGISTERED_PAPER_CHART_PROMPT}
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
 
-Corrective retry on the same rendered page. Validation deficits only:
-${boundedDeficits.map((deficit) => `- ${deficit}`).join("\n")}
-
-Re-check the image and return the complete JSON object required above. Recover
-only values visibly supported by this page. Do not guess, infer, interpolate,
+const RETRY_NO_GUESS_INSTRUCTIONS = `Re-check the image and return the complete JSON object required above. Recover
+only values visibly supported by this page. The validated context above is
+trusted producer state: points may only reference the listed legal activity_keys
+for the deficit series. Do not guess, infer, interpolate,
 or fabricate coordinates, units, protein identity, figure identity, axis or
 legend semantics, or any other field. If a value remains unclear, leave it
 empty and mark the relevant series unclear; do not emit a point.`;
+
+/** Byte-safe truncation of one deficit line (caller appends the ellipsis). */
+function truncateLineToBytes(line: string, maxBytes: number): string {
+  let capped = "";
+  for (const char of Array.from(line)) {
+    if (byteLength(capped + char) > maxBytes) break;
+    capped += char;
+  }
+  return capped;
+}
+
+/**
+ * Bounded corrective retry prompt: the frozen base prompt and the no-guess
+ * instructions are never truncated; oversized deficit lines are byte-capped
+ * (ellipsis included) and trailing deficits are dropped until the total
+ * prompt fits the UTF-8 byte budget. Even a single surviving deficit line is
+ * shrunk further if necessary: the total bound ALWAYS holds.
+ */
+function retryPrompt(deficits: readonly RetryDeficit[]): string {
+  let lines = deficits.slice(0, MAX_RETRY_DEFICITS).map((deficit) => {
+    const line = `- ${deficit.text}`;
+    if (byteLength(line) <= RETRY_DEFICIT_MAX_BYTES) return line;
+    const suffix = "...";
+    return `${truncateLineToBytes(line, RETRY_DEFICIT_MAX_BYTES - byteLength(suffix))}${suffix}`;
+  });
+  const build = (current: readonly string[]): string =>
+    `${REGISTERED_PAPER_CHART_PROMPT}\n\nCorrective retry on the same rendered page. Validation deficits only:\n${current.join("\n")}\n\n${RETRY_NO_GUESS_INSTRUCTIONS}`;
+  let prompt = build(lines);
+  while (byteLength(prompt) > RETRY_PROMPT_MAX_BYTES && lines.length > 1) {
+    lines = lines.slice(0, -1);
+    prompt = build(lines);
+  }
+  if (byteLength(prompt) > RETRY_PROMPT_MAX_BYTES && lines.length === 1) {
+    // Last resort: shrink the sole deficit line so the total bound holds.
+    const suffix = "...";
+    const budget = RETRY_PROMPT_MAX_BYTES - (byteLength(prompt) - byteLength(lines[0]!))
+      - byteLength(suffix);
+    if (budget > 0) {
+      lines = [`${truncateLineToBytes(lines[0]!, budget)}${suffix}`];
+      prompt = build(lines);
+    }
+  }
+  return prompt;
 }
 
 function warningDetail(error: unknown): string {
@@ -569,6 +743,122 @@ function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/**
+ * Deterministic charts/points manifest projected from the exact validated
+ * carrier rows (R5 evidence-manifest contract), in the validator's native
+ * ChartRow/ChartPointRow vocabulary. The literature-experiment-chart profile
+ * validator requires ``evidence.manifest`` on the consuming ``vlm_extraction``
+ * provenance and cross-checks every admitted series and point against it. This
+ * projection is a pure function of the rows that already passed the chart row
+ * gate: it never accepts a model-authored manifest and carries no locators
+ * (the canonical row locator stays authoritative in the carrier).
+ */
+interface ManifestChartState {
+  page_number: string;
+  bbox: string;
+  /** Figure identity projected into the manifest chart. */
+  figure_id: string;
+  /** Row-level page model identity projected into the manifest chart. */
+  model_version: string;
+  /** Row-level page prompt digest projected into the manifest chart. */
+  prompt_digest: string;
+}
+
+/** Row-level page locator identity projected into each manifest point. */
+interface ManifestPointState {
+  page_number: string;
+  figure_id: string;
+  bbox: string;
+  /** Model/prompt identity of the page response the point came from. */
+  model_version: string;
+  prompt_digest: string;
+}
+
+/**
+ * Deterministic top-level prompt summary over the ACTUAL surviving page
+ * prompts: the base digest when every page used the frozen base prompt, else a
+ * stable digest of the sorted distinct page prompt digests. Row-level identity
+ * never comes from this summary.
+ */
+function summarizePagePromptDigests(digests: readonly string[]): string {
+  const distinct = [...new Set(digests)].sort();
+  return distinct.length === 1
+    ? distinct[0]!
+    : sha256(Buffer.from(distinct.join("\u0000"), "utf8"));
+}
+
+function projectEvidenceManifest(options: {
+  seriesRows: readonly ChartSeriesInput[];
+  pointRows: readonly ChartPointInput[];
+  chartStates: ReadonlyMap<string, ManifestChartState>;
+  pointStates: ReadonlyMap<string, ManifestPointState>;
+  extractedAt: string;
+}): { manifest: JsonValue; servedSeries: Map<string, ChartSeriesInput> } {
+  const servedSeries = new Map<string, ChartSeriesInput>(
+    options.seriesRows.map((row) => [row.chart_series_id, { ...row }]),
+  );
+  const charts = options.seriesRows.map((row) => {
+    const state = options.chartStates.get(row.chart_series_id);
+    return {
+      chart_id: row.chart_series_id,
+      source_asset_id: row.source_asset_id,
+      figure_id: state?.figure_id ?? row.figure_id,
+      chart_type: "line",
+      title: row.series_label,
+      x_label: row.x_axis_name,
+      x_unit: row.x_axis_unit,
+      x_scale: row.x_scale,
+      y_label: row.y_axis_name,
+      y_unit: row.y_axis_unit,
+      y_scale: row.y_scale,
+      data_point_count: options.pointRows.filter((point) =>
+        point.chart_series_id === row.chart_series_id).length,
+      legend: row.legend_text,
+      extracted_at: options.extractedAt,
+      model_name: row.model_name,
+      model_version: row.model_version,
+      prompt_digest: row.prompt_digest,
+      source_label: row.series_label,
+      page_number: state?.page_number ?? "",
+      bbox: state?.bbox ?? "",
+      extraction_tier: "L1_vlm",
+    };
+  });
+  const points = options.pointRows.map((point) => {
+    const state = options.pointStates.get(point.point_id);
+    return {
+      point_id: point.point_id,
+      chart_id: point.chart_series_id,
+      x_value: point.x_value,
+      y_value: point.y_value,
+      point_type: point.point_type,
+      series_label: servedSeries.get(point.chart_series_id)?.series_label ?? "",
+      confidence_level: point.extraction_confidence,
+      confidence_reason: point.confidence_reason,
+      human_review_state: point.review_status,
+      review_id: point.review_id ?? "",
+      review_evidence_digest: point.transform_provenance.review?.evidence_digest ?? "",
+      review_reviewer: point.transform_provenance.review?.reviewer ?? "",
+      reviewed_at: point.transform_provenance.review?.reviewed_at ?? "",
+      review_reason: point.transform_provenance.review?.reason ?? "",
+      original_x_value: point.original_x_value ?? "",
+      original_y_value: point.original_y_value ?? "",
+      // Exact point locator identity (distinct from the chart bbox): the page
+      // raster region this individual point was read from.
+      page_number: state?.page_number ?? "",
+      figure_id: state?.figure_id ?? "",
+      bbox: state?.bbox ?? "",
+      // Model/prompt identity of the page response this point came from.
+      model_version: state?.model_version ?? "",
+      prompt_digest: state?.prompt_digest ?? "",
+    };
+  });
+  return {
+    manifest: JSON.parse(JSON.stringify({ charts, points })) as JsonValue,
+    servedSeries,
+  };
+}
+
 async function registerDerivedJsonAsset(options: {
   taskRoot: string;
   sourceAssetRegistry: SourceAssetRegistry;
@@ -581,6 +871,7 @@ async function registerDerivedJsonAsset(options: {
   stage: "candidate" | "review_evidence" | "reviewed";
   parametersDigest: string;
   evidence: JsonValue;
+  operationKind?: CoreDerivedAssetOperationKind;
 }): Promise<SourceAssetRegistrationReceipt> {
   const parentClosures = await Promise.all(options.parentAssetIds.map((assetId) =>
     options.sourceAssetRegistry.resolveFormalProvenanceClosure(assetId)));
@@ -608,7 +899,7 @@ async function registerDerivedJsonAsset(options: {
     role: options.role,
     mediaType: "application/json",
     parentAssetIds: options.parentAssetIds,
-    operationKind: "vlm_extraction",
+    operationKind: options.operationKind ?? "vlm_extraction",
     operationResultId,
     implementationId: REGISTERED_PAPER_CHART_EXTRACTION_IMPLEMENTATION,
     implementationVersion: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
@@ -990,6 +1281,8 @@ function transformStep(options: {
   pageNumber: number;
   inputDigest: string;
   outputDigest: string;
+  /** Digest of the ACTUAL surviving page prompt for this step. */
+  promptDigest?: string;
 }): ChartTransformStep {
   return {
     step_id: options.stepId,
@@ -998,6 +1291,7 @@ function transformStep(options: {
     implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
     parameters: {
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
+      ...(options.promptDigest === undefined ? {} : { prompt_digest: options.promptDigest }),
       page_number: options.pageNumber,
     },
     input_digest: options.inputDigest,
@@ -1118,7 +1412,7 @@ export async function extractRegisteredPaperChartEvidence(
     const imageBytes = await readFile(image.path);
     const inputDigest = sha256(imageBytes);
     let parsed: RegisteredPaperChartResponse | null = null;
-    let deficits: string[] = [];
+    let deficits: RetryDeficit[] = [];
 
     const response = await client.callWithMeta(
       image.path,
@@ -1126,25 +1420,33 @@ export async function extractRegisteredPaperChartEvidence(
       signal,
     );
     let content = response.content;
+    // The prompt digest must describe the ACTUAL prompt whose response
+    // survived (base vs corrective retry), and the model identity must be the
+    // provider-returned model for that surviving call.
+    let survivingPrompt = REGISTERED_PAPER_CHART_PROMPT;
     let providerModel = response.model;
     try {
       parsed = parseRegisteredPaperChartResponse(content, `page ${image.pageIndex}`);
     } catch (error) {
-      deficits = [`schema validation failed: ${warningDetail(error)}`];
-      const detail = deficits[0] ?? "schema validation failed";
+      deficits = [{
+        seriesKey: "",
+        text: `schema validation failed: ${warningDetail(error)}`,
+      }];
+      const detail = deficits[0]?.text ?? "schema validation failed";
       pageFailures.push(pageWarning(image.pageIndex, "schema", detail));
       warnings.push(pageWarning(image.pageIndex, "schema", detail));
     }
 
     if (parsed !== null) {
-      deficits = retryDeficits(parsed);
+      deficits = retryStructuredDeficits(parsed);
     }
     if (deficits.length > 0) {
-      warnings.push(pageWarning(image.pageIndex, "retry", deficits.join("; ")));
+      warnings.push(pageWarning(image.pageIndex, "retry", deficits.map((d) => d.text).join("; ")));
       try {
+        const retryPromptText = retryPrompt(deficits);
         const retry = await client.callWithMeta(
           image.path,
-          retryPrompt(deficits),
+          retryPromptText,
           signal,
         );
         const retryParsed = parseRegisteredPaperChartResponse(
@@ -1152,9 +1454,10 @@ export async function extractRegisteredPaperChartEvidence(
           `page ${image.pageIndex} retry`,
         );
         content = retry.content;
+        survivingPrompt = retryPromptText;
         providerModel = retry.model;
         parsed = retryParsed;
-        if (retryDeficits(retryParsed).length > 0) {
+        if (retryStructuredDeficits(retryParsed).length > 0) {
           warnings.push(pageWarning(
             image.pageIndex,
             "no_points",
@@ -1183,10 +1486,25 @@ export async function extractRegisteredPaperChartEvidence(
       parsed,
       inputDigest,
       outputDigest: sha256(Buffer.from(content, "utf8")),
-      providerModel,
+      // Row-level identity: the digest of the ACTUAL surviving prompt and the
+      // provider-returned model of the surviving call (fallback to the
+      // configured model only when response.model is null).
+      promptDigest: sha256(Buffer.from(survivingPrompt, "utf8")),
+      providerModel: providerModel ?? config.model,
     });
   }
-  const modelVersion = pages.find((page) => page.providerModel !== null)?.providerModel ?? config.model;
+  // Deterministic top-level carrier summary: when every surviving page used
+  // the same provider model it is that model; otherwise it is a stable sorted
+  // digest of the distinct page identities. Row-level identity always comes
+  // from each row's own page, never from this summary.
+  const distinctPageModels = [...new Set(pages.map((page) => page.providerModel))].sort();
+  const modelVersion = distinctPageModels.length === 1
+    ? distinctPageModels[0]!
+    : `multi:${sha256(Buffer.from(distinctPageModels.join("\u0000"), "utf8")).slice(0, 32)}`;
+  // Deterministic top-level prompt summary over the ACTUAL surviving page
+  // prompts (base digest when all pages used the base prompt); row-level
+  // identity always comes from each row's own page, never from this summary.
+  const servedPromptDigest = summarizePagePromptDigests(pages.map((page) => page.promptDigest));
 
   // -- 5. Merge page responses into merged candidates (with page context).
   for (const page of pages) {
@@ -1383,12 +1701,17 @@ export async function extractRegisteredPaperChartEvidence(
   const seriesRows: ChartSeriesInput[] = [];
   const pointRows: ChartPointInput[] = [];
   const pointIds: string[] = [];
+  const manifestChartStates = new Map<string, ManifestChartState>();
+  const manifestPointStates = new Map<string, ManifestPointState>();
   for (const { page, candidate } of seriesCandidates) {
     const step = transformStep({
       stepId: `vlm_extract_p${page.pageNumber}_${candidate.series_key}`,
       pageNumber: page.pageNumber,
       inputDigest: page.inputDigest,
       outputDigest: page.outputDigest,
+      // The series step binds the ACTUAL surviving page prompt (base vs
+      // corrective retry), matching the row-level prompt_digest identity.
+      promptDigest: page.promptDigest,
     });
 
     const degradations: string[] = [];
@@ -1414,6 +1737,18 @@ export async function extractRegisteredPaperChartEvidence(
 
     const chartSeriesId = `series_${candidate.series_key}`;
     const confidence = candidate.extraction_confidence ?? "low";
+    // Row-level page identity: this series' model identity and prompt digest
+    // come from the page response it actually came from, never from a
+    // carrier-wide summary (different pages may use different provider
+    // models when a corrective retry changes the served model).
+    const pageModelVersion = page.providerModel;
+    manifestChartStates.set(chartSeriesId, {
+      page_number: String(page.pageNumber),
+      bbox: (candidate.bbox ?? [0, 0, 1, 1]).join(","),
+      figure_id: figureId ?? "unknown",
+      model_version: pageModelVersion,
+      prompt_digest: page.promptDigest,
+    });
     seriesRows.push({
       chart_series_id: chartSeriesId,
       paper_id: paperId,
@@ -1443,14 +1778,15 @@ export async function extractRegisteredPaperChartEvidence(
         bbox: candidate.bbox ?? [0, 0, 1, 1],
       }),
       model_name: config.model,
-      model_version: modelVersion,
+      model_version: pageModelVersion,
+      prompt_digest: page.promptDigest,
       extraction_method: "vlm",
       extraction_confidence: confidence,
       source_reliability: "medium",
       extraction_reliability: extractionReliability(confidence),
       transform_provenance: carrierProvenance({
         modelName: config.model,
-        modelVersion,
+        modelVersion: pageModelVersion,
         sourceReliability: "medium",
         extractionReliability: extractionReliability(confidence),
         step,
@@ -1489,9 +1825,37 @@ export async function extractRegisteredPaperChartEvidence(
         drop(`activity_key '${candidate_.activity_key}' does not match an extracted activity`);
         continue;
       }
+      // Owning-page identity (R5): a point is only admitted from the same
+      // page response as the series it belongs to. A point read from another
+      // page never passes merely because its activity key matches.
+      if (pointEntry.page.pageNumber !== page.pageNumber) {
+        drop(`point came from page ${pointEntry.page.pageNumber}, not the owning series page ${page.pageNumber}`);
+        continue;
+      }
+      // Figure-association gate (R5): a point is only admitted when the
+      // activity it represents is associated with this series' figure under
+      // the documented normalization rule. Linkage is never guessed.
+      const pointActivity = activityCandidates.find((entry) =>
+        entry.candidate.activity_key === candidate_.activity_key);
+      if (pointActivity !== undefined
+        && !isActivityAssociatedWithFigure(pointActivity.candidate.table_or_figure, figureId ?? "unknown")) {
+        drop(`activity_key '${candidate_.activity_key}' is not associated with figure '${figureId ?? "unknown"}'`);
+        continue;
+      }
       const pointId = `${chartSeriesId}_p${pointIndex + 1}`;
       pointIds.push(pointId);
       admitted += 1;
+      // Point provenance binds the page response the point actually came
+      // from, including its actual surviving prompt digest.
+      const pointModelVersion = pointEntry.page.providerModel;
+      const pointPromptDigest = pointEntry.page.promptDigest;
+      manifestPointStates.set(pointId, {
+        page_number: String(pointEntry.page.pageNumber),
+        figure_id: figureId ?? "unknown",
+        bbox: candidate_.bbox.join(","),
+        model_version: pointModelVersion,
+        prompt_digest: pointPromptDigest,
+      });
       pointRows.push({
         point_id: pointId,
         chart_series_id: chartSeriesId,
@@ -1518,7 +1882,7 @@ export async function extractRegisteredPaperChartEvidence(
         original_y_value: null,
         transform_provenance: carrierProvenance({
           modelName: config.model,
-          modelVersion,
+          modelVersion: pointModelVersion,
           sourceReliability: "medium",
           extractionReliability: extractionReliability(candidate_.extraction_confidence),
           step: transformStep({
@@ -1526,6 +1890,7 @@ export async function extractRegisteredPaperChartEvidence(
             pageNumber: pointEntry.page.pageNumber,
             inputDigest: pointEntry.page.inputDigest,
             outputDigest: pointEntry.page.outputDigest,
+            promptDigest: pointPromptDigest,
           }),
         }),
       });
@@ -1555,6 +1920,25 @@ export async function extractRegisteredPaperChartEvidence(
     source_url: paperMeta.source_url,
     source_id: xmlSourceId,
   }];
+  // R5 evidence-manifest contract: project the canonical charts/points
+  // manifest deterministically from the exact validated carrier rows. The
+  // review-corrected representation is served for the publication manifest so
+  // the manifest that ships with the reviewed carrier matches its own bytes.
+  const evidenceProjection = projectEvidenceManifest({
+    seriesRows,
+    pointRows,
+    chartStates: manifestChartStates,
+    pointStates: manifestPointStates,
+    extractedAt: retrievedAt,
+  });
+  const evidenceManifest = evidenceProjection.manifest;
+  const servedSeries = evidenceProjection.servedSeries;
+  // The candidate carrier serves the exact rows the manifest was projected
+  // from, so candidate bytes and candidate manifest can never drift apart.
+  for (const [index, row] of seriesRows.entries()) {
+    const served = servedSeries.get(row.chart_series_id);
+    if (served !== undefined) seriesRows[index] = served;
+  }
   const chartSources: ChartSourceInput[] = [{
     source_id: xmlSourceId,
     source_database: "paper_full_text",
@@ -1630,6 +2014,8 @@ export async function extractRegisteredPaperChartEvidence(
       implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       model: { provider: providerHost, model: config.model, model_version: modelVersion },
+      prompt_digest: servedPromptDigest,
+      evidence_manifest: evidenceManifest,
       source_assets: {
         paper_xml_asset_id: xmlAssetId,
         paper_pdf_asset_id: pdfAssetId,
@@ -1674,6 +2060,8 @@ export async function extractRegisteredPaperChartEvidence(
       prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
       model_name: config.model,
       model_version: modelVersion,
+      prompt_digest: servedPromptDigest,
+      manifest: evidenceManifest,
       output_sha256: digest,
     },
   });
@@ -1784,6 +2172,7 @@ export async function extractRegisteredPaperChartEvidence(
     reviewedCarrier = await registerReviewedPublicationCarrier({
       taskRoot: deps.taskRoot,
       retrievedAt,
+      promptDigest: servedPromptDigest,
       candidateCarrier: {
         schema_version: "1.0",
         carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
@@ -1794,6 +2183,8 @@ export async function extractRegisteredPaperChartEvidence(
           implementation_version: REGISTERED_PAPER_CHART_EXTRACTION_VERSION,
           prompt_version: REGISTERED_PAPER_CHART_PROMPT_VERSION,
           model: { provider: providerHost, model: config.model, model_version: modelVersion },
+          prompt_digest: servedPromptDigest,
+          evidence_manifest: evidenceManifest,
           source_assets: {
             paper_xml_asset_id: xmlAssetId,
             paper_pdf_asset_id: pdfAssetId,
@@ -1873,6 +2264,8 @@ export async function extractRegisteredPaperChartEvidence(
 async function registerReviewedPublicationCarrier(options: {
   taskRoot: string;
   retrievedAt: string;
+  /** Top-level served prompt digest projected into the reviewed manifest. */
+  promptDigest: string;
   candidateCarrier: Record<string, unknown>;
   candidateCarrierReceipt: SourceAssetRegistrationReceipt;
   seriesRows: ChartSeriesInput[];
@@ -2025,6 +2418,7 @@ async function registerReviewedPublicationCarrier(options: {
     requirementId: "registered_paper_chart_review_evidence",
     stage: "review_evidence",
     parametersDigest: reviewEvidenceParametersDigest,
+    operationKind: "review_evidence",
     evidence: {
       candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
       review_id: review.review_id,
@@ -2034,9 +2428,54 @@ async function registerReviewedPublicationCarrier(options: {
     },
   });
 
+  // Re-project the manifest from the review-corrected representation so the
+  // reviewed carrier's own bytes, its embedded manifest, and its registered
+  // provenance evidence all agree point-for-point. Point locator/model
+  // identity states carry over unchanged from the candidate projection
+  // (review does not move a point on the page).
+  const candidateManifest = ((options.candidateCarrier.extraction as {
+    evidence_manifest?: { charts?: Array<Record<string, JsonValue>>; points?: Array<Record<string, JsonValue>> };
+  }).evidence_manifest ?? { charts: [], points: [] });
+  const candidateCharts = candidateManifest.charts ?? [];
+  const candidateManifestPoints = candidateManifest.points ?? [];
+  const reviewedProjection = projectEvidenceManifest({
+    seriesRows: options.seriesRows,
+    pointRows: reviewedPoints,
+    chartStates: new Map(
+      options.seriesRows.map((row) => {
+        const candidateChart = candidateCharts.find((chart) =>
+          chart.chart_id === row.chart_series_id);
+        return [row.chart_series_id, {
+          page_number: String(candidateChart?.page_number ?? ""),
+          bbox: String(candidateChart?.bbox ?? ""),
+          figure_id: String(candidateChart?.figure_id ?? row.figure_id),
+          model_version: row.model_version,
+          prompt_digest: row.prompt_digest,
+        }];
+      }),
+    ),
+    pointStates: new Map(
+      reviewedPoints.map((point) => {
+        const candidatePoint = candidateManifestPoints.find((item) =>
+          item.point_id === point.point_id);
+        return [point.point_id, {
+          page_number: String(candidatePoint?.page_number ?? ""),
+          figure_id: String(candidatePoint?.figure_id ?? ""),
+          bbox: String(candidatePoint?.bbox ?? ""),
+          model_version: String(candidatePoint?.model_version ?? point.transform_provenance.model_version),
+          prompt_digest: String(candidatePoint?.prompt_digest ?? ""),
+        }];
+      }),
+    ),
+    extractedAt: String(candidateCharts[0]?.extracted_at ?? options.retrievedAt),
+  });
   const reviewedCarrier = {
     ...options.candidateCarrier,
     chart_points: reviewedPoints,
+    extraction: {
+      ...(options.candidateCarrier.extraction as Record<string, JsonValue>),
+      evidence_manifest: reviewedProjection.manifest,
+    },
   };
   const reviewedBytes = Buffer.from(JSON.stringify(reviewedCarrier), "utf8");
   const reviewedDigest = sha256(reviewedBytes);
@@ -2063,10 +2502,23 @@ async function registerReviewedPublicationCarrier(options: {
     stage: "reviewed",
     parametersDigest: reviewedParametersDigest,
     evidence: {
+      carrier_kind: REGISTERED_PAPER_CHART_CARRIER_KIND,
       candidate_carrier_asset_id: options.candidateCarrierReceipt.asset_ref.asset_id,
       review_evidence_asset_id: reviewEvidenceReceipt.asset_ref.asset_id,
       review_id: review.review_id,
+      review_request_id: review.request_id,
       review_action: review.action,
+      review_evidence_digest: review.evidence_digest,
+      model_name: String(
+        (options.candidateCarrier.extraction as { model?: { model?: JsonValue } }).model?.model
+          ?? "",
+      ),
+      model_version: String(
+        (options.candidateCarrier.extraction as { model?: { model_version?: JsonValue } }).model
+          ?.model_version ?? "",
+      ),
+      prompt_digest: options.promptDigest,
+      manifest: reviewedProjection.manifest,
       output_sha256: reviewedDigest,
     },
   });
