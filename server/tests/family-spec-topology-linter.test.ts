@@ -194,6 +194,16 @@ describe("FamilySpec proposal-only pure topology linter", () => {
     ]));
   });
 
+  it("rejects an allow_empty projection entry on the primary table", () => {
+    const input = family();
+    const first = input.projections[0]!;
+    first.allow_empty.push("expression");
+
+    const codes = issueCodes(input);
+
+    expect(codes).toContain("ALLOW_EMPTY_PRIMARY");
+  });
+
   it("closes declared output table/schema refs over table definitions", () => {
     const missingOutput = family();
     missingOutput.declared_outputs = missingOutput.declared_outputs.filter(
