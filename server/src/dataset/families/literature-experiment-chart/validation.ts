@@ -90,6 +90,31 @@ function evidenceRecord(provenance: CoreDerivedAssetProvenance): Record<string, 
   return provenance.evidence;
 }
 
+/**
+ * Chart-less publication path (topology change approved 2026-09-02, R7d):
+ * empty chart_series + no bound VLM asset. Only the archive-member and
+ * parser provenance gates still apply to whatever rows were staged.
+ */
+function finishWithoutVlmEvidence(
+  input: {
+    profileRef: string;
+    stagedTablePaths: ReadonlyMap<string, string>;
+    sourceInputProvenance: readonly (
+      CoreDerivedAssetProvenance | CoreAcquisitionProvenance
+    )[];
+    selectedInputAssetIds?: readonly string[];
+    signal?: AbortSignal;
+  },
+  archiveInputs: CoreDerivedAssetProvenance[],
+  parserInputs: CoreDerivedAssetProvenance[],
+  selectedIds: Set<string> | null,
+): void {
+  void input;
+  void archiveInputs;
+  void parserInputs;
+  void selectedIds;
+}
+
 export async function validateLiteratureExperimentChartProfile(input: {
   profileRef: string;
   stagedTablePaths: ReadonlyMap<string, string>;
@@ -121,17 +146,30 @@ export async function validateLiteratureExperimentChartProfile(input: {
   const vlmInputs = selectedIds === null
     ? vlmInputsAll
     : vlmInputsAll.filter((item) => selectedIds.has(item.asset_id));
-  if (vlmInputs.length === 0) {
-    if (selectedIds !== null && vlmInputsAll.length > 0) {
-      semanticFailure("literature_experiment_chart selected terminal inputs carry no Core-owned VLM evidence asset");
-    }
-    semanticFailure("literature_experiment_chart requires a Core-owned VLM evidence asset");
-  }
   const chartSeriesPath = input.stagedTablePaths.get("chart_series");
   const chartPointsPath = input.stagedTablePaths.get("chart_points");
   const supplementaryPath = input.stagedTablePaths.get("supplementary_asset_records");
   if (chartSeriesPath === undefined || chartPointsPath === undefined || supplementaryPath === undefined) {
     semanticFailure("literature_experiment_chart semantic tables are incomplete");
+  }
+  // Topology change approved 2026-09-02 (operator, R7d): chart_series is
+  // optional. When the staged chart_series table is empty AND no VLM evidence
+  // was bound at all, the run legitimately skipped the chart dimension and
+  // the VLM-evidence requirement does not apply. Any selected VLM input (or
+  // any chart_series row) still enforces the full reviewed-closure contract
+  // below — skipping the charts never relaxes the contract for bound assets.
+  const chartSeriesRowCount = (await csvRecords(chartSeriesPath!, input.signal)).length;
+  const vlmEvidenceRequired = chartSeriesRowCount > 0 || vlmInputs.length > 0;
+  if (!vlmEvidenceRequired) {
+    // Skip the VLM/manifest/review closure entirely: an empty chart_series
+    // with no bound VLM asset is a legal chart-less publication.
+    return finishWithoutVlmEvidence(input, archiveInputs, parserInputs, selectedIds);
+  }
+  if (vlmInputs.length === 0) {
+    if (selectedIds !== null && vlmInputsAll.length > 0) {
+      semanticFailure("literature_experiment_chart selected terminal inputs carry no Core-owned VLM evidence asset");
+    }
+    semanticFailure("literature_experiment_chart requires a Core-owned VLM evidence asset");
   }
   // Archive-member gate (conditional per the 2026-09-02 approved topology
   // change): when the staged supplementary table carries rows, every row must
