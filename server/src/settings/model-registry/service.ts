@@ -37,7 +37,7 @@ import {
   requiredString,
   type JsonObject,
 } from "../../http/validation.js";
-import { catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
+import { ADVANCED_DEFAULTS, catalogCapacity, catalogContextWindow, lookupModelCatalog, paramSpecsFor } from "./catalog.js";
 import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
 import {
   effectiveContextWindow,
@@ -111,9 +111,16 @@ function deriveModelMaxTokens(model: ModelRecord): number | null {
  * runtime settings. Shared by ``activateInMemory`` and ``updateModel`` so
  * editing an active model takes effect without reactivation and the two
  * call sites cannot drift apart.
+ *
+ * Re-projects from defaults first: a key absent from the model's params means
+ * "not set on this model" and must fall back to its default — never inherit
+ * the previous active model's value (otherwise the 联网搜索/思维链 switches
+ * silently leak across activations). Same semantics as the ``max_tokens``
+ * fallback.
  */
 function applyModelDerivedParams(model: ModelRecord, settings: SettingsRecord): void {
   settings.max_tokens = deriveModelMaxTokens(model) ?? DEFAULT_MAX_TOKENS;
+  settings.advanced = { ...ADVANCED_DEFAULTS };
   if (typeof model.params.temperature === "number") settings.advanced.temperature = model.params.temperature;
   if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
   if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;

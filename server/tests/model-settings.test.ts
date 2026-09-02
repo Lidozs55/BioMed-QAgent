@@ -312,6 +312,43 @@ describe("TypeScript model settings", () => {
     expect((await service.resolveActiveModel()).maxTokens).toBe(8192);
   });
 
+  test("re-derives advanced parameters on activation instead of carrying over the previous model's values", async () => {
+    const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
+    const service = await ModelSettingsService.create({ settingsDir });
+    const provider = await service.createProvider({
+      name: "DashScope",
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      api_key: "sk-provider",
+    });
+    const withSearch = await service.createModel({
+      provider_id: provider.id,
+      model_id: "qwen-plus",
+      context_window: 131072,
+      params: { enable_search: true, temperature: 0.3 },
+    });
+    await service.activateModel(withSearch.id);
+    expect(service.getSettings().advanced).toMatchObject({
+      enable_search: true,
+      temperature: 0.3,
+    });
+
+    const withoutSearch = await service.createModel({
+      provider_id: provider.id,
+      model_id: "qwen-max",
+      context_window: 32768,
+    });
+    await service.activateModel(withoutSearch.id);
+    // 联网搜索/思维链等派生参数跟随当前激活模型重投影：
+    // 模型未显式携带的键回退默认值，不得残留上一个激活模型的开关。
+    expect(service.getSettings().advanced).toEqual({
+      temperature: 0.7,
+      top_p: 1,
+      repetition_penalty: 1,
+      enable_search: false,
+      thinking_mode: false,
+    });
+  });
+
   test("resets ghost connection settings when deleting the active provider", async () => {
     const settingsDir = path.join(tmpdir(), `biomed-${randomId()}-settings`);
     const service = await ModelSettingsService.create({ settingsDir });
