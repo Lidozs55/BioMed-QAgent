@@ -60,16 +60,6 @@ export function outputsAreReusable(outputFiles, stampPath, inputDigest) {
   }
 }
 
-function sameFileIdentity(a, b) {
-  try {
-    const sa = statSync(a);
-    const sb = statSync(b);
-    return sa.dev === sb.dev && sa.ino === sb.ino;
-  } catch {
-    return false;
-  }
-}
-
 export function syncInstalledContracts(root) {
   const sourceRoot = join(root, "packages", "contracts");
   const sourceRealPath = realpathSync(sourceRoot);
@@ -84,18 +74,13 @@ export function syncInstalledContracts(root) {
     if (lstatSync(installedRoot).isSymbolicLink() || realpathSync(installedRoot) === sourceRealPath) {
       continue;
     }
-    // pnpm 可以把 workspace 包物化为硬链接克隆：目录本身不是 symlink/同一
-    // realpath，但 package.json 与源文件是同一 inode（内容恒同步）。此时逐项
-    // cpSync 会命中 "src and dest cannot be the same"。按 inode 判定为克隆则
-    // 无需拷贝。
-    if (sameFileIdentity(join(sourceRoot, "package.json"), join(installedRoot, "package.json"))) {
-      continue;
-    }
     for (const entry of ["package.json", "src", "dist"]) {
       const dest = join(installedRoot, entry);
-      // pnpm injects workspace packages as hardlink clones: without removing
-      // the dest first, cpSync sees src/dest sharing an inode and throws
-      // "src and dest cannot be the same".
+      // pnpm injects workspace packages as hardlink clones: package.json/src
+      // share inodes with the source even though the directory is not a
+      // symlink. A clone does NOT pick up files created later (dist/), so it
+      // must be fully resynced — rm first breaks the shared inodes, otherwise
+      // cpSync throws "src and dest cannot be the same".
       rmSync(dest, { recursive: true, force: true });
       cpSync(join(sourceRoot, entry), dest, {
         recursive: true,
