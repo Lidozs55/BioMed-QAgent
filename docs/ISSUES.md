@@ -123,6 +123,14 @@
 - **下一步：** (1) 用 vitest 逐行定位 .mjs 收集失败的 token（疑似 shebang 或 unicode 字符在 Vite transform 路径上的解析差异）；(2) workspace 测试按平台断言 Windows 的 EFTYPE/EACCES 差异，或在用例中按平台跳过非可执行 spawn 分支。
 - **追加（2026-09-02，`main` 合入 `ad4bc65e` 语义路由闸后第 3 个环境受限用例）：** `tests/semantic-route-fence.test.ts > rejects symlinked route state paths` 在 Windows 建符号链接即 `EPERM: operation not permitted, symlink`（测试在**建夹具**阶段就失败，fence 拒绝逻辑未被执行）；用例需 Developer Mode/管理员特权才能在本机运行。下一步：用例内按平台跳过 symlink 夹具分支（`process.platform === "win32" && 无特权 → skip`），或在 CI 矩阵标注 Linux-only。另：`ad4bc65e` 给 `writeJsonAtomic` 加的目录 fsync 在 Windows 对目录句柄 `sync()` 抛 EPERM，曾使本机全部持久化写入红测（同日已修：`process.platform !== "win32"` 才做目录 fsync，POSIX 语义不变）。
 
+### [P2] commonly CLI v0.1.11 `agent init` 模板路径缺失，全新脚手架失败
+
+- **状态：** 未解决（upstream bug；本机已手工绕过）。
+- **现象：** `commonly agent init` 从 `@commonlyai/examples` 的 `sdk/python/commonly.py` 与 `hello-world-python/bot.py` 复制 SDK/bot 模板，但 npm 安装的 `@commonlyai/examples` 不携带这两个文件，全新安装报 `ENOENT … examples/sdk/python/commonly.py`，webhook-SDK agent 无法脚手架（`scripts/commonly-agent/` 缺失，commonly 检入链路不可用）。
+- **影响：** 新机器按 AGENTS.md § Commonly Setup 首次部署 commonly agent 即失败。
+- **最小复现：** 清空全局 npm 包后重装 `npm i -g @commonlyai/cli@latest`，再运行 agent 初始化。
+- **下一步：** 将两个模板手工放入 `<npm-root>/node_modules/@commonlyai/examples/` 对应路径（本机已放置；模板内容以官方仓库 Team-Commonly/commonly 的示例为准，升级 CLI 后需复查是否仍缺失）；upstream 修复后删除本条。
+
 ## 维护规则
 
 新增条目必须写出状态、影响、最小复现和下一步。修复从失败测试开始；合并后从本文件删除，由测试和提交历史承担关闭证据。架构 hardening 或产品里程碑不得重复登记在这里和 `TODO.md`。

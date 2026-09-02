@@ -5,21 +5,27 @@
 > (authoritative entry, with per-topic files under `docs/architecture/`); do not
 > duplicate architecture content here to avoid drift.
 >
-> Single, non-conditional logic: **Commonly coordination is a standard part of
-> the workflow for every agent**, not a separate extension that only stacks when
-> connected.
+> **Commonly coordination is an unconditional, built-in part of the workflow
+> for every agent** — not an add-on that applies only when a Commonly
+> connection happens to exist.
+>
+> Terms: a **round** is one continuous agent working session ending in a report
+> or check-in; a **pod** is the Commonly group (agents + human) sharing one
+> board and message stream.
 
 ## Prerequisites & Secrets
 
 - Tools: Node.js 22.19+, pnpm, Python 3.12+, uv, Git. Use the versions pinned in
   `package.json` / `pyproject.toml`.
 - API keys: load from environment variables or a local untracked `.env`; never
-  commit real secrets. The settings API masks keys — do not log or expose raw
-  credentials.
-- Package managers: **pnpm** for TypeScript (never `npm`); **uv** for Python,
-  scoped to the root `pyproject.toml` / `uv.lock` for `database/` only.
-- All **npx**/`npm i -g` installs below are the single exception to the "no npm"
-  rule (they are Node package installs, not the repo's dependency manager).
+  commit real secrets, and never log or expose raw credentials (the settings
+  surfaces mask stored keys).
+- Package managers: **pnpm** for TypeScript (never `npm`); **uv** for Python —
+  the only Python project is `database/`, managed through the root
+  `pyproject.toml` / `uv.lock`.
+- `npx`/`npm i -g` installs in this file (the Commonly CLI in § Commonly Setup)
+  are the single exception to the "no npm" rule — they are Node package
+  installs, not the repo's dependency manager.
 
 ## Architecture
 
@@ -28,11 +34,11 @@ The system is a **two-layer Agent + Deterministic Pipeline** (see
 
 | Layer              | Technology                                                                  |
 | ------------------ | --------------------------------------------------------------------------- |
-| Application Host   | Node.js 22.19+, TypeScript, Vite middleware                                 |
-| Main Agent         | Pi (adapter-confined via `server/src/agent/pi-adapter.ts`)                  |
-| Dataset Core       | TypeScript deterministic core (`server/src/dataset/`)                       |
-| Python Persistence | `database/` bridge only (Python 3.12+, stdlib, JSONL named-op)              |
-| Frontend           | React 19, Vite, Tailwind CSS v4, shadcn/ui                                  |
+| Application Host   | Node.js, TypeScript, Vite middleware                                       |
+| Main Agent         | Pi (adapter-confined via `server/src/agent/pi-adapter.ts`)                 |
+| Dataset Core       | TypeScript deterministic core (`server/src/dataset/`)                      |
+| Python Persistence | `database/` bridge only (stdlib, JSONL named-op)                           |
+| Frontend           | React 19, Vite, Tailwind CSS v4, shadcn/ui                                 |
 
 Key invariants:
 
@@ -55,9 +61,9 @@ Key invariants:
   `database/tests/test_database_store.py::test_no_forbidden_imports_in_database_package`).
 - New wire DTOs belong in `@biomed/contracts` first.
 - The explicit `in_process_unisolated` Family Host/Core publication chain is a
-  stable `dev` baseline. Continue recovery/resource/identity hardening, family
-  product closure, frontend UX, and release evidence on dedicated branches or
-  worktrees; do not reopen sandbox/container/IPC work without a new ADR.
+  stable baseline, not a sandbox or security boundary; do not reopen
+  sandbox/container/IPC work without a new ADR. Current-phase work priorities
+  live in `docs/TODO.md`.
 - Always treat code as the source of truth for skill/tool implementation status —
   do not assume from documentation alone.
 
@@ -82,6 +88,9 @@ Before starting any task, consult:
   from git history. For why/history questions, consult them explicitly; never treat
   them as current behavior. Moved paths are documented in `docs/README.md`
   (文档地图, "本轮归档说明").
+- `PROBLEM.md` is static background (competition problem statement and evaluation
+  criteria), not per-task reading — load it when evaluation-relevant decisions
+  are involved, not on every task.
 - **Prefer topic files over whole indexes**: for a specific boundary read the matching
   `docs/adr/NNN-*.md` and `docs/architecture/*.md` chapter instead of loading the
   whole `ARCHITECTURE.md`.
@@ -95,15 +104,14 @@ Before starting any task, consult:
 ```bash
 pnpm install --frozen-lockfile    # single workspace lockfile
 pnpm dev                          # TS Host + Pi + TS Core + Vite (only normal entry)
-pnpm test                         # full workspace tests (cross-cutting changes / CI parity)
-pnpm test:full                    # alias of pnpm test (same suite)
+pnpm test                         # full workspace tests (= pnpm test:full; cross-cutting changes / CI parity)
 pnpm --filter @biomed/server test     # targeted: server/ changes only
 pnpm --filter @biomed/frontend test   # targeted: frontend/ changes only
 pnpm --filter @biomed/contracts test  # targeted: packages/contracts/ quick feedback
 pnpm lint                         # workspace lint
 pnpm typecheck                    # workspace TypeScript checks
 pnpm build                        # workspace production builds
-pnpm docs:check                   # current Markdown local-link validation
+pnpm docs:check                   # Markdown local-link validation (skips docs/archive, docs/migration)
 ```
 
 Tests run with bounded concurrency by default; for concurrency, CI behavior, and
@@ -121,18 +129,20 @@ uv run ruff check database                  # zero warnings allowed
 The bridge is stdlib-only (argparse/json/sqlite3/pathlib/dataclasses); pytest and
 ruff are dev-only dependencies.
 
-### Frontend (cwd: `frontend/`)
+### Frontend
+
+Run from the repository root with the workspace filter (running the same scripts
+inside `frontend/` also works — pnpm resolves the workspace root; there is a
+single workspace lockfile):
 
 ```bash
-pnpm install
-pnpm build                  # production build (tsc -b && vite build)
-pnpm lint                   # ESLint (--max-warnings 0)
-pnpm tsc                    # type check (tsc --noEmit)
-pnpm test                   # unit tests once (vitest run)
-pnpm test:watch             # unit tests watch mode (vitest)
+pnpm --filter @biomed/frontend build        # production build (tsc -b && vite build)
+pnpm --filter @biomed/frontend lint         # ESLint (--max-warnings 0)
+pnpm --filter @biomed/frontend tsc          # type check (tsc --noEmit)
+pnpm --filter @biomed/frontend test         # unit tests once (vitest run)
+pnpm --filter @biomed/frontend test:watch   # unit tests watch mode (vitest)
+pnpm dev:frontend-standalone                # standalone Vite diagnostic; not the normal entry
 ```
-
-`pnpm dev` in `frontend/` is a standalone diagnostic only, not the normal entry.
 
 ## Technical Conventions
 
@@ -140,7 +150,6 @@ pnpm test:watch             # unit tests watch mode (vitest)
   restricted to `database/`; flat imports.
 - **TypeScript / React**: follow shadcn/ui component patterns and Tailwind
   utility classes; use the `@/` path alias.
-- **Imports**: `database/` uses flat imports; frontend uses `@/...`.
 - **Type safety**: never suppress type errors — no `as any`, `@ts-ignore`, or
   `@ts-expect-error`.
 - **Testing**: `database/` uses pytest; server/frontend use vitest. Every new
@@ -196,21 +205,19 @@ that a check-in happened.
 - **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
   `.env` when present; both `scripts/commonly-up.{sh,bat}` fall back to this same
   default value (shared by all members; not secret).
-- **Agent name**: invocation arg > `COMMONLY_AGENT_NAME` > `<hostname>-agent`,
-  sanitized to the registry charset `[a-z0-9-]` (lowercased, other chars dropped,
-  edge dashes trimmed). On this machine → `lidozs55-agent`.
+- **Agent name**: first positional arg of `scripts/commonly-up.sh` >
+  `COMMONLY_AGENT_NAME` > `<hostname>-agent`, sanitized to the registry charset
+  `[a-z0-9-]` (lowercased, other chars dropped, edge dashes trimmed). On this
+  machine → `lidozs55-agent`.
 - **Runtime token** lives in `scripts/commonly-agent/.commonly-env`
   (git-ignored); never print or commit it.
 - **Check-in integrity**: do **not** use a human or operator `commonly pod send`
   session as a substitute for agent check-ins — it misattributes the message.
   The `[TASK]`, `[DONE]`, and `[BLOCKED]` rules and board synchronization
   requirements are unchanged.
-- **Known CLI bug (v0.1.11)**: `commonly agent init` copies SDK/bot templates from
-  an `@commonlyai/examples` path npm does not ship, so a fresh install fails with
-  `ENOENT … examples/sdk/python/commonly.py`. Workaround: fetch the two canonical
-  templates into `<npm-root>/node_modules/@commonlyai/examples/{sdk/python/commonly.py,
-  hello-world-python/bot.py}`. Official docs are authoritative for the full tool
-  surface — keep this section minimal and point there instead of duplicating:
+- Known CLI/tooling quirks (e.g. the v0.1.11 `agent init` template bug) are
+  tracked in [docs/ISSUES.md](docs/ISSUES.md). Official docs are authoritative
+  for the full tool surface:
   [CONNECTING_LOCAL_AGENTS.md](https://github.com/Team-Commonly/commonly/blob/main/docs/agents/CONNECTING_LOCAL_AGENTS.md).
 
 ## Commonly Workflow
@@ -220,18 +227,19 @@ that a check-in happened.
 | Work type         | Check-in required? | Method                                                          |
 | ----------------- | ------------------ | --------------------------------------------------------------- |
 | Coding & fixes    | **Yes**            | `[TASK]` before starting, `[DONE]` upon completion              |
-| Research & review | No                 | Share high-risk/high-value findings via `[Q]` or a new `[TASK]` |
+| Research & review | No check-in (report findings — see Method) | Share high-risk/high-value findings via `[Q]` or a new `[TASK]` |
 
 ### Board task workflow
 
 When told to handle a Commonly board task:
 
-1. **Sync**: load board tasks + latest messages for the pod.
+1. **Sync**: load board tasks + latest messages for the pod (CLI commands: the
+   official docs linked in § Commonly Setup).
 2. **Claim**: claim the task (only one at a time).
 3. **Work**: execute per this file; open a branch if needed.
 4. **Verify & commit**: after self-check passes,
-   `git commit -m "[TASK-XXX] <type>: description" && git push` (conventional
-   format enforced by the commit-msg hook; e.g. `[TASK-123] feat: add retry`).
+   `git commit -m "[TASK-XXX] <type>: description" && git push`
+   (message format: § Quality Gates).
 5. **Merge & close**: merge to `dev` (see Git Workflow), post `[DONE]`
    (branch info required), then complete the board task.
 6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
@@ -261,7 +269,8 @@ Commonly board is the execution-status view. To avoid circular updates:
 - Claim / in-progress / blocked / completed status is maintained on the board.
 - When a task completes or its priority changes, write the outcome back to the
   matching `docs/TODO.md` checkbox.
-- Never edit the same semantic field in both places at once.
+- Never edit the same semantic field (status, priority, claim/assignee, task
+  description) in both places at once.
 - Create board tasks immediately for new bugs / tech debt / uncovered requirements
   found during work (prefix `[P0]` / `[P1]` / `[P2]`, fill `dep`).
 
@@ -289,10 +298,19 @@ Commonly board is the execution-status view. To avoid circular updates:
 ### Branch policy
 
 - **Branch model**: `dev` is the development integration branch — all feature
-  work merges here. `main` is the public release branch: it carries the
-  user-facing README and release tags, is protected, and receives changes only
-  via pull requests from `dev` (typically for releases). Historical/internal
-  content lives only on `dev`.
+  work merges here. `main` is the public release branch: protected, receives
+  changes only via release pull requests from `dev`, and carries only public
+  content. Internal content is dev-only and must be pruned by every release PR —
+  at minimum `docs/`, `AGENTS.md`, `PROBLEM.md`, plus agent tooling and internal
+  evaluation material (`.agents/`, `.superpowers/`, `.playwright-mcp/`, `.husky/`
+  with the `husky` prepare script/devDep, internal gold/eval test suites,
+  `skills-lock.json`); commit `a3b820e9` on `main` is the canonical example.
+  `main` commits are release-side actions and never merge back into `dev`; `dev`
+  must remain a content superset of `main`.
+- **PR cadence**: a PR to `main` is a release event, not a sync point — batch
+  several completed `dev` merges into one release PR; never open one per merge.
+  Before opening it, re-check the dev-only capability exclusions and the
+  internal-content prune list above.
 - **Dev-only capabilities must never reach `main`**: the agent self-code access
   design is visible and usable on `dev` only. Identify it by capability and
   path, not by commit hash (hashes rot on amend/rebase):
@@ -333,8 +351,9 @@ hold:
 
 Merge steps:
 
-- Sync with `dev` first: ≤5 commits → `git pull --rebase origin dev`; >5 commits
-  or conflict-prone → `git fetch origin dev && git merge origin/dev`.
+- Sync with `dev` first: if the branch is ≤5 commits behind `dev`, `git pull
+  --rebase origin dev`; if it is further behind or a conflict is likely (both
+  sides touched the same files), `git fetch origin dev && git merge origin/dev`.
 - After resolving conflicts, **re-run all Quality Gates**.
 - Check out local `dev`, ensure it is clean and up to date, then merge with
   `git merge --no-ff <branch>`; push `dev`.
@@ -344,6 +363,10 @@ Merge constraints:
 
 - **Never force-push to shared branches** (`main`, `dev`). If push is rejected,
   `git pull --rebase` first, then push.
+- If a merge lands on `dev` and turns out broken: prefer fixing forward on a
+  branch; for immediate shared-branch breakage, `git revert -m 1 <merge-commit>`
+  is allowed and must be announced (`[DONE]` with the reason, or `[Q]` if
+  unsure).
 - One merge to `dev` = one complete functional unit; bundle related
   `feat`/`fix`/test/doc changes into the same branch and merge together.
   `main` receives changes only through PRs from `dev` (branch protection; one
@@ -418,10 +441,8 @@ task, all items are mandatory and this checklist is the Definition of Done; if t
 round ends with incomplete work, complete the applicable items before starting the
 next round.
 
-1. **Quality gates** — Git Workflow §Quality Gates pass: lint, typecheck,
-   build, plus targeted tests for every changed area (failing-test loop
-   completed); if `database/` changed, the bridge gates also pass. Full
-   `pnpm test` only where the policy requires cross-cutting coverage.
+1. **Quality gates** — all Git Workflow §Quality Gates pass for every changed
+   area (failing-test loop completed).
 2. **Tests** — new behavior is covered by tests, or the fixed bug has a reproducing
    test that now passes.
 3. **Branch & merge** — multi-file work used a dedicated branch; single-file `dev`
