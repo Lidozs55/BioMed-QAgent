@@ -77,7 +77,6 @@ describe("stable Skill ↔ Tool mapping", () => {
       "execute_dataset_execution",
       "prepare_dynamic_family_publication",
       "submit_dynamic_family_publication",
-      "read_dataset_core_source",
     ]);
     expect(core?.routing).toMatch(/inspect routes first/i);
     expect(core?.routing).toMatch(/exact static match/i);
