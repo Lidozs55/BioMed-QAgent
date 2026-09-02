@@ -185,15 +185,20 @@ async function uniqueAssetFile(
   const rootInfo = await stat(assetRoot).catch(() => null);
   if (rootInfo === null || !rootInfo.isDirectory()) {
     // Layout-agnostic fallback: extraction members register under
-    // source_assets/extracted/<digest>/ rather than source_assets/<assetId>/,
-    // so resolve through the recorded relative_path.
+    // source_assets/extracted/<digest>/ or source_assets/extract/<digest>/
+    // rather than source_assets/<assetId>/, so resolve through the recorded
+    // relative_path. The return value feeds registry.register, which rejects
+    // anything but a task-relative source_assets path (Z1: the bound member
+    // must not die on "must be a relative source_assets path").
     if (registeredRelativePath !== undefined && registeredRelativePath !== "") {
       const candidate = path.resolve(taskRoot, ...registeredRelativePath.split("/"));
       if (!candidate.startsWith(`${sourceRoot}${path.sep}`)) {
         throw new ExecutionError(`registered asset '${assetId}' escaped source_assets`);
       }
       const fileInfo = await stat(candidate).catch(() => null);
-      if (fileInfo !== null && fileInfo.isFile()) return candidate;
+      if (fileInfo !== null && fileInfo.isFile()) {
+        return path.relative(taskRoot, candidate).split(path.sep).join("/");
+      }
     }
     throw new ExecutionError(`registered asset '${assetId}' directory is missing`);
   }
