@@ -75,6 +75,12 @@ export const literatureExperimentChartTables: readonly TableDefinition[] = Objec
       "human_review_status", "source_asset_id", "source_locator", "model_name",
       "model_version", "prompt_digest", "extraction_confidence", "transform_provenance",
     ],
+    // Topology change approved 2026-09-02 (operator, R7d): chart_series may be
+    // empty when the visual model degrades every series (axis/legend unclear)
+    // and no reviewed VLM carrier can be produced in-session. The exact-only
+    // policy is unaffected: no estimated point may ever be promoted.
+    allowEmpty: true,
+    required: false,
   }),
   table({
     tableId: "chart_points",
@@ -181,8 +187,8 @@ export const literatureExperimentChartProjection: Projection = Object.freeze({
   required: literatureExperimentChartTables
     .filter((item) => item.required)
     .map((item) => item.table_id),
-  optional: ["supplementary_asset_records"],
-  allow_empty: ["chart_points", "supplementary_asset_records"],
+  optional: ["supplementary_asset_records", "chart_series"],
+  allow_empty: ["chart_points", "supplementary_asset_records", "chart_series"],
   relations: literatureExperimentChartRelations.map((item) => item.relation_id),
   row_granularity: "literature_experiment_activity_value",
   compatibility_dimensions: ["raw_relation", "raw_unit", "normalized_unit", "value_precision"],
