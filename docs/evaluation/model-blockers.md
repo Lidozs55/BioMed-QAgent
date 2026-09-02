@@ -319,6 +319,17 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 ### 行为面终评（正面为主）
 `inspect_source_coverage` 16 连败被模型正确因果归因并切源（"closed by source switch, not repetition"）；navigate 404→换端点；"Tool not found"→激活后完成；假命中表名（Table 3→5）自纠；**P3 的拒绝伪造 provenance 是全批次最重要的一次模型守界行为——它证明了信任规则在模型侧生效，反衬产品侧没有兑现合法出口**。求助清单精确（gwas_* profile / 注册 JSON 载体 / 授权扩 75 行）。
 
+## gold7-r3 @ qwen3.8-flash（2026-09-02，main@998fe23281a5，**规范复测（现行 TOPIC）**，task_ts_3e3337da-70d0-41f2-a7a6-6d622b199c09）
+
+> 终态 **blocked_no_publication**；**40 calls / 36min / 7.33M token（r2 的 18%）** / 峰值 356,285 / 1M。P4（1M 下验证密度无成本闸）**未复现**——穷尽界/收敛界条款生效后的首个重型案样本。数据面成果：70 行 GWAS 断言（IGAP 2013 / Kunkle 2019 / ADGC 2025 跨祖先 / EADB 2026，OR+p+CI+GRCh38 坐标双源互证）+ 58 行 dbSNP 注释 + 10 行研究元数据，全部真值可溯。完整记录见 `data/gold/gold7_alzheimer_gwas/runs-log.md`。
+
+| # | 卡点 | 归类 | 证据 | 状态/建议 |
+| - | ---- | ---- | ---- | ---- |
+| P3-精化 | **动态拓扑锁收敛为单一拒因=profile 注册表**：自建 AD GWAS FamilySpec + 31 绑定 → `dynamic_preflight_rejected: unknown Core product requirement profile 'ad_gwas_risk_loci.assessment.v1'`（seq7918）；`scaffold_dataset_profile(gwas_association.release.v1)` → `no registered scaffold`，available 仅 bioactivity/literature 两个 chart 拓扑（seq4355）。模型正确拒绝伪装进 chart 模板，也未再发 r1 式探针 | 框架（架构级） | 证据包 `data/gold-runs/998fe232-gold7-qwen38flash-r3-standard/` | r2 的"topology non-authorable"在 wire 修复后落到这一道门；P3 立项不变，实现靶点更窄：**product-requirement profile/scaffold 注册表** |
+| R1（新） | **绑定型 provider 无法沉淀任务自有载体**：`acquire_core_carrier(gwas-catalog.associations.v1)` → `provider_not_acquisition_only`（seq1906）——发现→绑定→留证链在载体端断开 | 框架（载体契约） | 证据包 events | H1/I2 邻域新实例；acquisition-only 范围扩展或绑定型 provider 的 carrier 导出通道立项 |
+| G2-再证 | 静态 `variant_evidence.assertion.v1` 对 rsid/chromosome/position/gene_symbol/odds_ratio/p_value 全 `unknown_required_field` + `merge_strategy_not_supported` → 静态侧同样无 GWAS 关联族 | 框架（表达面） | validate 记录 | 链 2（变异/关联表达）合并立项不变 |
+| I4-正样本 | 7 次 `lookup_gwas_catalog` 按 PMID 返回 total_count=0 → 判定"先验 PMID 有误"，不可核实来源全部排除，未单点判死通道、未臆造 | 模型（正样本） | 终答 §2.4 | 归因前多样本探测条款活体正样本，入教学素材 |
+
 ## gold8 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_304c82c8-7dfe-4372-8479-d99efa121e0a）
 
 > 题面依 §5.3 重建（无 prompts 文件）。终态 **succeeded_publication（1/4 表，且仅 1 药）**：`pub_dili_faers_counts_15070cb556142758`（动态 Family，acetaminophen 的 FAERS PT 计数，4 artifacts，载体经 `openfda.files.v1` Core 采集）。历史对照：e2e-rerun3 同题发过 9 药 68 行——本次回退到 1 药（J4）。
@@ -343,6 +354,18 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 - **正样本**：browser 韧性首次全面生效——官方源探测六通道**逐 URL 带失败原因**（对比历史上 555 次暴力枚举是行为质变）；拒绝用模型记忆臆造 50 药名册；两个无匹配 PT 记 unavailable 不记 0；求助清单含可执行域名/文件类型。
 - 诚实边界与历史一致：FAERS 计数=MedDRA PT 报告次数语义已在终答声明；部分维度正式+其余结构化阻断仍是该上游条件下的正确终态。
 
+## gold8-r2 @ qwen3.8-flash（2026-09-02，main@998fe23281a5，**规范复测（现行 TOPIC）**，task_ts_3be618b5-6b82-4a0e-878e-9d416a639b04）
+
+> 终态 **blocked_no_publication**；**53 calls / 44min / 8.81M token** / 峰值 336,252 / 1M。J4（可达面自我设限）**未复现**：FAERS 逐一尝试 20 药（18 成功）。数据面质变（对照 9-1 白天同题基线，旧代码旧 TOPIC，0 Publication）：DILIrank 2.0 标签 0 行 → **19 药逐字行**；LiverTox 8 药 → 6/18 章节 KeyPoints；FAERS 234 行 PT 计数；跨源键 `drug_name+pubchem_cid`（PUG-REST 逐药验证）。完整记录见 `data/gold/gold8_dili_drug_safety/runs-log.md`。
+
+| # | 卡点 | 归类 | 证据 | 状态/建议 |
+| - | ---- | ---- | ---- | ---- |
+| J1-大半销案 | **DILIrank 2.0 标签数据已可达**：经新 `navigate_page archive_html` 把 FDA DILIrank 2.0 页面渲染 DOM 存为 sha256 载体（`asset_d7991fb8…`，1,023,150 B）后逐字提取；事件面无 GitHub 镜像命中（ee8ad164 skill 为未被迫启用的备份能力） | 框架修复活体验证 | 证据包 events + workspace PROVENANCE 文件 | 06a69292 直接生效；FDA 批量导出端点（`/media/113052/download`）仍 404，J1 残余收窄为"官方 bulk 端点" |
+| J2-再证 | LiverTox Bookshelf HTML 可读可存（archive_html）但无 Core provider 变可绑定载体；wired Core 仅 `openfda_faers`，无药证/标签语义族 | 框架（覆盖面） | 终答 §4.2/4.3 | J2 立项不变："看得到/存得下"已解，"进得了正式链"未解 |
+| P3-再证 | 8 个静态注册族无一覆盖药证语义（最接近 `literature_evidence` 探测 `unknown_required_field`）；动态侧仅两个 chart profile。模型明确拒绝把 FAERS 计数伪装成 activity value / chart point（"可过形状检查但歪曲语义"） | 框架（架构级） | 终答 §4.1/4.2 | 与 gold7-r3 同轮互证：**profile 注册表是两侧共同瓶颈；模型守界行为第 3 案** |
+| X1（新，行为） | **路径幻觉拼写**：seq5866 请求 `fs.read D:/Code/BiaMedQAgent/...`（仓库根拼错）→ supervisor 按 external fs.read fail-closed 停账（exit 20）；操作员 deny 后 `--resume`，模型即转向无循环 | 模型（幻觉变体）+ 框架（钝边） | 证据包 permissions.jsonl + supervisor stdout | 低危单例；建议 Host deny hint 附"最近似合法路径"提示，减少一停一挂的运维往返 |
+| P5-邻域再证 | `europepmc.supplementary.v1` 载体获取成功但表格成员 XLSX/嵌套 ZIP 不可作 UTF-8 变换输入 | 框架 | 终答 §4.4 | 与 gold6-P5 / gold10 DA 链合并观察 |
+
 ## gold9 @ qwen3.8-flash（2026-08-30，main@0335ce92a1f8，task_ts_ea697df6-40a4-46b5-aab0-52db247419c2）
 
 > 题面依 §5.4 重建。**全九案成本之王：20.49M token（次高 2.6 倍）/ 118 calls / 90 分钟 / output 217.6k**。终态 succeeded_publication——**但正式物本身是 383 字节的通路探针**（transform=`pid.nlfix_probe`，BTK 单基因 2 行，row_count 硬编码），模型自己在终答里这么定性："该发布证明 Dynamic 路线可对 Core-acquired 载体执行发布——**不是**已完成的 PID 产品，我不作超额宣称"。四表实际状态：T1 基因/T4 跨源证据 有行（provisional workspace 层，回读验证）；T2 疾病/T3 关联 **故意留空 NO_DATA**（无可达源，填=造假）。
@@ -365,6 +388,18 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 
 - **正样本（九案诚实度峰值）**：**自我收回两个结论**（"Orphanet 空载体"撤回并归因自身换行 bug；"583=pathogenic+likely" 改标 "pathogenic-only，total 1158"）；对 42 失败做逐类别对账；探针发布不作产品宣称；T2/T3 宁空不造；ClinVar 复核 ADA/CARD11/RAG1 与 Table4 逐值一致后才写报告。
 
+## gold9-r2 @ qwen3.8-flash（2026-09-02，main@998fe23281a5，**规范复测（现行 TOPIC）**，task_ts_7f3dafd3-d467-4ca4-8ce8-122c8a815493）
+
+> 终态 **blocked_no_publication**；**60 calls / 45min / 9.69M token（r1 的 47%）** / 峰值 335,725 / 1M。K2（transform 信封）、K3（方言坑）**未复现**——动态路在 profile 门即被拒，未进入 transform 迭代。数据面：216 条基因×疾病断言（ClinGen 三 IEI 专家小组，含 Definitive…Disputed 分级/MOI/MONDO/HGNC ID）、203 基因 ClinVar P/LP 计数（429 重试后 203/203）、16 疾病定义七库交叉编号。完整记录见 `data/gold/gold9_iei_gene_phenotype/runs-log.md`。
+
+| # | 卡点 | 归类 | 证据 | 状态/建议 |
+| - | ---- | ---- | ---- | ---- |
+| **K1-销案** | `orphanet.en_product1.v1`（54MB）accession 修正后**载体已解析**（provider 路径），54MB 原始字节另经 `download_from_page` 完整取回带哈希 | 框架修复活体验证 | 终答阻塞表行 1；证据包 events | **84b12c35（XML 32MiB→64MB）活体验证通过，K1 可销案**；阻塞点后移到标识符门 |
+| N1-再证+精化 | `clinvar.gene-esearch.v1`：`querytranslation lacks the pathogenic clinical-significance term`，IL2RG 单基因探针复现（系统性）；provider `does not accept binding parameters` 且 accession 只接受裸符号——**固定检索式与 ClinVar 真实 querytranslation 不匹配，任何输入形态均不可满足** | 框架（provider 契约） | 终答阻塞表行 4 | 采纳 9-1 基线的精化表述：修 provider 固定检索式（而非"补发现工具"） |
+| Y1（新） | **标识符门整批 fail-closed**：`invalid gene symbol 'GTF2H2C_2'`（HGNC 现行集合内含下划线符号，Core 门不认）、`invalid gene symbol 'SNORD116@'`（Orphanet 原生 `@` 后缀）、`ORPHA:213 has conflicting OMIM identifiers`——单条脏行连坐整目录；模型用单绑定隔离实验逐一定位归属，并证实 `spec.entities` 范围声明不能裁剪整集解析 | 框架（校验语义） | 终答阻塞表行 2/3/5 | 9-1 基线同款未修；立项更准：**逐行隔离 + 官方现行符号白名单**（GTF2H2C_2 本身就是 HGNC 现行符号） |
+| J1-家族再证 | 54/47.9/22.6MB 原始字节已取回带凭证，但 `workspace_exec`（`python scripts/pei_probe.py`）权限层自动 deny（supervisor 设计内）；受治理读取 64KiB 窗口无法完成全量解析 → 全量定义表/基因→HPO 表未交付 | 框架（通道缺口） | permission seq5172-5175；终答未覆盖段 | "本地解析→task-owned Core 资产"受治理通道缺失（J1 立项）在本案的具体代价 |
+| P3-再证 | `scaffold_dataset_profile` → no registered scaffold，available 仅两个 chart profile | 框架（架构级） | 终答排查记录 | 4/4 案同轮再证 |
+
 ## gold10 @ qwen3.8-flash（2026-08-30，main@1a8161cd，task_ts_6da1b112-27e9-4a7b-9416-84140379da5e）
 
 > 题面依 `docs/plans/gold10-four-table-closure.md` 重建。终态 **blocked_no_publication**——历史同题（main@d084a7e4）曾四表正式闭包，本次回退。108 calls / 1185s / 9.2M token 全烧在发布前（post=0）；峰值上下文 135k；44 工具错误（execute×22 失败）。
@@ -379,6 +414,19 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 | L5 | **spec 作为 JSON string 有 4096 字符 transport 限制**（模型原话"named a transport limit (4096 chars), not data"）：多绑定四表 spec 逼近上限，进一步压缩 transform 表达空间（K2 同族） | 框架 | 终答三表尝试段 | 与 K2 信封提升合并 |
 
 - **诚实面**：全程零臆造（DA 拿不到就明说 GMRepo 未测、xlsx-only pattern 如实标注）；对每次拒绝都按"Core 指名的精确事实"逐条修正（这句口头禅质量高）。但 L1 使诚实结论本身也没能送达（末段退化，终答不完整）。
+
+## gold10-r2 @ qwen3.8-flash（2026-09-02，main@998fe23281a5，**规范复测（现行 TOPIC）**，task_ts_52531009-1a11-4f8e-8ae5-a4d5bb464fea）
+
+> 终态 **blocked_no_publication**；**52 calls / 31min / 5.88M token（r1 的 64%）** / 峰值 195,043 / 1M。**L1 回声死循环未复现**：末段无复读、终答完整收敛（08-31 收敛界/执行优先条款 + 首个"自我终止"形态消失的对照样本）。数据面：11 项 MGnify 研究元数据、**18 行真实 DA 检验**（MGYS00005198↔PMC6382922 补充表逐字，且如实标注为治疗前后配对而非病例-对照）、21 名称 taxon crosswalk（taxid 仅 1 个 Core 报错文本回填，其余 unresolved 不用记忆填）。完整记录见 `data/gold/gold10_gut_microbiome/runs-log.md`。
+
+| # | 卡点 | 归类 | 证据 | 状态/建议 |
+| - | ---- | ---- | ---- | ---- |
+| L2-半销案 | **media-type 半边已修活体生效**：`2_CAM4-8-617-s002.xlsx_p0.csv` 抽取成员媒体类型恰为 text/csv，DA 适配器不再因 octet-stream 拒收（对照 9-1 基线 18 连败） | 框架修复活体验证 | 证据包 events | extract 按成员真实类型标注 media type 的修复生效；**残留=下一行路径门** |
+| Z1（新） | **派生成员路径门（P2 残留变体）**：DA 表绑定 `source asset path must be a relative source_assets path` —— 对 4 个不同抽取资产、`asset_<64hex>` 与相对路径两种形态、2 个 registered 源全部同一拒绝；`source_assets/extracted/**` 派生成员过不了 08-31 P2 修复覆盖的注册资产路径门 | 框架（绑定契约） | 终答阻塞节 2；推理 delta seq6233/6388/6841 | P2 修复（resolveByRelativePath）扩展到派生成员资产；**这是本 run 唯一阻断 DA 表进正式链的技术环节** |
+| L3/I1-再证 | 单变量探针矩阵证实四表任一空即整体拒绝：仅 study→`taxon crosswalk table must not be empty`（seq721）；study+crosswalk→`differential abundance table must not be empty`（seq1857）；仅 crosswalk→`study table must not be empty`（seq2815） | 框架 | 证据包 events | all-or-nothing 静态侧第三案；partial publish 立项不变 |
+| Z2（新） | **crosswalk 绑定单研究约束**：`binding 'taxon_faecalibacterium_prausnitzii' must declare exactly one non-empty study entity`（seq1494）→ 跨 3 病种合并构建结构性不允许，须"一研究一发表" | 框架（表达面） | 证据包 events | 多研究 crosswalk 形态未被任何路由表达；与 Z1 同批立项 |
+| P3-再证 | 路由探测仅两个 chart profile；模型明确不手写 FamilySpec 绕闸 | 框架（架构级） | 终答根本原因节 | 4/4 案同轮再证 |
+| L1-未复现 | r1 末段 ~20 轮回声复读本 run 为零；run 自然 completed | 模型（正样本） | 事件尾部对照 | 标注"未复现（单例）"，护栏建议保留 |
 
 ## 十案全景（gold1–gold10 全部 @ qwen3.8-flash，除 r1 系 3.7-plus）
 
@@ -395,6 +443,19 @@ Host 的 `contracts/dist`（21:38 构建）落后于队友 `c005e323`（23:07，
 | gold10 | 0 | 9.20M | 20min | L1 回声死循环 + L2 media-type 断链 |
 
 **跨案恒等式**：① `$projection` 5/5；② 链 1（视检/回执）9/9 案至少付一次税；③ all-or-nothing 在静态（L3）与动态（I1）两侧都存在；④ 行为两极（提前收手 gold3/J4 vs 无界烧钱 C2/G4/L1）需提示词双向约束。合计 10 案 ~69M token、≈3.4 小时 live run。
+
+### gold7–10 复测全景（2026-09-02，main@998fe23281a5，现行 TOPIC + 1M + thinking on，全案无 HIL/无压缩/身份断言通过）
+
+| case | 交付（均 0 Publication） | token | 墙钟 | 对照上一轮 | 主病因（本轮） |
+|---|---|---|---|---|---|
+| gold7-r3 | 70 行 GWAS 断言 + 58 dbSNP 注释（provisional） | 7.33M（r2 的 18%） | 36min（r2 的 20%） | r2: 41.69M/177 calls | P3 profile 注册表（单一拒因）；静态族无 GWAS 表达 |
+| gold8-r2 | DILIrank 19 药 + LiverTox 6/18 + FAERS 234 行（provisional） | 8.81M | 44min | 9-1 基线：DILIrank 0 行 | P3 + J2（HTML 无 formalize provider） |
+| gold9-r2 | 216 ClinGen 断言 + 203 基因 ClinVar 计数 + 16 疾病定义（provisional） | 9.69M（r1 的 47%） | 45min（r1 的 50%） | r1: 20.49M/118 calls/探针 | 标识符门整批 fail-closed（Y1）+ N1 ClinVar 契约 |
+| gold10-r2 | 11 MGnify 研究 + 18 行真实 DA + 21 名称 crosswalk（provisional） | 5.88M（r1 的 64%） | 31min | r1: 9.20M/108 calls/L1 死循环 | Z1 派生成员路径门 + L3 四表 all-or-nothing |
+
+**复测轮恒等式**：① **P3 以"unknown Core product requirement profile / no registered scaffold"单一拒因形态 4/4 全中**（gold7/8/9/10 同轮），profile 注册表是当前唯一的总闸；② **数据获取面已系统性好转**（四案全部拿到真实跨源数据，对照 8-30/9-1 的"源头断链"形态——K1/L2/J1 主体的修复活体生效），阻塞整体后移到"表达/绑定/校验"层；③ 08-31 提示词批次的行为条款（穷尽界/收敛界/同路止损/归因前多样本）在本轮 4 案均未出现反例，P4/L1/J4/E3 形态全部未复现；④ 诚实面保持：四案均 0 臆造、0 伪装、缺口如实分级。
+
+**三档放宽落地（2026-09-02，分支 `fix/gold-gate-relaxations`，全部先红后绿）**：**Y1 符号门**（GENE_SYMBOL 接受 HGNC 现行 `_`/`@`，上游 gold9-providers 同步；逐行隔离与 OMIM 冲突门仍开放）＋ **N1**（querytranslation 字面门→语义闸，实测 live 形态 `pathogenic[All Fields]`）＋ **Z1**（根因修正：注册早已存在，真凶是 `dataset-core.ts` 布局回退返回绝对路径；已改 task 相对路径）＋ **P3-lite**（新 Core profile `scientific_assertion.table.release.v1`：扁平断言表拓扑，registry/scaffold/guidance 三处登记，contracts 零变更；完整 P3 仍开放）。细节与新增 S 级待办见 [triage.md](triage.md) 2026-09-02 两节注。
 
 
 

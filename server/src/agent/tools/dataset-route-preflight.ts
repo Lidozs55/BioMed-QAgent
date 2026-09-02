@@ -29,6 +29,7 @@ type AcquisitionOnlyProvider = {
 };
 
 const LITERATURE_EXPERIMENT_CHART_PROFILE = "literature_experiment_chart.release.v1";
+const SCIENTIFIC_ASSERTION_PROFILE = "scientific_assertion.table.release.v1";
 
 function sourceEntryRecord(value: unknown): Record<string, string> {
   if (!Array.isArray(value)) return value as Record<string, string>;
@@ -106,6 +107,14 @@ function productProfileGuidance(profileRef: string): {
         "The requested product requires paper_records, experiment_records, activity_value_records, chart_series/chart_points, and supplementary_asset_records as one literature experiment closure.",
       do_not_use_when:
         "The product is only a normalized compound-assay-target activity matrix without paper experiment or supplementary-asset tables.",
+    };
+  }
+  if (profileRef === SCIENTIFIC_ASSERTION_PROFILE) {
+    return {
+      use_when:
+        "The requested product is a flat assertion table closure (one primary scientific assertion table plus optional supporting study records) with no charts and no VLM figure extraction.",
+      do_not_use_when:
+        "The request requires chart_series, chart_points, activity_value_records, or per-figure VLM extraction; use a chart product profile instead.",
     };
   }
   return {

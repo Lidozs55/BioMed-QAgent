@@ -19,13 +19,18 @@ export const GOLD9_IMPLEMENTATION_DIGESTS = Object.freeze({
   orphanetProduct1: "c2257b4731a7659fcdc3e4cf334d5a3c007f91e87c1cd512cf8490767300002b",
   orphanetProduct6: "703942a006baa1c74f954d95c965521347a83d8f161c4b001bcb42e2f88a6774",
   hgncApproved: "c2c85835ffbc8ebf8ff9a74e39b99e188e13d14e3bb8a97ae4f6dd38b77ae92b",
-  clinvarGeneEsearch: "5bf4d1f29bdc44ecbe735439c55f77db11773f6269551ab3b92cf76d3f19d3fd",
+  // v3: ClinVar gene probe accession gate accepts HGNC symbols with '_'/'@'
+  // (Y1: GTF2H2C_2 / SNORD116@ were fail-closed rejected).
+  clinvarGeneEsearch: "e01c6c0ea7d4b25d84ed6e9be0ad84e36793d84b30beaf4d0a56068e15c65a34",
   clingenGeneValidity: "5f29c06b8d09320a3b4a1de93d0a7fc9402a01d06a81a9b94091fd6c1e8e9111",
 });
 
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
 const MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
-const GENE_SYMBOL = /^[A-Z][A-Z0-9-]{0,30}$/;
+// HGNC current symbols legitimately contain '_' (e.g. GTF2H2C_2) and the '@'
+// cluster suffix on snoRNA/scaRNA genes (e.g. SNORD116@); both must be usable
+// as the ClinVar gene probe accession.
+const GENE_SYMBOL = /^[A-Z][A-Z0-9_@-]{0,30}$/;
 
 function sourceId(providerId: string, accession: string): string {
   const digest = createHash("sha256").update(`${providerId}\u0000${accession}`).digest("hex").slice(0, 20);

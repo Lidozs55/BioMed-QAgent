@@ -181,48 +181,37 @@ they are realized in the agent's Python SDK handler, not called as MCP tools.
 
 ```bash
 npm i -g @commonlyai/cli@latest   # once, per machine (Node 20+)
-commonly login                     # interactive, once per machine
-bash scripts/commonly-up.sh        # scaffold (1st run) + run the agent; Ctrl+C to stop
+commonly login                     # interactive, once per machine (verify: commonly whoami)
+bash scripts/commonly-up.sh        # POSIX/Git Bash; Windows-native: scripts\commonly-up.bat
 ```
 
-- **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
-  `.env` when present; `scripts/commonly-up.sh` falls back to this same default
-  value (shared by all members; not secret).
-- **Agent name**: registry `agentName` must match `^(@<scope>/)?[a-z0-9-]+$`
-  (lowercase letters/digits/hyphens only — no quotes, no uppercase). Resolution
-  precedence in `scripts/commonly-up.sh`: `$1` (> invocation arg) >
-  `COMMONLY_AGENT_NAME` > `$(COMPUTERNAME)-agent`, then sanitized by lowercasing,
-  dropping chars outside `[a-z0-9-]`, and trimming edge dashes. On this machine →
-  `lidozs55-agent`.
-- Runtime token lives in `scripts/commonly-agent/.commonly-env` (**git-ignored,
-  never commit**).
-- **MCP-unavailable fallback**: MCP is not a prerequisite for this repository.
-  When the current runtime does not expose `commonly_*` tools, use the official
-  CLI + webhook-SDK path instead of blocking on MCP:
-  1. Check authentication with `commonly whoami`; if needed, run
-     `commonly login`.
-  2. Start the local agent from the repository root with
-     `scripts\commonly-up.bat [agent-name]` on Windows, or
-     `bash scripts/commonly-up.sh [agent-name]` on POSIX.
-  3. Let the webhook-SDK process use
-     `scripts/commonly-agent/.commonly-env`; never print or commit the runtime
-     token.
+The script checks the CLI and login state, scaffolds the webhook-SDK agent into
+`scripts/commonly-agent/` on first run (idempotent), then runs it (Ctrl+C to
+stop). The CLI bootstraps and launches the agent; the webhook-SDK process
+carries the agent identity, polls events, and posts agent replies. MCP is not a
+prerequisite for this repository — the CLI flow above is the only path; if the
+CLI/SDK agent process is not available, report `[BLOCKED]` rather than claiming
+that a check-in happened.
 
-  The CLI bootstraps and launches the agent; the webhook-SDK process carries the
-  agent identity, polls events, and posts agent replies. Do **not** use a human
-  or operator `commonly pod send` session as a substitute for agent check-ins,
-  because it misattributes the message. The `[TASK]`, `[DONE]`, and `[BLOCKED]`
-  check-in rules and board synchronization requirements remain unchanged. If
-  neither MCP nor the CLI/SDK process is available, report `[BLOCKED]` rather
-  than claiming that a check-in happened.
+- **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
+  `.env` when present; both `scripts/commonly-up.{sh,bat}` fall back to this same
+  default value (shared by all members; not secret).
+- **Agent name**: invocation arg > `COMMONLY_AGENT_NAME` > `<hostname>-agent`,
+  sanitized to the registry charset `[a-z0-9-]` (lowercased, other chars dropped,
+  edge dashes trimmed). On this machine → `lidozs55-agent`.
+- **Runtime token** lives in `scripts/commonly-agent/.commonly-env`
+  (git-ignored); never print or commit it.
+- **Check-in integrity**: do **not** use a human or operator `commonly pod send`
+  session as a substitute for agent check-ins — it misattributes the message.
+  The `[TASK]`, `[DONE]`, and `[BLOCKED]` rules and board synchronization
+  requirements are unchanged.
 - **Known CLI bug (v0.1.11)**: `commonly agent init` copies SDK/bot templates from
   an `@commonlyai/examples` path npm does not ship, so a fresh install fails with
   `ENOENT … examples/sdk/python/commonly.py`. Workaround: fetch the two canonical
   templates into `<npm-root>/node_modules/@commonlyai/examples/{sdk/python/commonly.py,
-  hello-world-python/bot.py}`. See official
-  [CONNECTING_LOCAL_AGENTS.md](https://github.com/Team-Commonly/commonly/blob/main/docs/agents/CONNECTING_LOCAL_AGENTS.md);
-  official docs are authoritative for the full tool surface — keep this section
-  minimal and point there instead of duplicating.
+  hello-world-python/bot.py}`. Official docs are authoritative for the full tool
+  surface — keep this section minimal and point there instead of duplicating:
+  [CONNECTING_LOCAL_AGENTS.md](https://github.com/Team-Commonly/commonly/blob/main/docs/agents/CONNECTING_LOCAL_AGENTS.md).
 
 ## Commonly Workflow
 

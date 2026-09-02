@@ -14,7 +14,10 @@ import type {
   InheritedDiseaseGeneRecord,
 } from "./types.js";
 
-const GENE_SYMBOL = /^[A-Za-z][A-Za-z0-9-]{0,30}$/;
+// HGNC current symbols legitimately contain '_' (e.g. GTF2H2C_2) and the '@'
+// cluster suffix on snoRNA/scaRNA genes (e.g. SNORD116@); both appear verbatim
+// in the official Orphanet/HGNC carrier bytes.
+const GENE_SYMBOL = /^[A-Za-z][A-Za-z0-9_@-]{0,30}$/;
 const HGNC_ID = /^HGNC:[0-9]+$/;
 const ORPHA_ID = /^ORPHA:[0-9]+$/;
 const OMIM_ID = /^OMIM:[0-9]+$/;
@@ -401,13 +404,15 @@ function parseClinVarCarrier(carrier: InheritedDiseaseEvidenceCarrier): ParsedCa
   if (!Number.isSafeInteger(count)) fail("clinvar_gene_esearch count is outside the safe integer range");
   const query = nonEmpty(result.querytranslation, "clinvar_gene_esearch querytranslation");
   const semanticQuery = query.toLowerCase().replace(/["']/g, "").replace(/\s+/g, " ");
-  const match = query.match(/(?:^|\s)([A-Za-z][A-Za-z0-9-]{0,30})\s*\[gene\]/i);
+  const match = query.match(/(?:^|\s)([A-Za-z][A-Za-z0-9_@-]{0,30})\s*\[gene\]/i);
   if (match?.[1] === undefined) fail("clinvar_gene_esearch querytranslation does not identify a gene term");
-  if (!/(?:^|[ (])pathogenic\s*\[\s*clinical significance\s*\]/i.test(semanticQuery)) {
-    fail("clinvar_gene_esearch querytranslation lacks the pathogenic clinical-significance term");
-  }
-  if (!/likely\s+pathogenic\s*\[\s*clinical significance\s*\]/i.test(semanticQuery)) {
-    fail("clinvar_gene_esearch querytranslation lacks the likely pathogenic clinical-significance term");
+  // Live ClinVar ESearch (verified 2026-09-02) normalizes the fixed query's
+  // [Clinical Significance] filters to `[All Fields]` in querytranslation and
+  // may drop the quoted "likely pathogenic" phrase entirely, so the semantic
+  // gate only requires that a field-tagged `pathogenic` term survived; a
+  // translation without it cannot come from the pathogenic-filtered search.
+  if (!/(?:^|[\s("])pathogenic\s*\[/i.test(semanticQuery)) {
+    fail("clinvar_gene_esearch querytranslation lacks a pathogenic clinical-significance term");
   }
   const symbol = geneSymbol(match[1]);
   const evidenceId = carrier.source;

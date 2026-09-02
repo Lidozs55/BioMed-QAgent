@@ -14,6 +14,11 @@ import {
   literatureExperimentChartTables,
 } from "./literature-experiment-chart/profile.js";
 import {
+  SCIENTIFIC_ASSERTION_FAMILY_ID,
+  SCIENTIFIC_ASSERTION_PROFILE_REF,
+  scientificAssertionTables,
+} from "./scientific-assertion/profile.js";
+import {
   chartEvidenceRelations,
   chartEvidenceTables,
 } from "./bioactivity-measurement/chart-evidence/schemas.js";
@@ -57,6 +62,18 @@ export function createDefaultCoreProductTopologyRequirements(): readonly CorePro
         min_rows: definition.allow_empty ? 0 : 1,
       })),
       relations: literatureExperimentChartRelations.map((relation) => relation.relation_id),
+    }),
+    parseCoreProductTopologyRequirements({
+      schema_version: "1.0",
+      profile_ref: SCIENTIFIC_ASSERTION_PROFILE_REF,
+      dataset_family: SCIENTIFIC_ASSERTION_FAMILY_ID,
+      tables: scientificAssertionTables.map((definition) => ({
+        table_id: definition.table_id,
+        role: definition.role,
+        schema_ref: definition.schema_ref,
+        min_rows: definition.allow_empty ? 0 : 1,
+      })),
+      relations: [],
     }),
   ]);
 }

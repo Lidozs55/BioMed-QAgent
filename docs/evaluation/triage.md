@@ -21,6 +21,24 @@
 > - **B6（后半）→ 已修**：`gdc.ts` search 收齐 hits 后按 token 命中密度 + project_id/disease_type/primary_site/name 加权排序再截断，"breast cancer TCGA" 首结果回归正确。
 > - **G3 → 半修**：BioC 空文档抛结构化 `NoFullTextError`（`literature-evidence/provider.ts`）以区分"无全文=终态"与"畸形输入"；Europe PMC `http_client_error` 对照修复仍需真实复现，暂缓。
 > - **其余 B 类条目 → 暂缓**：B7 剩余（activate 已反向同步 settings、UI 全走 registry，剩余 legacy 路径一致性自洽）、H1（无 ChEMBL target 发现工具是产品缺口，validator 拒 parameters 是正当防线）、H2（字段多属"发错表"非"schema 不可表达"，需真实复现再定）、C3/K1/K2/L5/I1/L3/D2/C4/E1/E2/I2/J1/J2/H3/supervisor 500 均为跨层架构或需真实网络复现的大工作，按"整体系统更好、避免过拟合"原则不在此轮动。
+>
+> **2026-09-02 gold7–10 复测注**（main@998fe23281a5，现行 TOPIC，四案全 blocked_no_publication，证据包 `data/gold-runs/998fe232-gold{7,8,9,10}-*/`，逐案记录 `data/gold/<case>/runs-log.md`）：
+> - **K1 → 销案（活体验证）**：`orphanet.en_product1.v1` 54MB 载体经 provider 路径解析成功（84b12c35 XML 32MiB→64MB）。gold9-r2 实测。
+> - **L2 → 半销案**：extract 解码产物按成员真实类型标注 media type 已活体生效（gold10-r2 xlsx_p0.csv=text/csv 被 DA 适配器接受）；**残留=新条目 Z1**：`source_assets/extracted/**` 派生成员绑不过 `source asset path must be a relative source_assets path`（P2 的 resolveByRelativePath 只对齐了注册资产，未覆盖派生成员）。P2 修复扩展即解。
+> - **P3 → 拒因精化**：4/4 案同轮收敛为单一拒因 `unknown Core product requirement profile '…'` / `no registered scaffold`（available 仅 bioactivity/literature 两个 chart 拓扑）。架构级立项不变，**实现靶点收窄为 product-requirement profile/scaffold 注册表**；gold 系列通过率仍全卡在此。
+> - **N1 → 精化**：`clinvar.gene-esearch.v1` 固定检索式与 ClinVar 真实 querytranslation 不匹配（`lacks the pathogenic clinical-significance term`，单基因探针系统性复现）——修 provider 固定检索式，而非"补发现工具"。
+> - **新条目**：**Y1**（标识符门整批 fail-closed：`GTF2H2C_2`/`SNORD116@`/ORPHA:213 OMIM 冲突，单脏行连坐整目录，且 `GTF2H2C_2` 本身是 HGNC 现行符号 → 逐行隔离+现行符号白名单）；**Z2**（gut_microbiome crosswalk 绑定强制恰好一个 study 实体，多研究合并构建结构性不允许）；**R1**（`provider_not_acquisition_only`：绑定型 provider 无法沉淀任务自有载体，gold7）；**X1**（行为面低危：模型路径幻觉拼写 `BiaMedQAgent` 触发 supervisor external fs.read fail-closed 停账，deny+resume 即恢复；建议 Host deny hint 附最近似合法路径）。
+> - **行为面（A 类）复测全绿**：P4/L1/J4/E3/I4 形态本轮 4 案零复现；穷尽界/收敛界/同路止损/归因前多样本条款无反例。A 类无需新增条目。
+> - **运维新陷阱（非卡点）**：`scripts/build-contracts-if-needed.mjs` 在 pnpm 硬链接式 workspace 安装下 `syncInstalledContracts` 对 `node_modules/@biomed/contracts`（非 junction 的硬链接副本）cpSync 自拷贝报 "src and dest cannot be the same"，`pnpm dev`/`pretest`/contracts `prebuild` 全挂。**→ 已修（2026-09-02，fix/gold-gate-relaxations）：同文件判定改按 dev+ino 身份，硬链接克隆跳过拷贝。**
+>
+> **2026-09-02 放宽落地注（分支 fix/gold-gate-relaxations，三档一次性落地，全部先红后绿）**：
+> - **Y1 → 部分落地（符号门半边）**：`inherited-disease-evidence/provider.ts` GENE_SYMBOL 接受 HGNC 现行 `_`/`@` 字符（GTF2H2C_2/SNORD116@），上游 `acquisition/gold9-providers.ts` 同步放宽并升 implementation digest；真非法符号仍 fail-closed。**残留**：①`fail()` 整批中断语义未动（逐行隔离未做）；②`ORPHA:213 conflicting OMIM identifiers` 门仍在；③agent 工具层 `agent/tools/clinvar.ts:11` 的 GENE_SYMBOL 未同步 `@`（S 级待办，见下）。
+> - **N1 → 已落地**：字面正则改单条语义闸（要求带字段标签的 pathogenic 检索词，实测 ClinVar 把 `[Clinical Significance]` 归一化为 `[All Fields]` 且丢弃引号短语）；无过滤/`benign`/`pathogenicity` 词干绕过均仍拒。
+> - **Z1 → 已落地（根因修正）**：落盘即注册在工具层与采集层**早已存在**（`core-asset-tools.ts` registerDerived + `acquisition/runtime.ts` extracted/**），真正残余是 `dataset/service/dataset-core.ts` 的 layout-agnostic 回退分支返回**绝对路径**致 `requireSourceAssetPath` 拒绝——已改为返回 task 相对路径。derived provenance（父载体 id/成员路径/sha256/OperationResult）原样保留。
+> - **P3-lite → 已落地**：第三个 Core product profile `scientific_assertion.table.release.v1`（family `scientific_assertion`：assertion_records 主表 + study_records 辅表、relations 空、无 chart/VLM/人审门），registry/scaffold/route-guidance 三处登记，contracts 零变更；两个 chart profile 行为回归全绿，phase8 架构守卫通过。**完整 P3（按请求任意声明拓扑 + 注册 API）仍开放**。
+> - **销案（复核发现文档滞后）**：supervisor `--adopt` 持久化 run_id——代码已修（`gold-formal-supervisor.mjs` adopt 分支 writeState），旧待办撤销。
+>
+> **2026-09-02 复核新增 S 级待办（均非架构、保留 fail-closed，按杠杆率排序）**：①`agent/tools/clinvar.ts:11` GENE_SYMBOL 与 A 案对齐（`@` 现被工具层拒）；②**M2** preview_core_asset 加 offset/length 分块（gold2-r2 实证 153MB SOFT 中段不可达，链 1 最后一段）；③**K3 文案半**：prepare 工具描述与 admission 报错补 JSON 换行 workaround（String.fromCharCode(10)），gold9 实测烧 10+ 轮；④**C3 最小版**：basic_statistics 声明大表上限+抽样统计（`analysis.ts:190` 整文件进单串必炸）；⑤**X1** deny hint 附最近似合法路径（`agent/workspace/tools.ts`）；⑥**H1 口径复核**：`chembl-provider.ts` 的 spec.entities 通道疑已可用，gold5 的"11 形态全拒"可能全打在 binding.parameters 上，先复测再立项。另：**H2 收窄**（validate 已做 required_fields×schema 前置校验，残留仅未声明场景）、**K2/L5 定位未核实**（server 侧上限 256KB 且找不到 4096 代码落点，疑模型/传输层）、**L2 guidance 半边部分已覆盖**（execute 报错已点名 xlsx→csv 绑定姿势）。
 
 各 run 表格里历史标注的"prompt/产品/接口陷阱"归类保留作记录，分流修复时**以本节为准**。
 

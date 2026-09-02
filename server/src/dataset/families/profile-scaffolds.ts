@@ -15,6 +15,12 @@ import {
   literatureExperimentChartRelations,
   literatureExperimentChartTables,
 } from "./literature-experiment-chart/profile.js";
+import {
+  SCIENTIFIC_ASSERTION_FAMILY_ID,
+  SCIENTIFIC_ASSERTION_PROFILE_REF,
+  scientificAssertionProjection,
+  scientificAssertionTables,
+} from "./scientific-assertion/profile.js";
 import { BIOACTIVITY_CHART_PRODUCT_PROFILE_REF } from "./product-requirements.js";
 
 export interface CoreProductProfileDescriptor {
@@ -65,6 +71,14 @@ export function resolveCoreProductProfileDescriptor(
       projection: literatureExperimentChartProjection,
       tables: literatureExperimentChartTables,
       relations: literatureExperimentChartRelations,
+    };
+  }
+  if (profileRef === SCIENTIFIC_ASSERTION_PROFILE_REF) {
+    return {
+      familyId: SCIENTIFIC_ASSERTION_FAMILY_ID,
+      projection: scientificAssertionProjection,
+      tables: scientificAssertionTables,
+      relations: [],
     };
   }
   throw new TypeError(`Core product profile '${profileRef}' has no registered scaffold`);

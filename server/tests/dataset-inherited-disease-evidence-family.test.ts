@@ -111,6 +111,75 @@ describe("inherited disease evidence family", () => {
     expect(() => parseInheritedDiseaseEvidenceCarriers(invalidClinvar)).toThrow(/pathogenic|retmax/);
   });
 
+  async function clinvarCarrierSet(querytranslation: string): Promise<InheritedDiseaseEvidenceCarrier[]> {
+    const names = ["orphanet-product1.xml", "orphanet-product6.xml", "hgnc-approved.tsv", "clinvar-gene-esearch.json", "clingen-gene-validity.csv"] as const;
+    const carriers: InheritedDiseaseEvidenceCarrier[] = [];
+    for (const name of names) {
+      const bytes = name === "clinvar-gene-esearch.json"
+        ? Buffer.from(JSON.stringify({ esearchresult: { count: "7", retmax: "0", retstart: "0", idlist: [], translationset: [], querytranslation } }))
+        : await fixture(name);
+      carriers.push({
+        source: (name.startsWith("orphanet") ? name.includes("product1") ? "orphanet_en_product1" : "orphanet_en_product6" : name.startsWith("hgnc") ? "hgnc_approved" : name.startsWith("clinvar") ? "clinvar_gene_esearch" : "clingen_gene_validity") as InheritedDiseaseEvidenceSource,
+        sourceId: `source_${name.replaceAll(".", "_")}`,
+        assetId: assetId(bytes),
+        logicalFile: `source_assets/${name}`,
+        retrievedAt: "2026-08-18T00:00:00.000Z",
+        bytes,
+      });
+    }
+    return carriers;
+  }
+
+  it("accepts HGNC current symbols with '_'/'@' and the live ClinVar querytranslation form", async () => {
+    const bytes: Record<string, Buffer> = {
+      "orphanet-product1.xml": Buffer.from((await fixture("orphanet-product1.xml")).toString("utf8").replaceAll("NGD1", "GTF2H2C_2")),
+      "orphanet-product6.xml": await fixture("orphanet-product6.xml"),
+      "hgnc-approved.tsv": Buffer.from("hgnc_id\tsymbol\tname\tstatus\nHGNC:12345\tGTF2H2C_2\tNon-Gold deficiency gene 1\tApproved\nHGNC:67890\tSNORD116@\tSmall nucleolar RNA gene cluster 116\tApproved\n"),
+      // Live ClinVar ESearch (verified 2026-09-02) normalizes the fixed query's
+      // [Clinical Significance] filters to [All Fields] in querytranslation and
+      // drops the quoted "likely pathogenic" phrase entirely.
+      "clinvar-gene-esearch.json": Buffer.from(JSON.stringify({ esearchresult: { count: "7", retmax: "0", retstart: "0", idlist: [], translationset: [], querytranslation: "GTF2H2C_2[gene] AND pathogenic[All Fields]" } })),
+      "clingen-gene-validity.csv": Buffer.from((await fixture("clingen-gene-validity.csv")).toString("utf8").replaceAll("NGD1", "GTF2H2C_2")),
+    };
+    const carriers = Object.entries(bytes).map(([name, content]) => ({
+      source: (name.startsWith("orphanet") ? name.includes("product1") ? "orphanet_en_product1" : "orphanet_en_product6" : name.startsWith("hgnc") ? "hgnc_approved" : name.startsWith("clinvar") ? "clinvar_gene_esearch" : "clingen_gene_validity") as InheritedDiseaseEvidenceSource,
+      sourceId: `source_${name.replaceAll(".", "_")}`,
+      assetId: assetId(content),
+      logicalFile: `source_assets/${name}`,
+      retrievedAt: "2026-08-18T00:00:00.000Z",
+      bytes: content,
+    }));
+    const rows = parseInheritedDiseaseEvidenceCarriers(carriers);
+    expect(rows.gene_records).toHaveLength(1);
+    expect(rows.gene_records[0]).toMatchObject({ gene_id: "HGNC:12345", gene_symbol: "GTF2H2C_2" });
+    expect(rows.gene_disease_records[0]).toMatchObject({ gene_id: "HGNC:12345", disease_id: "ORPHA:101" });
+    expect(rows.gene_evidence_crosswalk[0]).toMatchObject({ gene_id: "HGNC:12345", pathogenic_count: 7 });
+  });
+
+  it.each(["1ABC", "ABC DEF", "A!B"])("still rejects the non-HGNC gene symbol '%s'", async (symbol) => {
+    const hgnc = Buffer.from(`hgnc_id\tsymbol\tname\tstatus\nHGNC:12345\t${symbol}\tNon-Gold deficiency gene 1\tApproved\n`);
+    const carriers: InheritedDiseaseEvidenceCarrier[] = [{
+      source: "hgnc_approved", sourceId: "source_hgnc", assetId: assetId(hgnc),
+      logicalFile: "source_assets/hgnc-approved.tsv", retrievedAt: "2026-08-18T00:00:00.000Z", bytes: hgnc,
+    }];
+    expect(() => parseInheritedDiseaseEvidenceCarriers(carriers)).toThrow(/invalid gene symbol/);
+  });
+
+  it("keeps the ClinVar pathogenic filter gate fail-closed while accepting echoed translation forms", async () => {
+    const live = parseInheritedDiseaseEvidenceCarriers(await clinvarCarrierSet("NGD1[gene] AND pathogenic[All Fields]"));
+    expect(live.gene_evidence_crosswalk[0]).toMatchObject({ pathogenic_count: 7 });
+    const echoed = parseInheritedDiseaseEvidenceCarriers(await clinvarCarrierSet('NGD1[gene] AND ("pathogenic"[Clinical Significance] OR "likely pathogenic"[Clinical Significance])'));
+    expect(echoed.gene_evidence_crosswalk[0]).toMatchObject({ pathogenic_count: 7 });
+    for (const querytranslation of [
+      "NGD1[gene]",
+      "NGD1[gene] AND benign[clinical significance]",
+      "NGD1[gene] AND pathogenicity[All Fields]",
+    ]) {
+      const carriers = await clinvarCarrierSet(querytranslation);
+      expect(() => parseInheritedDiseaseEvidenceCarriers(carriers)).toThrow(/pathogenic clinical-significance term/);
+    }
+  });
+
   it("fails closed on malformed XML, missing crosswalk gene, and conflicting classifications", async () => {
     const bytes = await fixture("orphanet-product1.xml");
     const carriers: InheritedDiseaseEvidenceCarrier[] = [{ source: "orphanet_en_product1", sourceId: "source_one", assetId: assetId(bytes), logicalFile: "source_assets/orphanet-product1.xml", retrievedAt: "2026-08-18T00:00:00.000Z", bytes }];
