@@ -177,8 +177,8 @@ REJECTED
 
 ```text
 WorkflowRecipe（PROMOTED）
-  -> WorkflowRecipeSourceFetcher -> RecipeExecutor
-  -> Workspace validation -> SourceAsset -> SourceAdapter
+  -> CoreAcquisitionRegistry（PROMOTED 注册 + implementation_digest 校验）
+  -> CoreAcquisitionRuntime.acquire -> SourceAsset -> SourceAdapter
 ```
 
 `WorkflowRecipe` 不得产生 Canonical DataBatch、声明跨来源依赖、执行集成、选择

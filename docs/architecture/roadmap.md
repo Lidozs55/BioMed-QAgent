@@ -162,7 +162,8 @@ HIL 只能确认 figure/series/axis/legend 语义或来源映射，不能把低�
 - 后端事件、BuildResult、Manifest 和 Publication 契约稳定前重写前端。
 
 受控、声明式、非代码的 Acquisition `WorkflowRecipe` **属于目标范围**，但只能由
-可信 `RecipeExecutor` 执行并产出 `SourceAsset`。
+Core Acquisition 子系统（`CoreAcquisitionRegistry` + `CoreAcquisitionRuntime`）可信
+执行并产出 `SourceAsset`。
 
 > 决策依据：ADR §19（被否决或修正的方案）。
 
