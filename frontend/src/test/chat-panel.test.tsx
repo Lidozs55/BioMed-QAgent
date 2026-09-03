@@ -1587,6 +1587,167 @@ describe("ChatPanel", () => {
     }
   });
 
+  // ===== 流式期间的位置感知自动跟随 =====
+  // autoScroll 模式机在滚动条拖拽等无 wheel 信号的滚动下仍停留在
+  // following-bottom，内容一变化就把视口拽回底部（闪回）。改为位置判定后：
+  // 只有停在底部附近才贴底；远离底部时内容变化不得移动视口。
+  it("sticks to the bottom on content growth while parked near the bottom", () => {
+    seedTerminalTask("agent", "task_history", "cursor_1");
+    const roEntries: Array<{
+      callback: ResizeObserverCallback;
+      target: Element | null;
+    }> = [];
+    class RecordingResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        roEntries.push({ callback, target: null });
+      }
+      observe(target: Element): void {
+        const entry = roEntries[roEntries.length - 1];
+        if (entry !== undefined) entry.target = target;
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal(
+      "ResizeObserver",
+      RecordingResizeObserver as unknown as typeof ResizeObserver,
+    );
+
+    try {
+      const { container } = render(
+        <ChatPanel startTask={vi.fn()} loadOlderMessages={vi.fn()} />,
+      );
+      const viewport = container.querySelector<HTMLElement>(
+        '[data-slot="message-scroller-viewport"]',
+      );
+      // primitive 自身的 content RO 也以同一元素为目标；ChatPanel 自己的
+      // 观察器注册在后，取最后一个匹配。
+      const contentMatches = roEntries.filter(
+        (entry) =>
+          entry.target?.getAttribute("data-slot") === "message-scroller-content",
+      );
+      const contentRo = contentMatches[contentMatches.length - 1];
+      expect(contentRo).toBeDefined();
+      expect(viewport).not.toBeNull();
+      // 消费掉首屏"无条件跟随"后，用户停在距底部 50px 处。
+      let scrollTop = 9350;
+      Object.defineProperty(viewport, "scrollTop", {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      });
+      Object.defineProperty(viewport, "scrollHeight", {
+        configurable: true,
+        value: 10000,
+      });
+      Object.defineProperty(viewport, "clientHeight", {
+        configurable: true,
+        value: 600,
+      });
+
+      // 首屏跟随（armed）：无条件贴底。
+      act(() => {
+        contentRo?.callback([], contentRo.callback as unknown as ResizeObserver);
+      });
+      expect(scrollTop).toBe(10000);
+
+      // 停在底部附近时内容再增长：继续贴底。
+      Object.defineProperty(viewport, "scrollHeight", {
+        configurable: true,
+        value: 10400,
+      });
+      act(() => {
+        contentRo?.callback([], contentRo.callback as unknown as ResizeObserver);
+      });
+      expect(scrollTop).toBe(10400);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the reading position when content changes while scrolled away from the bottom", () => {
+    seedTerminalTask("agent", "task_history", "cursor_1");
+    const roEntries: Array<{
+      callback: ResizeObserverCallback;
+      target: Element | null;
+    }> = [];
+    class RecordingResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        roEntries.push({ callback, target: null });
+      }
+      observe(target: Element): void {
+        const entry = roEntries[roEntries.length - 1];
+        if (entry !== undefined) entry.target = target;
+      }
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal(
+      "ResizeObserver",
+      RecordingResizeObserver as unknown as typeof ResizeObserver,
+    );
+
+    try {
+      const { container } = render(
+        <ChatPanel startTask={vi.fn()} loadOlderMessages={vi.fn()} />,
+      );
+      const viewport = container.querySelector<HTMLElement>(
+        '[data-slot="message-scroller-viewport"]',
+      );
+      // primitive 自身的 content RO 也以同一元素为目标；ChatPanel 自己的
+      // 观察器注册在后，取最后一个匹配。
+      const contentMatches = roEntries.filter(
+        (entry) =>
+          entry.target?.getAttribute("data-slot") === "message-scroller-content",
+      );
+      const contentRo = contentMatches[contentMatches.length - 1];
+      expect(contentRo).toBeDefined();
+      expect(viewport).not.toBeNull();
+      let scrollTop = 4000;
+      Object.defineProperty(viewport, "scrollTop", {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      });
+      Object.defineProperty(viewport, "scrollHeight", {
+        configurable: true,
+        value: 20000,
+      });
+      Object.defineProperty(viewport, "clientHeight", {
+        configurable: true,
+        value: 600,
+      });
+
+      // 首屏跟随（armed）消费掉。
+      act(() => {
+        contentRo?.callback([], contentRo.callback as unknown as ResizeObserver);
+      });
+      // 用户已向上滚到 4000（距底部 15400px）：思维链收起等任何内容变化
+      // 都不得再把视口拽回底部。
+      scrollTop = 4000;
+      Object.defineProperty(viewport, "scrollHeight", {
+        configurable: true,
+        value: 19400,
+      });
+      act(() => {
+        contentRo?.callback([], contentRo.callback as unknown as ResizeObserver);
+      });
+      expect(scrollTop).toBe(4000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps load-earlier errors scoped to the task when switching", async () => {
     seedTerminalTask("agent", "task_a", "cursor_a");
     seedTerminalTask("agent", "task_b", "cursor_b");
