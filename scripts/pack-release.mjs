@@ -78,17 +78,17 @@ const PYTHON_EXTRAS = [
 const DESKTOP_EXTRAS = {
   win: [
     { name: "pywebview", version: "5.4.0", checkDir: "webview" },
-    { name: "bottle", version: "0.13.2" },
+    { name: "bottle", version: "0.13.2", checkDir: "bottle.py" },
     { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
-    { name: "typing_extensions", version: "4.12.2" },
+    { name: "typing_extensions", version: "4.12.2", checkDir: "typing_extensions.py" },
     { name: "pythonnet", version: "3.0.5" },
     { name: "clr-loader", version: "0.2.6", checkDir: "clr_loader" },
   ],
   macos: [
     { name: "pywebview", version: "5.4.0", checkDir: "webview" },
-    { name: "bottle", version: "0.13.2" },
+    { name: "bottle", version: "0.13.2", checkDir: "bottle.py" },
     { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
-    { name: "typing_extensions", version: "4.12.2" },
+    { name: "typing_extensions", version: "4.12.2", checkDir: "typing_extensions.py" },
     { name: "pyobjc-core", version: "10.3.1", checkDir: "objc" },
     { name: "pyobjc-framework-Cocoa", version: "10.3.1", checkDir: "Cocoa" },
     { name: "pyobjc-framework-WebKit", version: "10.3.1", checkDir: "WebKit" },
