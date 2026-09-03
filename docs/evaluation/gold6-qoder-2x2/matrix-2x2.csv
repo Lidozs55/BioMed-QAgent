@@ -1,0 +1,11 @@
+side,axis_x_structural_coverage_reuse,x_band,axis_y_evidence_auditability,y_band,quadrant,borderline
+flash,0.95,high,0.808,high,Q1_high_coverage_high_auditability,no
+max,0.5,borderline,0.758,high,borderline,yes
+
+# thresholds,high >= 0.66,low < 0.50,borderline band 0.50-0.66,within 0.05 of a boundary => borderline flag
+# x indicators,x1_schema_decomposition,x2_identifier_normalization,x3_unit_dose_normalization,x4_reusable_dimension_tables,x5_manifest_completeness,x6_rejection_exclusion_audit
+flash,1.0,1.0,1.0,1.0,0.7,1.0
+max,0.3,0.5,0.9,0.1,1.0,0.2
+# y indicators,y1_provenance_nonempty,y2_provenance_granularity,y3_manifest_hash_verifiable,y4_qc_claims_reproducible,y5_methods_log_depth,y6_raw_evidence_retained
+flash,1.0,1.0,0.6,0.85,1.0,0.4
+max,1.0,0.65,1.0,0.8,0.7,0.4
