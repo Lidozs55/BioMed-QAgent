@@ -22,6 +22,46 @@ BioMed 的整体设计遵循一个核心原则：开放式理解交给 LLM，正
   \item 人工确认（人在回路）：证据绑定的三档审批贯穿系统内外。每类审批对象可配置为人工审批 / LLM 初审（仅不通过项上报人工）/ 显式自动通过；初审不通过或模型调用失败时一律回退人工。动态发布、图表证据等高风险类型的发布验收强制人工且不可绕过（机制见 \ref{sec:hil} 节）。
 \end{itemize}
 
+前端任务工作台的实际界面如图~\ref{fig:ui-artifacts}--\ref{fig:ui-model-config} 所示：任务输出栏以“正式产物 / 来源·证据”页签呈现发布清单、逐表校验状态与来源覆盖率、多表关系拓扑与数据预览，以及逐件带 SHA-256 的来源资产登记；系统设置页维护数据源目录与模型服务的接入配置。图中画面均来自第~\ref{ch:experiments}章评测运行的实际截图。
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.495\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/ui-gold6-table-topology.png}
+    \caption{多表发布的关系拓扑（gold6 运行）}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.495\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/ui-gold9-artifact-validation.png}
+    \caption{校验状态、来源覆盖率与数据预览（gold9 运行）}
+  \end{subfigure}
+  \caption{前端任务工作台：正式产物浏览（任务输出栏）}
+  \label{fig:ui-artifacts}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.495\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/ui-gold9-source-registry.png}
+    \caption{来源资产逐件登记摘要与 SHA-256（gold9 运行）}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.495\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/ui-settings-databases.png}
+    \caption{系统设置：内置声明式数据库目录}
+  \end{subfigure}
+  \caption{前端任务工作台：溯源下钻与数据源目录}
+  \label{fig:ui-provenance}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.8\textwidth]{figures/ui-settings-models.png}
+  \caption{系统设置：模型供应商与模型档位管理（DashScope 接入 \code{qwen3.8-flash} / \code{qwen3.8-max-0902}）}
+  \label{fig:ui-model-config}
+\end{figure}
 
 \section{三层产物模型}\label{sec:three-layer}
 
