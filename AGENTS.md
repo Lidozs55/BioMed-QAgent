@@ -307,21 +307,18 @@ Commonly board is the execution-status view. To avoid circular updates:
   [docs/RELEASE_PRUNE_CHECKLIST.md](docs/RELEASE_PRUNE_CHECKLIST.md) — the
   single authority for internal-content pruning, dev-only capability
   exclusion, and must-ship items. The checklist is used only when cutting a
-  release PR and is never injected into agent prompts.
-- **Where to work**: small changes (docs, single-file fixes) edit directly on
-  the task branch or on `dev`; worktrees are only for developing multiple
-  branches in parallel (see Optional worktrees).
-- Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
-  `fix/summary`.
-- **Single-file small changes** (typos, config tweaks) may be committed directly
-  to `dev`, but you must: first `git pull` to sync; and confirm no other agent is
-  editing the same file (see Commonly Workflow ✓ coordination).
-- Multi-file changes, new features, or changes that may affect other agents
-  **must** use a dedicated branch.
-- Before creating a new branch, run `git branch -r` to check the remote and avoid
-  naming collisions.
-- Commit incrementally at logical checkpoints; each commit is a meaningful,
-  self-contained change.
+  release PR.
+- **Branch per task**: prefer a dedicated branch named like
+  `feat/TASK-XXX-{summary}` or `fix/{summary}`; check `git branch -r` before
+  creating one to avoid naming collisions. Multi-file changes, new features,
+  or changes that may affect other agents **must** use a branch.
+- **Direct-to-`dev` changes**: single-file small changes (typos, config
+  tweaks, docs) may be committed directly — first `git pull` to sync, and
+  confirm no other agent is editing the same file (see Commonly Workflow
+  coordination). Commit incrementally at logical checkpoints; each commit is
+  a meaningful, self-contained change.
+- **Worktrees** are only for developing multiple branches in parallel
+  (see Optional worktrees).
 
 ### Self-serve merge
 
@@ -352,8 +349,7 @@ Merge constraints:
   unsure).
 - One merge to `dev` = one complete functional unit; bundle related
   `feat`/`fix`/test/doc changes into the same branch and merge together.
-  `main` receives changes only through PRs from `dev` (branch protection; one
-  PR = one release-ready unit).
+  (`main`-side rules live in Branch policy.)
 - One feature, one merge: don't chain multiple merges for sub-steps; if not
   complete, keep committing on the branch.
 
