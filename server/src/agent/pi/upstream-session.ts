@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+  DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
   DEFAULT_MODEL_RETRY_POLICY,
 } from "@biomed/contracts";
@@ -111,7 +112,7 @@ export async function createRealUpstreamSession(
       "Pi model configuration is required",
     );
   }
-  const currentWindow = (): number => current.contextWindow ?? 131_072;
+  const currentWindow = (): number => current.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const modelRuntime = await ModelRuntime.create({
     allowModelNetwork: false,
     modelsPath: null,
@@ -341,7 +342,7 @@ export async function createRealUpstreamSession(
               reasoning: false,
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: next.contextWindow ?? 131_072,
+              contextWindow: next.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
               maxTokens: next.maxTokens ?? DEFAULT_MAX_TOKENS,
             },
           ],
@@ -364,7 +365,7 @@ export async function createRealUpstreamSession(
       ) {
         const usage = session.getContextUsage();
         settingsManager.applyOverrides(resolvePiCompactionOverrides(
-          next.contextWindow ?? 131_072,
+          next.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
           next.compactionTriggerRatio,
           next.compactionTargetRatio,
           usage?.tokens ?? null,

@@ -42,6 +42,7 @@ import { migrateLegacyRegistry, migrateLegacySettings } from "./migration.js";
 import {
   effectiveContextWindow,
   resolveActiveConfig,
+  resolveThinkingMode,
   resolveVlmConfig,
   VisionConfigError,
   visionAssignmentProblem,
@@ -125,7 +126,13 @@ function applyModelDerivedParams(model: ModelRecord, settings: SettingsRecord): 
   if (typeof model.params.top_p === "number") settings.advanced.top_p = model.params.top_p;
   if (typeof model.params.repetition_penalty === "number") settings.advanced.repetition_penalty = model.params.repetition_penalty;
   if (typeof model.params.enable_search === "boolean") settings.advanced.enable_search = model.params.enable_search;
-  if (typeof model.params.thinking_mode === "boolean") settings.advanced.thinking_mode = model.params.thinking_mode;
+  // 思考模式由思考强度推导（与 model-resolution.resolveThinkingMode 同一规则）；
+  // 旧记录里的 params.thinking_mode 仅在模型未配置 effort 时作为回退。
+  const legacyThinking = typeof model.params.thinking_mode === "boolean"
+    ? model.params.thinking_mode
+    : undefined;
+  settings.advanced.thinking_mode =
+    resolveThinkingMode(model.params, legacyThinking) ?? ADVANCED_DEFAULTS.thinking_mode;
 }
 
 /**

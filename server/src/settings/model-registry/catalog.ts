@@ -96,7 +96,6 @@ export const FALLBACK_PARAM_SPECS: ParameterSpec[] = [
     },
   ),
   spec("enable_search", "联网搜索", "boolean", { defaultValue: false, advanced: true }),
-  spec("thinking_mode", "思维链模式", "boolean", { defaultValue: false, advanced: true }),
 ];
 
 export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
@@ -125,7 +124,6 @@ export const PROFILE_PROVIDER_SPECS: Record<string, ParameterSpec[]> = {
       },
     ),
     spec("enable_search", "联网搜索", "boolean", { defaultValue: false, advanced: true }),
-    spec("thinking_mode", "思维链模式", "boolean", { defaultValue: false, advanced: true }),
   ],
   openai: [
     spec("max_tokens", "最大输出 Tokens", "integer", { defaultValue: 4096, min: 1 }),

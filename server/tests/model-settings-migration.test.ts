@@ -91,7 +91,7 @@ describe("loaded registry schema validation", () => {
       expect(service.getSettings()).toMatchObject({
         max_tokens: 8192,
         // context_window falls back to the null default → inferred at runtime.
-        context_window: 131_072,
+        context_window: 262_144,
         safety_reserve_ratio: 0.05,
         compaction_trigger_ratio: 0.85,
         compaction_target_ratio: 0.45,
@@ -251,7 +251,7 @@ describe("legacy value range clamping on migration", () => {
 
     expect(service.getSettings()).toMatchObject({
       max_tokens: 8192,
-      context_window: 131_072,
+      context_window: 262_144,
       compaction_target_ratio: 0.45,
       advanced: { temperature: 0.7, enable_search: false },
     });
@@ -289,10 +289,10 @@ describe("legacy value range clamping on migration", () => {
       max_output_tokens: null,
       suggested_max_tokens: null,
     });
-    // The clamped-out window falls back to null (unknown) → inferred 131072.
+    // The clamped-out window falls back to null (unknown) → DEFAULT_CONTEXT_WINDOW.
     expect(await service.resolveActiveModel()).toMatchObject({
       modelId: "legacy-model",
-      contextWindow: 131_072,
+      contextWindow: 262_144,
       maxTokens: 8192,
     });
   });

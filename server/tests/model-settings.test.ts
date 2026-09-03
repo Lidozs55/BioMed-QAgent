@@ -503,8 +503,8 @@ describe("TypeScript model settings", () => {
     expect(String((await explicitWindow.json() as Record<string, unknown>).detail)).toContain("max_tokens");
     expect(service.getSettings()).toEqual(before);
 
-    // context_window 为 null 时按回退值 131072 计算。
-    const inferredWindow = await put({ max_tokens: 131072 });
+    // context_window 为 null 时按回退值 DEFAULT_CONTEXT_WINDOW(262144) 计算。
+    const inferredWindow = await put({ max_tokens: 262144 });
     expect(inferredWindow.status).toBe(422);
 
     const valid = await put({ max_tokens: 90000, context_window: 100000 });
