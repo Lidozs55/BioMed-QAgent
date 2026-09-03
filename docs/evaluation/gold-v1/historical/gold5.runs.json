@@ -1,7 +1,0 @@
-{
-  "case_id":"gold5",
-  "admissible_as_current_evidence":false,
-  "reason":"Historical custom CSV/JSON output has no trusted publication and the provenance raw-file inventory lacks content SHA-256 values.",
-  "runs":[{"task_id":"task_ts_f912e2e6-657b-4f58-9038-f87d6d016b2d","run_id":"run_ts_59d3e6a8-0c2e-46c8-884d-2e53c3833369","request_id":"e2e-gold5-001","status":"workspace_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null}],
-  "known_gaps":["historical CSV quoting errors","truncated JSON reported","mutant target IDs were not established"]
-}

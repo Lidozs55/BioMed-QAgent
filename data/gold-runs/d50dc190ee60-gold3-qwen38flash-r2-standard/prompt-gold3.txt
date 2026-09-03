@@ -1,3 +1,0 @@
-EGFR 肺癌靶点的 UniProt、ClinVar、COSMIC、PDB 和临床试验数据整合
-
-针对 EGFR 相关非小细胞肺癌，整理 EGFR 人类蛋白标准信息、临床相关突变、EGFR 抑制剂复合物结构、靶向药临床试验和公开药物信息。每类数据分别成表，通过 gene/protein/variant/drug/trial/structure ID 关联。

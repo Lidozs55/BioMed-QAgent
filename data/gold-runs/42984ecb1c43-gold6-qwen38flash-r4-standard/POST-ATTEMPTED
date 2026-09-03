@@ -1,5 +1,0 @@
-{
-  "request_id": "gold-v1-gold6-42984ecb-r4",
-  "product_commit": "42984ecb1c430e5128cce93257c2286ab6bf1107",
-  "invariant": "never invoke run-case without --dry-run again for this R4"
-}

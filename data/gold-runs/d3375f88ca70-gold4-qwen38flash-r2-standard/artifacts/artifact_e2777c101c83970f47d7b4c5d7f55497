@@ -1,2 +1,0 @@
-source_id,source_database,source_asset_id,source_locator,retrieved_at,carrier_type
-source_uniprot_2d2edc762ff9fda5e82f,uniprot,asset_7b842858b8e3d8e69169488d157f01b95c4c6198d805be7c2bb838d662cf5a4b,"{""locator_version"":""2.0"",""locator_type"":""json_pointer"",""asset_id"":""asset_7b842858b8e3d8e69169488d157f01b95c4c6198d805be7c2bb838d662cf5a4b"",""logical_file"":""source_assets/asset_7b842858b8e3d8e69169488d157f01b95c4c6198d805be7c2bb838d662cf5a4b/Q9BYF1.json"",""raw_value"":""Q9BYF1"",""json_pointer"":""/results/0/primaryAccession""}",2026-08-31T10:17:34.012Z,api_record
