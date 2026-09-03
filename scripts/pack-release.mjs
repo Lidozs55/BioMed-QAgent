@@ -25,8 +25,9 @@
 // packaging collaborators and simply spawns runtime\python\python.exe desktop-app.py.
 //
 // Usage (from the repository root):
-//   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp]
+//   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp] [--no-appimage]
 //   pnpm pack:target --platform=all     (alias; plain `pnpm pack` is pnpm's built-in tarball command)
+//   --no-appimage: skip the linux single-file AppImage step (dir bundle is always produced)
 //
 // Cross-packing (building a bundle for a different OS than the host) additionally
 // needs any host CPython with pip on PATH — the wheel step never executes target
@@ -96,6 +97,11 @@ const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
 const NODE_DIST = "https://nodejs.org/dist";
 const PBS_DIST =
   "https://github.com/astral-sh/python-build-standalone/releases/download";
+// Official continuous build; the only AppImage tool we need at pack time.
+// Run with --appimage-extract-and-run so build hosts without FUSE work.
+const APPIMAGETOOL_URL =
+  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage";
+const APPIMAGETOOL_ASSET = "appimagetool-x86_64.AppImage";
 
 const PLATFORMS = {
   win: {
@@ -559,6 +565,71 @@ function serverStartShScript() {
   ].join("\n");
 }
 
+// AppImage entry (linux only). The squashfs mount is read-only, so all
+// writable state — settings, tasks, workspaces, cache, skill data — is
+// relocated by exporting an ABSOLUTE OUTPUT_DIR: the host derives every data
+// root from it (dataRoot = tasksRoot/../.., see server/src/bootstrap.ts and
+// resolveOutputDir in server/src/config.ts). Relative values would re-anchor
+// to the read-only mount, so keep the ${HOME}-based default.
+function appRunScript() {
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'APPDIR="${APPDIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"',
+    'export OUTPUT_DIR="${OUTPUT_DIR:-$HOME/.local/share/biomed-qagent/output}"',
+    `exec "$APPDIR/runtime/python/bin/python${PYTHON_MAJOR_MINOR}" "$APPDIR/desktop-app.py"`,
+    "",
+  ].join("\n");
+}
+
+// appimagetool rewrites Exec/Icon to the deployed AppImage path on install;
+// these values only need to be present and valid desktop-entry syntax.
+function desktopEntryFile() {
+  return [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Name=BioMed QAgent",
+    "Comment=Biomedical research-question agent with a deterministic dataset core",
+    "Exec=bio-med-qagent",
+    "Icon=biomed-qagent",
+    "Terminal=false",
+    "Categories=Science;",
+    "",
+  ].join("\n");
+}
+
+// Assemble the AppImage from the (already self-contained) bundle directory:
+// AppRun + .desktop + icon make the bundle a valid AppDir in place.
+function buildAppImage(packageDir, cacheDir, outRoot, version) {
+  const appImage = path.join(outRoot, `BioMed-QAgent-${version}-x86_64.AppImage`);
+  if (existsSync(appImage)) rmSync(appImage, { force: true });
+  writeFileSync(path.join(packageDir, "AppRun"), appRunScript());
+  chmodSync(path.join(packageDir, "AppRun"), 0o755);
+  writeFileSync(path.join(packageDir, "biomed-qagent.desktop"), desktopEntryFile());
+  copyFileSync(
+    path.join(packageDir, "frontend", "dist", "icons", "icon-512.png"),
+    path.join(packageDir, "biomed-qagent.png"),
+  );
+  const appimagetool = path.join(cacheDir, APPIMAGETOOL_ASSET);
+  if (!existsSync(appimagetool)) {
+    download(APPIMAGETOOL_URL, appimagetool);
+  }
+  chmodSync(appimagetool, 0o755);
+  runOrDie(appimagetool, [
+    "--appimage-extract-and-run",
+    "--no-appstream",
+    "--comp", "xz",
+    packageDir,
+    appImage,
+  ]);
+  const info = statSync(appImage);
+  if (!info.isFile() || info.size < 1024 * 1024) {
+    fail(`AppImage output missing or suspiciously small: ${appImage}`);
+  }
+  console.log(`[pack]   AppImage: ${appImage} (${formatBytes(info.size)})`);
+  return appImage;
+}
+
 function readmeText(version, platform) {
   const nodeBinPath = `runtime/node/${platform.nodeBin}`;
   const extras = PYTHON_EXTRAS.map((extra) => `${extra.name} ${extra.version}`).join(" / ");
@@ -631,6 +702,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     ref: { type: "string" },
     "keep-temp": { type: "boolean" },
+    "no-appimage": { type: "boolean" },
   },
   strict: false,
 });
@@ -776,6 +848,11 @@ for (const key of selected) {
   step(8, "desktop-app self-test");
   const selfTestPython = resolvePipDriver(key, platform, path.join(packageDir, "runtime", "python"));
   runOrDie(selfTestPython, [path.join(packageDir, "desktop-app.py"), "--self-test"]);
+
+  if (key === "linux" && values["no-appimage"] !== true) {
+    step(9, "assemble AppImage (single-file linux release)");
+    buildAppImage(packageDir, cacheDir, outRoot, version);
+  }
 
   if (values["keep-temp"] !== true) {
     rmSync(tmpDir, { recursive: true, force: true });

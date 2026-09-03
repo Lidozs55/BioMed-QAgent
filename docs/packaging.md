@@ -98,6 +98,29 @@ GitHub 不可达时走代理重试：
 https_proxy=http://127.0.0.1:7897 pnpm run pack
 ```
 
+## Linux 单文件 AppImage（step 9）
+
+linux 平台默认在目录包之外追加产出 `target/BioMed-QAgent-<version>-x86_64.AppImage`
+（`--no-appimage` 跳过）。实现要点：
+
+- **AppDir 即目录包**：`AppRun`、`biomed-qagent.desktop`、`biomed-qagent.png`
+  三个小文件直接写入包根，便携目录形态不受影响；appimagetool（官方 continuous
+  构建，下载进 `target/.cache`）把整个目录打成 xz 压缩的单文件。appimagetool
+  自身以 `--appimage-extract-and-run` 运行，构建机不需要 FUSE。
+- **只读挂载的数据重定位**：AppImage 的 squashfs 挂载点只读，`AppRun` 导出
+  **绝对** `OUTPUT_DIR=$HOME/.local/share/biomed-qagent/output`——Host 从
+  OUTPUT_DIR 派生全部可写根（settings / tasks / workspaces / cache / skill
+  数据，见 `server/src/config.ts` resolveOutputDir 与
+  `server/src/bootstrap.ts` dataRoot）。相对值会重新锚定回只读挂载点，因此
+  该默认必须是绝对路径；用户可用 OUTPUT_DIR 环境变量覆盖。目录包
+  （`start.sh`）行为不变：数据仍在包内 `data/`。
+- **目标机要求**：Linux x64 + glibc ≥ 2.28 + FUSE（绝大多数发行版默认有；
+  无 FUSE 时 `./BioMed-QAgent-*.AppImage --appimage-extract-and-run` 首次
+  解压运行）。首次使用 `chmod +x` 一次；桌面集成（图标/应用列表）由 AppImage
+  runtime 处理。
+- **升级语义**：AppImage 整体替换即升级；用户数据在 `~/.local/share/biomed-qagent`
+  独立留存，卸载 = 删 AppImage +（可选）删该数据目录。
+
 ## 内嵌科学计算栈（numpy / scipy）
 
 内嵌 Python 预装 `PYTHON_EXTRAS` 钉死的科学计算包（当前 numpy 2.5.2、scipy 1.18.1），供目标机上的分析类脚本直接使用。要点：
