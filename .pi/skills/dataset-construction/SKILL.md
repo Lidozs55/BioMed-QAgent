@@ -143,6 +143,19 @@ Treat only the resulting Publication as formal output.
 7. Only a successful Publication is formal output. After publishing, verify content fidelity via the artifacts REST API (`GET /api/v1/tasks/{task_id}/artifacts` + artifact download): every published row must trace to an acquisition receipt — if a transform could not decode a carrier field, leave it empty and say so in the final report; never fill published rows with model-supplied placeholders. Carrier payload shapes for faithful decoding live in `.pi/skills/mgnify/docs/carrier-shapes.md`. Never describe rejection,
    NO_DATA, cancellation, incomplete review, or failure as success; never
    fabricate file names when reporting artifacts.
+8. No silent data loss. Every dataset inside the request's scope must reach the
+   final report through one of two channels: the formal Publication (rows that
+   passed the gates) or, for valid data a formal gate cannot accept (e.g.
+   structure that fails admission, facts that cannot be verified), the
+   governed non-formal channel — and when no such channel is available in the
+   current surface, keep the data in run evidence and report it explicitly.
+   When a derived fact cannot be resolved (e.g. a probe with no gene mapping),
+   keep the row with an explicit unresolved status such as
+   `mapping_status="unmapped"` and report the unresolved count instead of
+   dropping the row. Never drop valid rows to make a gate pass, and never
+   invent the missing fact. When sample grouping is part of the requested
+   product (e.g. tumor/normal), carry the grouping into a published table,
+   traced to the sample's own metadata.
 
 ## Transform source admission dialect
 

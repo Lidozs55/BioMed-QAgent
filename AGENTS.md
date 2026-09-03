@@ -324,6 +324,11 @@ Commonly board is the execution-status view. To avoid circular updates:
   `b1fd4e4b`); a `main`-side guard test (pattern:
   `server/tests/phase8-architecture-guard.test.ts`) should fail any PR that
   re-introduces them.
+- **Agent self-modification charter**: any future code-write capability for
+  the agent is governed by
+  [docs/AGENT_SELF_MODIFICATION_CHARTER.md](docs/AGENT_SELF_MODIFICATION_CHARTER.md)
+  (scope whitelist, governance surfaces, human-run verification); the charter
+  and the capability are dev-only and land together.
 - **Releasable from the same branch**: the Dataset Core gate relaxations
   (`d7f7e8ec`: empty-table partial publish, report-only gene coverage,
   authored-topology requirement derivation) are a legitimate product fix that
