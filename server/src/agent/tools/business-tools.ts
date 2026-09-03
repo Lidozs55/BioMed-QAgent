@@ -36,7 +36,6 @@ import type { BioMedAgentTool } from "../contracts.js";
 import { assertUniqueToolNames } from "./registry.js";
 import { createAnalyzePapersTool, type AnalyzePapersHooks } from "./literature-understanding.js";
 import { createResearchDataGuidanceTool } from "./guidance.js";
-import { createReadDatasetCoreSourceTool } from "./core-source.js";
 import { createPubmedTools } from "./pubmed.js";
 import { createDbsnpTools } from "./dbsnp.js";
 import { createOpenFdaTools } from "./openfda.js";
@@ -168,7 +167,6 @@ export async function createBusinessToolBundle(
   // Deterministic, network-free tools.
   register([createAnalyzePapersTool(context.hooks ?? {})], "literature_understanding");
   register([createResearchDataGuidanceTool({ docsRoot: context.guidanceDocsRoot })], "research_data_guidance");
-  register([createReadDatasetCoreSourceTool()], "dataset-construction");
   // This task/run-scoped tool is injected by phase3-composition once the
   // authoritative SourceAssetRegistry and Dataset Core context exist.
   unavailable.add("inspect_dataset_execution_routes");
