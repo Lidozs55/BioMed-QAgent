@@ -951,6 +951,44 @@ describe("PiAgentAdapter", () => {
     expect(events).not.toContainEqual(expect.objectContaining({ type: "context_compacted" }));
   });
 
+  test("rejects schema-invalid tool arguments before execute with field-level detail", async () => {
+    const execute = vi.fn(async () => ({ content: "ok" }));
+    const [tool] = toPiCustomTools([
+      {
+        name: "workspace_read",
+        label: "Read Workspace text",
+        description: "Read bounded text",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string", minLength: 2 } },
+          required: ["path"],
+          additionalProperties: false,
+        },
+        execute,
+      },
+    ]);
+
+    await expect(
+      Reflect.apply(tool!.execute, undefined, [
+        "call-1",
+        { pat: 42 },
+        undefined,
+        undefined,
+        undefined,
+      ]),
+    ).rejects.toThrow(/pat: Extra inputs are not permitted/);
+    await expect(
+      Reflect.apply(tool!.execute, undefined, [
+        "call-1",
+        { path: 42 },
+        undefined,
+        undefined,
+        undefined,
+      ]),
+    ).rejects.toThrow(/path: Input should be a valid string/);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   test("converts project tool descriptors only at the Pi boundary", async () => {
     const execute = vi.fn(async () => ({
       content: "bounded",

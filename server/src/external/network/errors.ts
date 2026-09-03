@@ -11,6 +11,29 @@ export class UnsafeUrlError extends Error {
   }
 }
 
+/**
+ * Upstream HTTP failure surfaced to the agent with request context, so the
+ * model can tell a rate limit from a bad query parameter. Fields are
+ * duck-read by the tool-layer ``errorResult`` (``code`` / ``retryable`` /
+ * ``statusCode``) without instanceof coupling.
+ */
+export class ToolHttpError extends Error {
+  readonly code = "upstream_http_error";
+  readonly retryable: boolean;
+
+  constructor(
+    readonly url: string,
+    readonly statusCode: number,
+    bodyExcerpt: string | null = null,
+  ) {
+    super(
+      `GET ${url} → HTTP ${statusCode}${bodyExcerpt === null ? "" : `: ${bodyExcerpt}`}`,
+    );
+    this.name = "ToolHttpError";
+    this.retryable = statusCode === 429 || statusCode >= 500;
+  }
+}
+
 /** Acquirer-facing failure carrying a stable contract ErrorCode. */
 export class AcquisitionError extends Error {
   constructor(

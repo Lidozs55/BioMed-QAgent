@@ -50,6 +50,7 @@
 | — 运行限制 | 运行时资源上限与设置契约 | [architecture/runtime-limits.md](architecture/runtime-limits.md) |
 | — HIL 审批档位 | 三档审批权限分配与大模型初审（人工审批 / llm_pre_review / auto_approve） | [architecture/hil-approval-policy.md](architecture/hil-approval-policy.md) |
 | — 测试并发预算 | 本地有界并发、CI 放宽与 worker 预算 | [architecture/test-concurrency.md](architecture/test-concurrency.md) |
+| — 工具报错语义化 | Agent 可自纠错错误面（字段级 detail / retryable / 第一方堆栈） | [architecture/tool-error-reporting.md](architecture/tool-error-reporting.md) |
 
 ---
 ## 1. 产品定义与边界
