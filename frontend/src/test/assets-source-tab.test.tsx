@@ -2,11 +2,11 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ASSETS_FORMAL_TAB,
-  ASSETS_SOURCE_TAB,
-  ASSETS_UNTRUSTED_TAB,
-  AssetsSheet,
-} from "@/components/AssetsSheet";
+  OUTPUT_FORMAL_TAB,
+  OUTPUT_SOURCE_TAB,
+  OUTPUT_UNTRUSTED_TAB,
+  TaskOutputPanel,
+} from "@/components/TaskOutputPanel";
 import type { QuarantineReceipt } from "@/api/quarantine";
 import type { SourceAssetRegistrationReceipt } from "@/api/sourceAssets";
 import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
@@ -125,10 +125,10 @@ function activePanel(): HTMLElement {
   return panel;
 }
 
-function renderSheet(
-  props: Partial<React.ComponentProps<typeof AssetsSheet>> = {},
+function renderPanel(
+  props: Partial<React.ComponentProps<typeof TaskOutputPanel>> = {},
 ): void {
-  render(<AssetsSheet open onOpenChange={vi.fn()} taskId={TASK_ID} {...props} />);
+  render(<TaskOutputPanel taskId={TASK_ID} {...props} />);
 }
 
 afterEach(() => {
@@ -137,16 +137,16 @@ afterEach(() => {
   mockedUseAPI.mockReturnValue(createAPIClient());
 });
 
-describe("AssetsSheet source/evidence tab", () => {
+describe("TaskOutputPanel source/evidence tab", () => {
   it("exposes a distinct read-only source tab value", () => {
-    expect(ASSETS_SOURCE_TAB).not.toEqual(ASSETS_FORMAL_TAB);
-    expect(ASSETS_SOURCE_TAB).not.toEqual(ASSETS_UNTRUSTED_TAB);
-    expect(ASSETS_SOURCE_TAB).toEqual("sources");
+    expect(OUTPUT_SOURCE_TAB).not.toEqual(OUTPUT_FORMAL_TAB);
+    expect(OUTPUT_SOURCE_TAB).not.toEqual(OUTPUT_UNTRUSTED_TAB);
+    expect(OUTPUT_SOURCE_TAB).toEqual("sources");
   });
 
   it("shows an empty read-only list when no sources are registered", async () => {
     mockApi(assetsFetcher({}));
-    renderSheet({ defaultTab: ASSETS_SOURCE_TAB });
+    renderPanel({ defaultTab: OUTPUT_SOURCE_TAB });
 
     expect(
       await screen.findByText("暂无来源/证据登记"),
@@ -179,7 +179,7 @@ describe("AssetsSheet source/evidence tab", () => {
         ],
       }),
     );
-    renderSheet({ defaultTab: ASSETS_SOURCE_TAB });
+    renderPanel({ defaultTab: OUTPUT_SOURCE_TAB });
 
     expect(await screen.findByText("source_assets/table.csv")).toBeVisible();
     expect(screen.getByText("source_assets/derive/mapping.json")).toBeVisible();
@@ -207,9 +207,9 @@ describe("AssetsSheet source/evidence tab", () => {
         sourceItems: [sourceReceipt()],
       }),
     );
-    renderSheet({
+    renderPanel({
       artifacts: [artifact("main_data.csv")],
-      defaultTab: ASSETS_SOURCE_TAB,
+      defaultTab: OUTPUT_SOURCE_TAB,
     });
 
     const sourcePanel = await screen
@@ -240,7 +240,7 @@ describe("AssetsSheet source/evidence tab", () => {
 
   it("shows an error alert when the registry listing fails", async () => {
     mockApi(assetsFetcher({ sourceError: true }));
-    renderSheet({ defaultTab: ASSETS_SOURCE_TAB });
+    renderPanel({ defaultTab: OUTPUT_SOURCE_TAB });
 
     expect(
       await screen.findByText("来源/证据登记加载失败"),

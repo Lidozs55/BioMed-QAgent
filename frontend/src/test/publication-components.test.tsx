@@ -1,10 +1,12 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import PublicationResultsViewer from "@/components/PublicationResultsViewer";
 import { PublicationReportCard } from "@/components/conversation/PublicationReportCard";
 import type { PublicationDetail } from "@/runtime/contracts";
 import type { PublicationReportItem } from "@/runtime/types";
+
+const dispatchEvent = vi.spyOn(window, "dispatchEvent");
 
 const detail: PublicationDetail = {
   publication_id: "pub_1",
@@ -63,7 +65,10 @@ const detailWithPrimaryArtifact: PublicationDetail = {
   }],
 };
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  dispatchEvent.mockClear();
+});
 
 function stubPublication(): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(detail), {
@@ -120,5 +125,14 @@ describe("Publication components", () => {
     render(<PublicationReportCard item={item} />);
     expect(await screen.findByText("数据发布产物")).toBeVisible();
     expect(screen.getByText("4 行 · 需求 requirement_1")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开详情" }));
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "biomed:open-task-output",
+        detail: { tab: "artifacts" },
+      }),
+    );
+    expect(screen.queryByRole("dialog", { name: "发布详情" })).not.toBeInTheDocument();
   });
 });

@@ -3,9 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
-  SubagentPanelToggle,
-  SubagentWorkspace,
-} from "@/components/SubagentWorkspace";
+  OutputPanelToggle,
+  TaskOutputWorkspace,
+} from "@/components/TaskOutputWorkspace";
 import { BackgroundTaskNotifications } from "@/components/BackgroundTaskNotifications";
 import { ChatPanel } from "@/components/ChatPanel";
 import { SessionSidebar } from "@/components/SessionSidebar";
@@ -207,23 +207,13 @@ export default function App() {
               </TooltipTrigger>
               <TooltipContent>打开设置</TooltipContent>
             </Tooltip>
-            <SubagentPanelToggle />
+            <OutputPanelToggle />
             <ThemeToggle />
           </div>
         </header>
         <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1">
-            <SubagentWorkspace
-              cancelSubagent={async (taskId, runId, subagentId) => {
-                try {
-                  await controller.cancelSubagent(taskId, runId, subagentId);
-                } catch (error) {
-                  toast.error("取消子任务失败", {
-                    description: errorMessage(error),
-                  });
-                }
-              }}
-            >
+            <TaskOutputWorkspace>
               <ChatPanel
                 startTask={(input) => controller.startTask(input)}
                 uploadFiles={(files, note) =>
@@ -258,7 +248,7 @@ export default function App() {
                 contextWindow={settings?.context_window}
                 runBlockReason={settings?.run_block_reason}
               />
-            </SubagentWorkspace>
+            </TaskOutputWorkspace>
           </div>
         </main>
       </SidebarInset>

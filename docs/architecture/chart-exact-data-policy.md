@@ -161,7 +161,7 @@ state and permit empty `chart_points` when exact source search is audited.
 - `frontend/src/test/hil-data-correction-e2e.test.tsx` and
   `frontend/src/test/settings-hil-approval.test.tsx`: replace estimated-point
   acceptance fixtures with exact source-data mapping or non-chart HIL cases.
-- `frontend/src/lib/chartData.ts`, `SidebarChartPanel.tsx` and their tests require
+- `frontend/src/lib/chartData.ts`, `TaskOutputCharts.tsx` and their tests require
   product review: retain rendering only if it can display exact source-data
   points or clearly non-formal legacy output; never imply visual estimates are
   formal values.

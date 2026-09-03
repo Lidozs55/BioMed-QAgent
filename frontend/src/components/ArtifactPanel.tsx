@@ -40,8 +40,8 @@ interface ArtifactPanelProps {
 }
 
 /**
- * 正式任务产物的文件/预览双栏视图。从 ArtifactSheet 抽出，供统一
- * Assets 入口与旧 ArtifactSheet 共用；只展示已验证产物，不承载任何
+ * 正式任务产物的文件/预览双栏视图，供任务输出栏复用；只展示已验证
+ * 产物，不承载任何
  * 未准入（ua_*）内容。
  */
 export function ArtifactPanel({
@@ -55,7 +55,7 @@ export function ArtifactPanel({
     artifacts[0]?.artifact_id ?? null,
   );
 
-  // 当前选择不在列表中时回退到首个产物（与原 ArtifactSheet 行为一致）。
+  // 当前选择不在列表中时回退到首个产物。
   const selectedArtifact =
     artifacts.find((artifact) => artifact.artifact_id === selectedArtifactId) ??
     artifacts[0];
@@ -135,7 +135,7 @@ export function ArtifactPanel({
   );
 }
 
-/** 保存全部产物按钮，与 ArtifactSheet 底部布局保持一致。 */
+/** 保存全部正式产物。 */
 export function ArtifactSaveAllButton({
   artifacts,
   taskId,

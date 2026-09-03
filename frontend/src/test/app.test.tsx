@@ -4,7 +4,6 @@ import { toast } from "sonner";
 
 import App from "@/App";
 import type { TaskSnapshot } from "@/runtime/contracts";
-import { RuntimeController } from "@/runtime/controller";
 import { createInitialRuntimeState } from "@/runtime/reducer";
 import { useAgentStore } from "@/stores/agentStore";
 
@@ -209,7 +208,7 @@ describe("App startup ownership", () => {
     const header = container.querySelector("header");
     expect(header).not.toBeNull();
 
-    for (const label of ["打开设置", "切换子任务面板", "切换主题"]) {
+    for (const label of ["打开设置", "切换输出面板", "切换主题"]) {
       const button = header?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
       expect(button).not.toBeNull();
       expect(button).toHaveAttribute("data-slot", "tooltip-trigger");
@@ -267,106 +266,14 @@ describe("App startup ownership", () => {
     expect(useAgentStore.getState().tasksById.task_active).toBeDefined();
   });
 
-  it("reports a failed subagent cancellation without an unhandled rejection", async () => {
+  it("does not render the removed subagent workspace controls", async () => {
     const snapshot = childTaskSnapshot(1, "running");
     useAgentStore.getState().hydrateTaskSnapshot(snapshot);
     useAgentStore.getState().setActiveTaskId("task_child");
     render(<App />);
 
-    const cancelButton = await screen.findByRole("button", {
-      name: "取消此子任务",
-    });
-    vi.mocked(globalThis.fetch).mockImplementation((input) => {
-      if (String(input).endsWith("/subagents/subagent_child/cancel")) {
-        return Promise.reject(new Error("cancel unavailable"));
-      }
-      return Promise.reject(new Error(`Unexpected URL: ${String(input)}`));
-    });
-    fireEvent.click(cancelButton);
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        "取消子任务失败",
-        expect.objectContaining({ description: "cancel unavailable" }),
-      ),
-    );
-  });
-
-  it("routes subagent cancellation through the controller replay handoff", async () => {
-    const controllerCancellation = vi.spyOn(
-      RuntimeController.prototype,
-      "cancelSubagent",
-    );
-    useAgentStore
-      .getState()
-      .hydrateTaskSnapshot(childTaskSnapshot(1, "running"));
-    useAgentStore.getState().setActiveTaskId("task_child");
-    render(<App />);
-
-    const cancelButton = await screen.findByRole("button", {
-      name: "取消此子任务",
-    });
-    vi.mocked(globalThis.fetch).mockImplementation((input) => {
-      const url = String(input);
-      if (url.endsWith("/subagents/subagent_child/cancel")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(childTaskSnapshot(2, "cancel_requested")),
-            { status: 200 },
-          ),
-        );
-      }
-      if (url.endsWith("/events?after_sequence=1&limit=1000")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              events: [
-                {
-                  schema_version: "2.0",
-                  event_id: "event_child_cancel_requested",
-                  type: "subagent_cancel_requested",
-                  task_id: "task_child",
-                  run_id: "run_child",
-                  subagent_id: "subagent_child",
-                  parent_tool_call_id: "tool_child",
-                  stage_attempt_id: null,
-                  sequence: 2,
-                  timestamp: "2026-07-14T00:00:01Z",
-                  payload: {
-                    type: "subagent_cancel_requested",
-                    subagent_id: "subagent_child",
-                    reason: null,
-                  },
-                },
-              ],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-      return Promise.reject(new Error(`Unexpected URL: ${url}`));
-    });
-    fireEvent.click(cancelButton);
-
-    await waitFor(() =>
-      expect(
-        useAgentStore.getState().tasksById.task_child.subagentsById
-          .subagent_child.status,
-      ).toBe("cancel_requested"),
-    );
-    expect(controllerCancellation).toHaveBeenCalledWith(
-      "task_child",
-      "run_child",
-      "subagent_child",
-    );
-    expect(
-      vi
-        .mocked(globalThis.fetch)
-        .mock.calls.some(
-          ([input]) =>
-            String(input) ===
-            "/api/v1/tasks/task_child/events?after_sequence=1&limit=1000",
-        ),
-    ).toBe(true);
+    expect(screen.queryByText("SourceResearchAgent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消此子任务" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /子任务面板/ })).not.toBeInTheDocument();
   });
 });

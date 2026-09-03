@@ -1,15 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentComposer } from "@/components/AgentComposer";
-import { ArtifactFab } from "@/components/ArtifactFab";
-import { ArtifactSheet } from "@/components/ArtifactSheet";
 import {
-  ASSETS_FORMAL_TAB,
-  ASSETS_UNTRUSTED_TAB,
-  AssetsEntry,
-  AssetsSheet,
-} from "@/components/AssetsSheet";
+  OUTPUT_FORMAL_TAB,
+  OUTPUT_UNTRUSTED_TAB,
+  TaskOutputPanel,
+} from "@/components/TaskOutputPanel";
 import type { QuarantineReceipt } from "@/api/quarantine";
 import { createAPIClient, type FetchLike } from "@/hooks/useAPI";
 import { useAPI } from "@/hooks/useAPI";
@@ -109,64 +105,13 @@ function activePanel(): HTMLElement {
   return panel;
 }
 
-function composerProps() {
-  return {
-    value: "",
-    onChange: () => undefined,
-    onSubmit: () => undefined,
-    onKeyDown: () => undefined,
-    placeholder: "输入研究目标...",
-    ariaLabel: "研究目标",
-  } as const;
-}
-
 async function openUntrustedTab(fetcher?: FetchLike): Promise<void> {
   quarantineApi(fetcher ?? quarantineOnlyFetcher());
-  render(<AssetsSheet open onOpenChange={vi.fn()} taskId="task-unified" />);
+  render(<TaskOutputPanel taskId="task-unified" />);
   fireEvent.click(await screen.findByRole("tab", { name: /未准入/ }));
 }
 
-describe("AgentComposer unified assets entry", () => {
-  afterEach(() => {
-    useAgentStore.setState({
-      ...createInitialRuntimeState(),
-      activeTaskId: null,
-    });
-    vi.restoreAllMocks();
-    mockedUseAPI.mockReset();
-    // mockReset 会清空实现；先填充一个可用 client，避免 RTL 卸载时读到 undefined。
-    mockedUseAPI.mockReturnValue(createAPIClient());
-  });
-
-  it("renders one Resources entry instead of artifact and quarantine controls", () => {
-    seedActiveTask("task-unified");
-    render(<AgentComposer {...composerProps()} />);
-
-    expect(screen.getByRole("button", { name: "资源" })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /查看 .* 个产物/ }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "查看未准入文件" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("keeps the Resources entry for an active task with zero artifacts", () => {
-    seedActiveTask("task-zero-artifacts");
-    render(<AgentComposer {...composerProps()} />);
-
-    expect(screen.getByRole("button", { name: "资源" })).toBeEnabled();
-  });
-
-  it("hides the entry without an active task", () => {
-    seedActiveTask(null);
-    render(<AgentComposer {...composerProps()} />);
-
-    expect(screen.queryByRole("button", { name: "资源" })).not.toBeInTheDocument();
-  });
-});
-
-describe("AssetsSheet tabs", () => {
+describe("TaskOutputPanel tabs", () => {
   afterEach(() => {
     useAgentStore.setState({
       ...createInitialRuntimeState(),
@@ -199,12 +144,10 @@ describe("AssetsSheet tabs", () => {
     });
     quarantineApi(fetcher);
     render(
-      <AssetsSheet
-        open
-        onOpenChange={vi.fn()}
+      <TaskOutputPanel
         taskId="task-unified"
         artifacts={[artifact("main_data.csv")]}
-        defaultTab={ASSETS_UNTRUSTED_TAB}
+        defaultTab={OUTPUT_UNTRUSTED_TAB}
       />,
     );
 
@@ -245,94 +188,11 @@ describe("AssetsSheet tabs", () => {
   });
 });
 
-describe("AssetsEntry", () => {
-  afterEach(() => {
-    useAgentStore.setState({
-      ...createInitialRuntimeState(),
-      activeTaskId: null,
-    });
-    vi.restoreAllMocks();
-    mockedUseAPI.mockReset();
-    // mockReset 会清空实现；先填充一个可用 client，避免 RTL 卸载时读到 undefined。
-    mockedUseAPI.mockReturnValue(createAPIClient());
-  });
-
-  it("opens the unified sheet from the composer entry", async () => {
-    seedActiveTask("task-unified");
-    quarantineApi(
-      vi.fn<FetchLike>().mockResolvedValue(
-        new Response(JSON.stringify({ items: [quarantineReceipt] })),
-      ),
-    );
-    render(<AssetsEntry />);
-
-    fireEvent.click(screen.getByRole("button", { name: "资源" }));
-    const dialog = await screen.findByRole("dialog", { name: "资源" });
-    expect(dialog).toBeVisible();
-    expect(within(dialog).getByRole("tab", { name: /正式产物/ })).toBeInTheDocument();
-    expect(within(dialog).getByRole("tab", { name: /未准入/ })).toBeInTheDocument();
-  });
-});
-
-describe("legacy ArtifactFab / ArtifactSheet compatibility", () => {
-  afterEach(() => {
-    useAgentStore.setState({
-      ...createInitialRuntimeState(),
-      activeTaskId: null,
-    });
-    vi.restoreAllMocks();
-    mockedUseAPI.mockReset();
-    // mockReset 会清空实现；先填充一个可用 client，避免 RTL 卸载时读到 undefined。
-    mockedUseAPI.mockReturnValue(createAPIClient());
-  });
-
-  it("keeps the legacy artifact FAB behavior unchanged", () => {
-    mockedUseAPI.mockReturnValue(
-      createAPIClient({ fetcher: vi.fn<FetchLike>() }),
-    );
-    render(
-      <ArtifactFab
-        artifacts={[artifact("main_data.csv")]}
-        taskId="task-unified"
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "查看 1 个产物" }),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the legacy artifact sheet download behavior unchanged", () => {
-    mockedUseAPI.mockReturnValue(
-      createAPIClient({ fetcher: vi.fn<FetchLike>() }),
-    );
-    const download = vi.fn();
-    render(
-      <ArtifactSheet
-        open
-        onOpenChange={vi.fn()}
-        artifacts={[artifact("main_data.csv")]}
-        taskId="task-unified"
-        download={download}
-      />,
-    );
-
-    expect(screen.getByRole("dialog", { name: "任务产物" })).toBeVisible();
-    expect(screen.getByRole("tablist")).toBeInTheDocument();
-    expect(screen.getByText("main_data.csv")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "下载 main_data.csv" }));
-    expect(download).toHaveBeenCalledWith(
-      expect.stringContaining("main_data.csv"),
-      "main_data.csv",
-    );
-  });
-});
-
-describe("AssetsSheet exported tab values", () => {
+describe("TaskOutputPanel exported tab values", () => {
   it("exposes distinct formal and untrusted tab values", () => {
-    expect(ASSETS_FORMAL_TAB).not.toEqual(ASSETS_UNTRUSTED_TAB);
-    expect(ASSETS_FORMAL_TAB).toEqual("artifacts");
-    expect(ASSETS_UNTRUSTED_TAB).toEqual("untrusted");
+    expect(OUTPUT_FORMAL_TAB).not.toEqual(OUTPUT_UNTRUSTED_TAB);
+    expect(OUTPUT_FORMAL_TAB).toEqual("artifacts");
+    expect(OUTPUT_UNTRUSTED_TAB).toEqual("untrusted");
   });
 });
 

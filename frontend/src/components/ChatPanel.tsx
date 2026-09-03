@@ -16,13 +16,11 @@ import { ConversationList } from "@/components/conversation/ConversationList";
 import { formatToolCall } from "@/components/conversation/toolLabels";
 import { operationDisplayLabel } from "@/components/conversation/operationMeta";
 import { STAGE_LABELS } from "@/components/conversation/stageLabels";
-import { openSubagentPanel } from "@/components/subagentPanelControl";
 import { TaskStatusIcon } from "@/components/taskStatus";
 import { PermissionQuestionnaire } from "@/components/intervention/PermissionQuestionnaire";
 import { UserInputQuestionnaire } from "@/components/intervention/UserInputQuestionnaire";
 import { isNothingToCompactError } from "@/lib/compactErrors";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
@@ -48,7 +46,6 @@ import type {
 } from "@/runtime/types";
 import { errorMessage } from "@/lib/utils";
 import { estimateContextTokens } from "@/lib/tokenEstimate";
-import { useIsMobile } from "@/hooks/use-mobile";
 import {
   selectActiveItem,
   selectActiveItems,
@@ -243,7 +240,6 @@ export function ChatPanel({
   contextWindow,
   runBlockReason,
 }: ChatPanelProps) {
-  const isMobile = useIsMobile();
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const activeTask = useAgentStore(selectActiveTask);
   const items = useAgentStore(selectActiveItems);
@@ -428,18 +424,6 @@ export function ChatPanel({
     (activeRunId === null
       ? latestRunIsTerminal(activeTask)
       : activeTask !== undefined);
-  const subagentCount = activeTask?.subagentOrder.length ?? 0;
-  const activeSubagentCount = activeTask?.subagentOrder.reduce(
-    (count, subagentId) => {
-      const status = activeTask.subagentsById[subagentId].status;
-      return status === "queued" ||
-        status === "running" ||
-        status === "cancel_requested"
-        ? count + 1
-        : count;
-    },
-    0,
-  ) ?? 0;
   const activeRunHasAssistantMessage =
     activeRunId !== null &&
     items.some(
@@ -923,24 +907,6 @@ export function ChatPanel({
                 ? formatActiveItemStatus(activeItem)
                 : STATUS_LABELS[activeTask.summary.status]}
             </MarkerContent>
-            {isMobile && subagentCount > 0 && (
-              <div className="ml-auto flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={openSubagentPanel}
-                  aria-label={`查看 ${subagentCount} 个子任务`}
-                >
-                  {activeSubagentCount > 0 ? (
-                    <Spinner data-icon="inline-start" aria-hidden="true" />
-                  ) : null}
-                  <Badge variant="secondary">
-                    {activeSubagentCount} 个运行中
-                  </Badge>
-                </Button>
-              </div>
-            )}
           </Marker>
           {renderLatestRunSummary(latestRun)}
         </div>
