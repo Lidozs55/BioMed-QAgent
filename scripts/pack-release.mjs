@@ -6,6 +6,10 @@
 //     start.bat / start.sh        desktop entry: desktop-app.py — pywebview native
 //                                 window, system-browser fallback (default entry)
 //     start-server.bat / .sh      service entry: host --static --open (no window stack)
+//     BioMed-QAgent.exe           Windows double-click entry (win bundle only) — a
+//                                 windowed PyInstaller shim, built in-script, that
+//                                 runs runtime\python\python.exe desktop-app.py and
+//                                 logs to launcher.log (see win-exe-wrapper.py)
 //     desktop-app.py              desktop launcher logic (spawn host, open window/browser)
 //     assets/icon.ico             app icon (Windows exe / desktop shortcuts)
 //     server/                     compiled Application Host + pruned production node_modules
@@ -21,8 +25,6 @@
 // The host resolves the Python interpreter via BIOMED_PYTHON_BIN (see
 // server/src/persistence/db-client.ts probePythonBin), which the launchers set to the
 // embedded runtime — that is the only integration point, no source changes needed.
-// A Windows BioMed-QAgent.exe wrapper (icon: assets/icon.ico) is produced by the
-// packaging collaborators and simply spawns runtime\python\python.exe desktop-app.py.
 //
 // Usage (from the repository root):
 //   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp] [--no-appimage]
@@ -93,6 +95,16 @@ const DESKTOP_EXTRAS = {
   ],
 };
 const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
+
+// Windows double-click entry (win bundle only): a windowed PyInstaller shim
+// (win-exe-wrapper.py) that runs the bundle's desktop-app.py with the embedded
+// runtime python. Built with the uv environment from packaging/windows — its
+// lockfile pins the PyInstaller version; the launcher code in that project is
+// NOT part of the exe, desktop-app.py stays the single launcher code path.
+const WIN_EXE_NAME = "BioMed-QAgent.exe";
+const WIN_EXE_WRAPPER = path.join("scripts", "packaging", "win-exe-wrapper.py");
+const WIN_EXE_ICON = path.join("assets", "logo", "icon.ico");
+const WIN_EXE_PROJECT = path.join("packaging", "windows");
 
 const NODE_DIST = "https://nodejs.org/dist";
 const PBS_DIST =
@@ -600,6 +612,33 @@ function desktopEntryFile() {
 
 // Assemble the AppImage from the (already self-contained) bundle directory:
 // AppRun + .desktop + icon make the bundle a valid AppDir in place.
+// Builds the Windows double-click entry (BioMed-QAgent.exe) into the bundle
+// root: a windowed onefile PyInstaller shim from win-exe-wrapper.py. The uv
+// environment from packaging/windows (versions pinned in its uv.lock) only
+// provides the PyInstaller toolchain — no launcher code is collected, so the
+// build stays fast and desktop-app.py remains the single launcher code path.
+function buildWindowsExeWrapper(srcDir, packageDir, tmpDir) {
+  runOrDie("uv", ["sync", "--project", WIN_EXE_PROJECT, "--locked"], { cwd: srcDir });
+  runOrDie(
+    "uv",
+    [
+      "run", "--project", WIN_EXE_PROJECT, "--no-sync",
+      "pyinstaller",
+      "--noconfirm", "--clean", "--onefile", "--windowed",
+      "--name", WIN_EXE_NAME.replace(/\.exe$/u, ""),
+      "--icon", path.join(srcDir, WIN_EXE_ICON),
+      "--distpath", packageDir,
+      "--workpath", path.join(tmpDir, "pyinstaller", "work"),
+      "--specpath", path.join(tmpDir, "pyinstaller", "spec"),
+      path.join(srcDir, WIN_EXE_WRAPPER),
+    ],
+    { cwd: srcDir },
+  );
+  if (!existsSync(path.join(packageDir, WIN_EXE_NAME))) {
+    fail(`exe wrapper missing after PyInstaller: ${path.join(packageDir, WIN_EXE_NAME)}`);
+  }
+}
+
 function buildAppImage(packageDir, cacheDir, outRoot, version) {
   const appImage = path.join(outRoot, `BioMed-QAgent-${version}-x86_64.AppImage`);
   if (existsSync(appImage)) rmSync(appImage, { force: true });
@@ -643,7 +682,7 @@ function readmeText(version, platform) {
     "",
     "一、启动步骤",
     "  1. 启动（推荐，桌面窗口）：",
-    "     Windows：双击 BioMed-QAgent.exe（若随包提供），或双击 start.bat",
+    "     Windows：双击 BioMed-QAgent.exe，或双击 start.bat（命令行排障更直观）",
     "     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python" + PYTHON_MAJOR_MINOR,
     "              然后执行 ./start.sh",
     "     macOS  ：与 Linux 相同",
@@ -674,6 +713,8 @@ function readmeText(version, platform) {
     "  - Linux/macOS 报 Permission denied：见注意事项第 2 条。",
     "  - 桌面窗口未打开或一闪而过：改用 start-server.bat / start-server.sh",
     "    （浏览器模式，行为等价）。",
+    "  - Windows 双击 BioMed-QAgent.exe 无反应或报错：查看同目录 launcher.log；",
+    "    该文件在每次通过 exe 启动时重写。",
     "",
   ].join("\n");
 }
@@ -835,8 +876,7 @@ for (const key of selected) {
     chmodSync(path.join(packageDir, "start-server.sh"), 0o755);
   }
   // Desktop entry comes from the git snapshot (not the working tree) so a
-  // bundle is reproducible from its --ref; icon.ico is the exe/shortcut icon
-  // for Windows packaging collaborators.
+  // bundle is reproducible from its --ref; icon.ico is the exe/shortcut icon.
   copyFileSync(
     path.join(srcDir, "scripts", "packaging", "desktop-app.py"),
     path.join(packageDir, "desktop-app.py"),
@@ -849,8 +889,13 @@ for (const key of selected) {
   const selfTestPython = resolvePipDriver(key, platform, path.join(packageDir, "runtime", "python"));
   runOrDie(selfTestPython, [path.join(packageDir, "desktop-app.py"), "--self-test"]);
 
+  if (key === "win") {
+    step(9, "build BioMed-QAgent.exe (windowed desktop-entry wrapper)");
+    buildWindowsExeWrapper(srcDir, packageDir, tmpDir);
+  }
+
   if (key === "linux" && values["no-appimage"] !== true) {
-    step(9, "assemble AppImage (single-file linux release)");
+    step(10, "assemble AppImage (single-file linux release)");
     buildAppImage(packageDir, cacheDir, outRoot, version);
   }
 
