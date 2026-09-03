@@ -322,9 +322,31 @@ HTTP `/inject-context` 的响应不直接生成本地气泡，因此回放、刷
 对话滚动由 shadcn `MessageScroller` 独占。实时状态默认跟随 live edge；用户主动滚轮、
 触摸或键盘上滚后停止跟随，并由 `MessageScrollerButton` 返回最新内容。普通用户消息
 不设置 `scrollAnchor`，否则新回合会进入 `anchored-to-message` 并在流式内容增高时
-持续把提问钉回视口，表现为列表从底部反弹到中间。加载更早历史仍由 viewport 的
-prepend preservation 保持当前位置。conversation row 在 `MessageScrollerItem` 边界
-memoize，未变化的历史 Markdown 不随 live row 增长重复解析。
+持续把提问钉回视口，表现为列表从底部反弹到中间。conversation row 在
+`MessageScrollerItem` 边界 memoize，未变化的历史 Markdown 不随 live row 增长重复解析。
+
+**加载更早消息（向上翻历史）的滚动位置保持由 ChatPanel 自行补偿**，不依赖两层
+默认机制，二者在该场景都会失效：
+
+- 原语的 prepend preservation 要求"首个子元素在插入后下移"，而
+  "加载更早消息" sentinel 是 `MessageScrollerContent` 的常驻首子元素，该路径永不触发；
+- 浏览器原生滚动锚定在 `scrollTop=0` 时被抑制，合并恰好落在顶部时（最常见）用户
+  正在阅读的内容会被整页顶出视口，表现为"闪回"。
+
+ChatPanel 在提交后、绘制前测量合并前首条 item 的位移并校正 `scrollTop`；浏览器
+已锚定时测得位移为 0，自动跳过（不会双重补偿）。若 itemId 被重投影翻转
+（`user:${runId}` ↔ `msg:${messageId}`），退回按插入数量定位。
+
+三个相关平台行为需要牢记：
+
+- `IntersectionObserver` 的 `rootMargin` 只对显式 `root` 生效：`root=null` 时
+  目标先被内部滚动容器裁剪成空交集，预载带形同虚设。sentinel 观察必须以滚动
+  视口为 `root`（当前上方 400px 预载带）。
+- IO target 不能放在 `content-visibility: auto` item 的内部子节点里：skipped
+  子树没有布局盒，相交回调会被推迟数秒。ref 要挂在 `MessageScrollerItem`
+  本身（始终有 `contain-intrinsic-size` 占位盒）。
+- `preserveScrollOnPrepend` 生效的前提是首子元素位移，新增"置顶常驻元素"
+  （如 sentinel、横幅）时需要同步检查 ChatPanel 的补偿路径是否仍然覆盖。
 
 durable `assistant_delta` 无 `stream_id`（Pi adapter 路径）时，`stream.ts` 用
 `currentReasoningSegmentByRun[runId]` 作为会话 epoch 生成

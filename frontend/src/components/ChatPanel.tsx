@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUpIcon,
   CheckCircleIcon,
@@ -322,9 +329,29 @@ export function ChatPanel({
   // Sentinel observed while the conversation starts scrolled to the newest
   // messages; when the user scrolls up far enough to reach it, earlier
   // messages are fetched automatically (the explicit button remains as a
-  // keyboard-accessible fallback).
+  // keyboard-accessible fallback). The ref sits on the MessageScrollerItem so
+  // IntersectionObserver always sees a laid-out box — an inner node inside a
+  // content-visibility-skipped item defers intersection callbacks.
   const olderSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadEarlierMessagesRef = useRef<() => Promise<void>>(async () => {});
+
+  // ===== 向上加载更早消息的滚动位置补偿 =====
+  // "加载更早消息" sentinel 是 MessageScrollerContent 的常驻首子元素，
+  // message-scroller 的 prepend 保持逻辑（要求首子元素在插入后下移）因此永不
+  // 触发；浏览器原生滚动锚定在 scrollTop=0 时也会被抑制。二者叠加导致合并
+  // 更早消息页时，用户正在阅读的内容被整体顶出视口（表现为"闪回"）。
+  // 这里在提交后、绘制前测量锚点 item 的位移并校正 scrollTop：若原生锚定已经
+  // 补偿（scrollTop>0），测得位移为 0，自动跳过，不会叠加。
+  const scrollerViewportRef = useRef<HTMLDivElement | null>(null);
+  const prependAnchorRef = useRef<{
+    taskId: string;
+    firstItemId: string;
+    firstItemTop: number;
+    itemCount: number;
+  } | null>(null);
+  const scrollDetachRef = useRef<(() => void) | null>(null);
+  const anchorItemIdRef = useRef<string | null>(null);
+  const anchorCountRef = useRef(0);
 
   const continuationInput =
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
@@ -344,6 +371,17 @@ export function ChatPanel({
     activeTask !== undefined &&
     activeTask.olderMessagesCursor !== null &&
     loadOlderMessages !== undefined;
+  // 滚动补偿锚点：与 ConversationList 的渲染口径一致（跳过 artifact item）。
+  const { anchorItemId, anchorCount } = useMemo(() => {
+    let count = 0;
+    let firstId: string | null = null;
+    for (const item of items) {
+      if (item.kind === "artifact") continue;
+      count += 1;
+      if (firstId === null) firstId = item.itemId;
+    }
+    return { anchorItemId: firstId, anchorCount: count };
+  }, [items]);
 
   const continuationEditable =
     activeTask !== undefined &&
@@ -760,6 +798,82 @@ export function ChatPanel({
   // to be re-created when `loadEarlierMessages` identity changes.
   loadEarlierMessagesRef.current = loadEarlierMessages;
 
+  // 滚动补偿锚点捕获：滚动事件与每次提交后都要刷新，保证合并落地时拿到的是
+  // 用户当前视口位置的锚点。
+  const capturePrependAnchor = useCallback(() => {
+    const viewport = scrollerViewportRef.current;
+    const taskId = activeTaskId;
+    const firstItemId = anchorItemIdRef.current;
+    if (viewport === null || taskId === null || firstItemId === null) return;
+    const node = viewport.querySelector(`[data-message-id="${firstItemId}"]`);
+    if (!(node instanceof HTMLElement)) return;
+    prependAnchorRef.current = {
+      taskId,
+      firstItemId,
+      firstItemTop:
+        node.getBoundingClientRect().top - viewport.getBoundingClientRect().top,
+      itemCount: anchorCountRef.current,
+    };
+  }, [activeTaskId]);
+
+  const attachScrollerViewport = useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollerViewportRef.current = node;
+      scrollDetachRef.current?.();
+      scrollDetachRef.current = null;
+      if (node !== null) {
+        const onScroll = () => capturePrependAnchor();
+        node.addEventListener("scroll", onScroll, { passive: true });
+        scrollDetachRef.current = () => node.removeEventListener("scroll", onScroll);
+      }
+    },
+    [capturePrependAnchor],
+  );
+
+  useLayoutEffect(() => {
+    anchorItemIdRef.current = anchorItemId;
+    anchorCountRef.current = anchorCount;
+    const viewport = scrollerViewportRef.current;
+    const prev = prependAnchorRef.current;
+    if (
+      viewport === null ||
+      activeTaskId === null ||
+      prev === null ||
+      prev.taskId !== activeTaskId ||
+      anchorItemId === null ||
+      anchorItemId === prev.firstItemId ||
+      anchorCount <= prev.itemCount
+    ) {
+      capturePrependAnchor();
+      return;
+    }
+    // prepend 检出：优先按 itemId 回查合并前的首条 item；id 被重投影翻转时
+    // （user:${runId} ↔ msg:${messageId}）退回按插入数量定位。
+    let node: Element | null = viewport.querySelector(
+      `[data-message-id="${prev.firstItemId}"]`,
+    );
+    if (node === null) {
+      const inserted = anchorCount - prev.itemCount;
+      const conversationNodes = Array.from(
+        viewport.querySelectorAll("[data-message-id]"),
+      ).filter(
+        (element) =>
+          !(element.getAttribute("data-message-id") ?? "").startsWith(
+            "older-messages:",
+          ),
+      );
+      node = conversationNodes[inserted] ?? null;
+    }
+    if (node instanceof HTMLElement) {
+      const drift =
+        node.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top -
+        prev.firstItemTop;
+      if (Math.abs(drift) > 1) viewport.scrollTop += drift;
+    }
+    capturePrependAnchor();
+  }, [activeTaskId, anchorCount, anchorItemId, capturePrependAnchor]);
+
   useEffect(() => {
     const node = olderSentinelRef.current;
     if (!hasOlderMessages || node === null) return;
@@ -769,7 +883,14 @@ export function ChatPanel({
           void loadEarlierMessagesRef.current();
         }
       },
-      { rootMargin: "96px 0px" },
+      // root 必须显式指向滚动视口：root=null 时 sentinel 先被滚动容器的
+      // clip 裁成空交集，rootMargin 形同虚设，只能等用户把 sentinel 滚进
+      // 视口才触发。指向视口后可提前一个预载带拉取，合并也不再恰好落在
+      // scrollTop=0（原生滚动锚定被抑制的位置）。
+      {
+        root: scrollerViewportRef.current,
+        rootMargin: "400px 0px 0px 0px",
+      },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -941,14 +1062,14 @@ export function ChatPanel({
       <MessageScrollerProvider autoScroll>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <MessageScroller className="min-w-0 flex-1">
-            <MessageScrollerViewport>
+            <MessageScrollerViewport ref={attachScrollerViewport}>
               <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3 px-5 py-6">
                 {hasOlderMessages && (
-                  <MessageScrollerItem messageId={`older-messages:${activeTaskId}`}>
-                    <div
-                      ref={olderSentinelRef}
-                      className="flex flex-col items-center gap-1"
-                    >
+                  <MessageScrollerItem
+                    ref={olderSentinelRef}
+                    messageId={`older-messages:${activeTaskId}`}
+                  >
+                    <div className="flex flex-col items-center gap-1">
                       <Button
                         type="button"
                         variant="ghost"

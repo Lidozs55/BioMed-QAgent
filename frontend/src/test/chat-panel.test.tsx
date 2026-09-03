@@ -608,7 +608,7 @@ describe("ChatPanel", () => {
         },
       ]);
       useAgentStore.getState().applyEvent({
-        schema_version: "2.0",
+        schema_version: "1.0",
         event_id: "event_background_delta",
         type: "assistant_delta",
         task_id: "task_background",
@@ -1410,6 +1410,181 @@ describe("ChatPanel", () => {
 
     expect(loadOlderMessages).toHaveBeenCalledWith("task_history");
     vi.unstubAllGlobals();
+  });
+
+  it("observes the older-messages sentinel against the scroll viewport with a top preload band", () => {
+    seedTerminalTask("agent", "task_history", "cursor_before_latest");
+    const captured: IntersectionObserverInit[] = [];
+    class RecordingObserver {
+      constructor(
+        _callback: IntersectionObserverCallback,
+        options: IntersectionObserverInit,
+      ) {
+        captured.push(options);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal(
+      "IntersectionObserver",
+      RecordingObserver as unknown as typeof IntersectionObserver,
+    );
+
+    const { container } = render(
+      <ChatPanel startTask={vi.fn()} loadOlderMessages={vi.fn()} />,
+    );
+
+    // root=null 时 sentinel 会被滚动容器裁剪成空交集，rootMargin 形同虚设；
+    // 必须显式以滚动视口为 root，预载带（上方 400px）才能提前触发加载。
+    const viewport = container.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-viewport"]',
+    );
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.root).toBe(viewport);
+    expect(captured[0]?.rootMargin).toBe("400px 0px 0px 0px");
+    vi.unstubAllGlobals();
+  });
+
+  it("restores the reading position when an older page merges while parked at the top", () => {
+    seedTerminalTask("agent", "task_history", "cursor_1");
+    // scrollTop=0 时浏览器原生滚动锚定被抑制：插入更早消息页会把用户正在
+    // 阅读的旧首条消息整体下推。用可控的 gBCR 模拟这一几何：
+    // 视口 top=56；合并前旧首条位于其下方 100px；合并后被下推 4500px。
+    const viewportTop = 56;
+    let oldFirstItemTop = 156;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const id = this.getAttribute?.("data-message-id");
+        const slot = this.getAttribute?.("data-slot");
+        const top =
+          id === "user:run_task_history"
+            ? oldFirstItemTop
+            : slot === "message-scroller-viewport"
+              ? viewportTop
+              : 0;
+        return {
+          top,
+          left: 0,
+          bottom: top,
+          right: 0,
+          width: 0,
+          height: 0,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+
+    try {
+      const { container } = render(
+        <ChatPanel startTask={vi.fn()} loadOlderMessages={vi.fn()} />,
+      );
+      const viewport = container.querySelector<HTMLElement>(
+        '[data-slot="message-scroller-viewport"]',
+      );
+      expect(viewport).not.toBeNull();
+
+      // jsdom 无布局几何，scroller 恒处于“贴底”模式，会在合并后自动回贴底部；
+      // 先模拟一次用户向上滚动手势（释放贴底），与真实卡顿场景一致。
+      fireEvent.wheel(viewport as HTMLElement, { deltaY: -300 });
+
+      // scrollTop=0 时浏览器不做原生锚定：合并后旧首条被新页整体下推 4500px。
+      oldFirstItemTop = 4656;
+
+      act(() => {
+        useAgentStore.getState().mergeOlderMessagePage("task_history", "cursor_1", {
+          schema_version: "1.0",
+          messages: [
+            {
+              message_id: "message_old",
+              task_id: "task_history",
+              run_id: "run_task_history",
+              ordinal: 0,
+              role: "assistant",
+              content: "older answer",
+              created_at: CREATED_AT,
+            },
+          ],
+          next_cursor: null,
+        });
+      });
+
+      // 旧首条消息（user:run_task_history）仍在列表中且可回查：按其位移补偿。
+      expect(viewport?.scrollTop).toBe(4500);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("skips prepend compensation when the browser already anchored the scroll position", () => {
+    seedTerminalTask("agent", "task_history", "cursor_1");
+    // 浏览器已补偿的等价几何：合并前后旧首条相对视口的距离不变（drift=0），
+    // ChatPanel 不得再叠加校正，否则视图会被推走（双重补偿）。
+    const viewportTop = 56;
+    const oldFirstItemTop = 156;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const id = this.getAttribute?.("data-message-id");
+        const slot = this.getAttribute?.("data-slot");
+        const top =
+          id === "user:run_task_history"
+            ? oldFirstItemTop
+            : slot === "message-scroller-viewport"
+              ? viewportTop
+              : 0;
+        return {
+          top,
+          left: 0,
+          bottom: top,
+          right: 0,
+          width: 0,
+          height: 0,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+
+    try {
+      const { container } = render(
+        <ChatPanel startTask={vi.fn()} loadOlderMessages={vi.fn()} />,
+      );
+      const viewport = container.querySelector<HTMLElement>(
+        '[data-slot="message-scroller-viewport"]',
+      );
+      expect(viewport).not.toBeNull();
+
+      // 与补偿测试同理：先释放“贴底”模式，隔离被测的补偿跳过逻辑。
+      fireEvent.wheel(viewport as HTMLElement, { deltaY: -300 });
+
+      act(() => {
+        useAgentStore.getState().mergeOlderMessagePage("task_history", "cursor_1", {
+          schema_version: "1.0",
+          messages: [
+            {
+              message_id: "message_old",
+              task_id: "task_history",
+              run_id: "run_task_history",
+              ordinal: 0,
+              role: "assistant",
+              content: "older answer",
+              created_at: CREATED_AT,
+            },
+          ],
+          next_cursor: null,
+        });
+      });
+
+      expect(viewport?.scrollTop).toBe(0);
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 
   it("keeps load-earlier errors scoped to the task when switching", async () => {
