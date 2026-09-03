@@ -138,10 +138,10 @@ gold6 & max & Qoder & 存在\code{output/} & 46 min & 5,160 K \\
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口} \\
 \midrule
 \endhead
-gold1 & flash & BioMed QAgent & 6/7（初步） & 通过 & 需求②差异表达未执行（交付肿瘤/正常分组表供下游分析） \\
-gold1 & flash & Qoder & 7/7（初步） & 通过 & ---（覆盖最广，含跨研究 meta 分析） \\
-gold1 & max & BioMed QAgent & 6/7（初步） & 通过 & 差异表达未执行；探针 / 基因双水平分布于两个研究 \\
-gold1 & max & Qoder & 6/7（初步） & 通过 & 差异表达未交付 \\
+gold1 & flash & BioMed QAgent & 6/7 & 通过 & 无差异表达结果；单研究（GSE86374）；33.3\% 探针无基因注释如实保留 \\
+gold1 & flash & Qoder & 6.5/7 & 通过 & 探针矩阵仅覆盖 5/16 纳入研究；表达值 3 位小数舍入 \\
+gold1 & max & BioMed QAgent & 6/7 & 通过 & 无差异表达结果；探针级（GSE139038）与基因级（GSE86374）分布于两个研究 \\
+gold1 & max & Qoder & 6/7 & 通过 & 无差异表达结果；仅纳入 4/8 候选研究 \\
 gold6 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
 gold6 & flash & Qoder & （待填） & （待填） & （待填） \\
 gold6 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
@@ -151,9 +151,9 @@ gold6 & max & Qoder & （待填） & （待填） & （待填） \\
 
 需要注意的是：\code{Qwen3.8-flash}在 Qoder 环境运行 gold1 任务时，途中出现两次异常任务中断，手动恢复。这也指示着通用框架在处理较大科研数据或复杂任务时可能也会表现不稳定。
 
-\subsection{gold1 对照的产物级横向比较（初步）}\label{subsec:gold1-artifact-compare}
+\subsection{gold1 对照的产物级横向比较}\label{subsec:gold1-artifact-compare}
 
-对 gold1 四个运行单元的实际交付产物逐一盘点（表~\ref{tab:gold1-artifacts}）。表~\ref{tab:factorial-quality} 的完整度初评即以本盘点为依据，按需求原文拆条（①查找肿瘤/正常 GEO 数据 ②两组比较得出差异表达 ③汇总样本元数据与平台注释 ④表达数据探针与基因双水平及对应 ⑤整理为便于后续分析的数据文件，附加：仅 CSV 正式产出、来源标注）计条；得分标注“初步”，正式得分仍按协议由人工双人复核确认。
+对 gold1 四个运行单元的实际交付产物逐一盘点（表~\ref{tab:gold1-artifacts}）。表~\ref{tab:factorial-quality} 的得分由\textbf{双盲双人独立评审}按冻结条目核对表（①研究查找与纳入 ②差异表达 ③样本元数据 ④平台注释与探针→基因对应 ⑤探针水平 ⑥基因水平 ⑦分析就绪与来源标注，部分交付计 0.5）逐条评定：两评审在 4 个单元中的 3 个完全一致，唯一分歧（flash·Qoder 的探针水平条目）经仲裁按“覆盖 5/16 纳入研究记部分交付”定为 6.5/7。真实性测量含机械重验（BioMed 发布件 SHA-256 重算与收据逐字一致；Qoder 交付包 MD5 / size 全对；行数与逐字符值追溯通过）与编造行检查——四单元编造行均为 0，且两环境独立产出的数值交叉吻合（GSE86374 探针值 4.186 ≈ 4.1862；GSE42568 A1BG 3.403 一致）。评审记录（逐条证据引用）随项目资料保留。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.55\hsize}L>{\hsize=0.75\hsize}L>{\hsize=0.7\hsize}L>{\hsize=0.85\hsize}L>{\hsize=0.6\hsize}L>{\hsize=1.3\hsize}L}
 \caption{gold1 四组交付产物盘点（BioMed QAgent 侧为正式 Publication，Qoder 侧为交付 CSV 包）}\label{tab:gold1-artifacts}\\
