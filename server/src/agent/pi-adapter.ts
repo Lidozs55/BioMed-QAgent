@@ -1,14 +1,19 @@
-import { readdir, stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import {
   createAgentSession,
+  createReadToolDefinition,
   DefaultResourceLoader,
+  defineTool,
   ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
   type InlineExtension,
+  type ResourceDiagnostic,
+  type Skill,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -98,6 +103,8 @@ export interface PiUpstreamSession {
   contextUsage?(): { tokens: number | null; percent: number | null } | undefined;
   /** Current model budget facts for the run-entry preflight. */
   getBudget?(): { contextWindow: number; maxTokens: number; reserveTokens: number };
+  /** Current base system prompt (diagnostics/tests; reflects active tools). */
+  getSystemPrompt?(): string;
   getContextUsage?(): {
     tokens: number | null;
     contextWindow: number;
@@ -192,6 +199,14 @@ const PROVIDER_RECOVERY_MESSAGE =
   "Continue the same task from durable state without repeating completed calls or claiming the interrupted action succeeded.";
 export const TOOL_ACTIVATION_NAME = "activate_agent_tools";
 const MAX_ACTIVATED_TOOLS = 12;
+/**
+ * Pi appends the `<available_skills>` listing to a custom system prompt only
+ * when the active tool set contains a tool named exactly ``read`` (upstream
+ * ``customPromptHasRead`` gate), and its listing tells the model to load a
+ * skill's file with that tool. The session read tool below IS that gate —
+ * a read surface confined to the curated skill roots.
+ */
+export const SKILL_READ_TOOL_NAME = "read";
 
 export function resolveRequestMaxTokens(
   configuredMaxTokens: number | undefined,
@@ -319,6 +334,7 @@ export function toolCatalogPrompt(
     "",
     "Available curated skill/tool map (complete for this session):",
     "Use it before substantive work to choose the route and respect each trust boundary.",
+    "Each entry has a curated SKILL.md; before relying on a source's specific rules, load that document with the read tool.",
     "Tools marked (active) have full schemas now. For other listed tools, call activate_agent_tools before use; activation does not bypass permissions, validation, or publication gates.",
     "A tool call to a listed tool that is NOT active fails with 'Tool not found' — this never means the tool is missing. Exactly one recovery exists: call activate_agent_tools with that tool's name, then retry the call with its real schema. Do not invent parameters or guess signatures for inactive tools; the catalog above is the only schema source.",
     ...skillEntries,
@@ -401,6 +417,96 @@ export function activationToolDefinition(
       };
     },
   };
+}
+
+/** Canonical (resolve + realpath) forms of skill roots; both are kept so
+ * containment survives symlinked checkouts (e.g. a /home alias over the
+ * real mount). */
+export function canonicalSkillRoots(skillRoots: readonly string[]): string[] {
+  const roots = new Set<string>();
+  for (const root of skillRoots) {
+    const resolved = path.resolve(root);
+    roots.add(resolved);
+    try {
+      roots.add(realpathSync(resolved));
+    } catch {
+      // A missing root is already reported by optionalSkillRoots(); keep the
+      // resolved form so filtering stays deterministic.
+    }
+  }
+  return [...roots];
+}
+
+function isUnderRoots(candidate: string, roots: readonly string[]): boolean {
+  return roots.some(
+    (root) => candidate === root || candidate.startsWith(root + path.sep),
+  );
+}
+
+/**
+ * DefaultResourceLoader also scans ``~/.agents/skills`` and every ancestor
+ * ``.agents/skills`` directory up to the git root, so user-level skills load
+ * alongside the curated roots. Keep only skills that live under the session's
+ * curated skill roots; without this filter, enabling the ``<available_skills>``
+ * listing would leak user-level skills into production prompts.
+ */
+export function curateSkillsOverride(
+  skillRoots: readonly string[],
+): (
+  base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] },
+) => { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
+  const roots = canonicalSkillRoots(skillRoots);
+  return (base) => ({
+    skills: base.skills.filter((skill) =>
+      isUnderRoots(
+        path.resolve(skill.baseDir || path.dirname(skill.filePath)),
+        roots,
+      )),
+    diagnostics: base.diagnostics,
+  });
+}
+
+/**
+ * The model-facing read surface for skill documents. Reusing Pi's read tool
+ * keeps the native offset/limit and truncation semantics, while the injected
+ * operations confine every access to the curated skill roots (checked on the
+ * resolved path and again on the realpath so symlinks cannot escape).
+ */
+export function skillReadToolDefinition(
+  skillRoots: readonly string[],
+): ToolDefinition {
+  const roots = canonicalSkillRoots(skillRoots);
+  const guard = (absolutePath: string): void => {
+    if (!isUnderRoots(path.resolve(absolutePath), roots)) {
+      throw new Error(
+        "read only accepts curated skill documents; the path must stay inside " +
+          "the skill roots listed in <available_skills>",
+      );
+    }
+    let real: string;
+    try {
+      real = realpathSync(absolutePath);
+    } catch {
+      return; // missing files surface through access() with the native error
+    }
+    if (!isUnderRoots(real, roots)) {
+      throw new Error(
+        "Skill document resolves outside the curated skill roots; refusing to read",
+      );
+    }
+  };
+  return defineTool(createReadToolDefinition(path.sep, {
+    operations: {
+      access: async (absolutePath) => {
+        guard(absolutePath);
+        await access(absolutePath);
+      },
+      readFile: async (absolutePath) => {
+        guard(absolutePath);
+        return readFile(absolutePath);
+      },
+    },
+  }));
 }
 
 function requireSafeId(name: string, value: string): void {
@@ -884,14 +990,16 @@ async function createRealUpstreamSession(
   const runProgressTracker = config.getCurrentPublicationId === undefined
     ? undefined
     : new RunProgressContextTracker(config.getCurrentPublicationId);
+  const skillRoots = [...(config.skillRoots ?? [])];
   const resourceLoader = new DefaultResourceLoader({
     cwd: config.cwd,
     agentDir: path.join(config.cwd, ".pi"),
     settingsManager,
-    additionalSkillPaths: [...(config.skillRoots ?? [])],
+    additionalSkillPaths: skillRoots,
     additionalPromptTemplatePaths: [...(config.resourceRoots ?? [])],
     noExtensions: true,
-    noSkills: (config.skillRoots?.length ?? 0) === 0,
+    noSkills: skillRoots.length === 0,
+    ...(skillRoots.length === 0 ? {} : { skillsOverride: curateSkillsOverride(skillRoots) }),
     noPromptTemplates: (config.resourceRoots?.length ?? 0) === 0,
     noThemes: true,
     noContextFiles: true,
@@ -906,20 +1014,32 @@ async function createRealUpstreamSession(
   const initialToolNames = config.initialToolNames === undefined
     ? allToolNames
     : [...new Set(config.initialToolNames)].filter((name) => allToolNames.includes(name));
+  // The confined read tool stays active for the whole session: dropping it
+  // would also drop the <available_skills> listing on the next prompt rebuild
+  // (Pi's customPromptHasRead gate), leaving "consult the matching skill"
+  // instructions dangling again.
+  const skillReadTool = skillRoots.length === 0
+    ? undefined
+    : skillReadToolDefinition(skillRoots);
+  const withSkillRead = (names: readonly string[]): readonly string[] =>
+    skillReadTool === undefined || names.includes(SKILL_READ_TOOL_NAME)
+      ? names
+      : [...names, SKILL_READ_TOOL_NAME];
   const piSessionRef: {
     current?: Awaited<ReturnType<typeof createAgentSession>>["session"];
   } = {};
   const activationTool = activationToolDefinition(
     configuredTools,
     initialToolNames,
-    (names) => piSessionRef.current?.setActiveToolsByName([...names]),
+    (names) => piSessionRef.current?.setActiveToolsByName([...withSkillRead(names)]),
   );
-  const customTools = configuredTools.length === 0
-    ? []
-    : [...toPiCustomTools(configuredTools), activationTool];
-  const allowedToolNames = configuredTools.length === 0
-    ? []
-    : [...allToolNames, TOOL_ACTIVATION_NAME];
+  const customTools = [
+    ...(skillReadTool === undefined ? [] : [skillReadTool]),
+    ...(configuredTools.length === 0
+      ? []
+      : [...toPiCustomTools(configuredTools), activationTool]),
+  ];
+  const allowedToolNames = customTools.map((tool) => tool.name);
   const { session } = await createAgentSession({
     cwd: config.cwd,
     model,
@@ -929,13 +1049,17 @@ async function createRealUpstreamSession(
       ? SessionManager.inMemory(config.cwd)
       : SessionManager.continueRecent(config.cwd, config.sessionDir),
     settingsManager,
-    noTools: (config.tools?.length ?? 0) > 0 ? "builtin" : "all",
+    noTools: customTools.length > 0 ? "builtin" : "all",
     tools: allowedToolNames,
     customTools,
   });
   piSessionRef.current = session;
-  if (configuredTools.length > 0) {
-    session.setActiveToolsByName([...initialToolNames, TOOL_ACTIVATION_NAME]);
+  const baseActiveToolNames = withSkillRead([
+    ...initialToolNames,
+    ...(configuredTools.length > 0 ? [TOOL_ACTIVATION_NAME] : []),
+  ]);
+  if (baseActiveToolNames.length > 0) {
+    session.setActiveToolsByName([...baseActiveToolNames]);
   }
   let lastAssistantOutcome: { stopReason: string | undefined; errorMessage: string | undefined } | undefined;
   let streamRecoveryController: AbortController | undefined;
@@ -1097,6 +1221,7 @@ async function createRealUpstreamSession(
     },
     getContextUsage: () => session.getContextUsage(),
     getBudget: () => resolveSessionBudget(current),
+    getSystemPrompt: () => session.systemPrompt,
     reconcileConfig,
     contextUsage: () => {
       const usage = session.getContextUsage();
@@ -1244,7 +1369,7 @@ export function toPiCustomTools(
   }));
 }
 
-class PiBioMedAgentSession implements BioMedAgentSession {
+export class PiBioMedAgentSession implements BioMedAgentSession {
   readonly piSessionId: string;
   readonly taskId: string;
   readonly runId: string;
@@ -1272,6 +1397,11 @@ class PiBioMedAgentSession implements BioMedAgentSession {
 
   getBudget(): BioMedSessionBudget | null {
     return this.upstream.getBudget?.() ?? null;
+  }
+
+  /** Base system prompt of the underlying Pi session (diagnostics, tests). */
+  systemPrompt(): string | null {
+    return this.upstream.getSystemPrompt?.() ?? null;
   }
 
   /**
