@@ -1744,6 +1744,55 @@ describe("runtime event projection", () => {
     ).toBe(merged);
   });
 
+  it("preserves conversation item identity across older-message page loads", () => {
+    // Regression: re-projecting already-loaded messages used to hand every
+    // memoized timeline row a fresh object on each older-page merge, forcing
+    // the whole history to re-render (and re-parse markdown) per page — the
+    // visible jank when scrolling up through a long conversation.
+    const assistantMessage = (ordinal: number) =>
+      message("task_history", ordinal, { role: "assistant" });
+    let state = hydrateTaskSnapshot(
+      createInitialRuntimeState(),
+      taskSnapshot(
+        "task_history",
+        [assistantMessage(4), assistantMessage(5)],
+        "cursor_before_4",
+      ),
+    );
+    state = mergeOlderMessagePage(state, "task_history", "cursor_before_4", {
+      messages: [
+        assistantMessage(2),
+        assistantMessage(3),
+        assistantMessage(4),
+      ],
+      next_cursor: "cursor_before_2",
+    });
+    const itemsAfterFirstPage = state.tasksById.task_history.items;
+    const findItem = (itemId: string) =>
+      itemsAfterFirstPage.find((item) => item.itemId === itemId);
+    expect(findItem("msg:message_2")).toBeDefined();
+    expect(findItem("msg:message_4")).toBeDefined();
+
+    state = mergeOlderMessagePage(state, "task_history", "cursor_before_2", {
+      messages: [assistantMessage(1)],
+      next_cursor: null,
+    });
+    const itemsAfterSecondPage = state.tasksById.task_history.items;
+    expect(
+      itemsAfterSecondPage.find((item) => item.itemId === "msg:message_2"),
+    ).toBe(findItem("msg:message_2"));
+    expect(
+      itemsAfterSecondPage.find((item) => item.itemId === "msg:message_3"),
+    ).toBe(findItem("msg:message_3"));
+    expect(
+      itemsAfterSecondPage.find((item) => item.itemId === "msg:message_4"),
+    ).toBe(findItem("msg:message_4"));
+    // The genuinely new page still lands.
+    expect(
+      itemsAfterSecondPage.some((item) => item.itemId === "msg:message_1"),
+    ).toBe(true);
+  });
+
   it("keeps already loaded older messages and their cursor across a newer snapshot", () => {
     let state = hydrateTaskSnapshot(
       createInitialRuntimeState(),

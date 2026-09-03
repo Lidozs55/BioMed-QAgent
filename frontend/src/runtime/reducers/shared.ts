@@ -705,11 +705,45 @@ function projectMessageToItem(
   return null;
 }
 
+/**
+ * Shallow content comparison for a re-projected conversation item against its
+ * previous incarnation (same deterministic ``itemId``). Nested arrays (search
+ * results) compare element-wise by reference; everything else by ``===``.
+ */
+function projectedItemUnchanged(
+  prev: ConversationItem,
+  next: ConversationItem,
+): boolean {
+  const prevKeys = Object.keys(prev) as (keyof ConversationItem)[];
+  const nextKeys = Object.keys(next) as (keyof ConversationItem)[];
+  if (prevKeys.length !== nextKeys.length) return false;
+  for (const key of nextKeys) {
+    const before = prev[key];
+    const after = next[key];
+    if (Array.isArray(before) || Array.isArray(after)) {
+      if (
+        !Array.isArray(before) ||
+        !Array.isArray(after) ||
+        before.length !== after.length ||
+        before.some((value, index) => value !== after[index])
+      ) {
+        return false;
+      }
+    } else if (before !== after) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function mergeMessagesIntoItems(
   task: TaskProjection,
   options: { preserveUserSequences?: boolean } = {},
 ): TaskProjection {
   const preserveUserSequences = options.preserveUserSequences ?? true;
+  const prevItemsByItemId = new Map(
+    task.items.map((item) => [item.itemId, item] as const),
+  );
   const userRunIds = new Set(
     task.messages
       .filter(
@@ -741,6 +775,7 @@ function mergeMessagesIntoItems(
     );
   });
   let next = items.length === task.items.length ? task : { ...task, items };
+  const nextItemIds = new Set(next.items.map((item) => item.itemId));
   const projectedLegacyUserRunIds = new Set<string>();
 
   for (const message of task.messages) {
@@ -763,13 +798,23 @@ function mergeMessagesIntoItems(
     ) {
       continue;
     }
-    const item = projectMessageToItem(
+    const projected = projectMessageToItem(
       message,
       userItemId,
       preserveUserSequences ? userSequenceByItemId : undefined,
     );
-    if (item === null) continue;
+    if (projected === null) continue;
+    // 消息是不可变的追加日志：同一 itemId 重投影出相同内容时复用旧对象引用。
+    // 否则每加载一页更早消息，整个时间线的 memo 化列表项 props 全部失效，
+    // 触发全量 markdown 重解析——向上滚动浏览历史时的卡顿即源于此。
+    const prev = prevItemsByItemId.get(projected.itemId);
+    const item =
+      prev !== undefined && projectedItemUnchanged(prev, projected)
+        ? prev
+        : projected;
+    if (nextItemIds.has(item.itemId)) continue;
     next = upsertItem(next, item);
+    nextItemIds.add(item.itemId);
     // Hydrated assistant messages may carry aggregated provider-side web
     // search hits (Bailian 联网搜索); render them like the live event item.
     if (
@@ -777,14 +822,18 @@ function mergeMessagesIntoItems(
       message.searchResults !== undefined &&
       message.searchResults.length > 0
     ) {
-      next = upsertItem(next, {
-        kind: "search_info",
-        itemId: `search_info:${message.runId ?? message.messageId}`,
-        runId: message.runId ?? "",
-        sequence: item.sequence,
-        createdAt: item.createdAt,
-        results: message.searchResults,
-      });
+      const searchInfoItemId = `search_info:${message.runId ?? message.messageId}`;
+      if (!nextItemIds.has(searchInfoItemId)) {
+        next = upsertItem(next, {
+          kind: "search_info",
+          itemId: searchInfoItemId,
+          runId: message.runId ?? "",
+          sequence: item.sequence,
+          createdAt: item.createdAt,
+          results: message.searchResults,
+        });
+        nextItemIds.add(searchInfoItemId);
+      }
     }
   }
   return next;
