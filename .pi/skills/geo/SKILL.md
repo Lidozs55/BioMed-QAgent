@@ -22,7 +22,10 @@ different dataset, do not retry the same accession.
 
 - Probe platforms must declare AdapterParams in the spec binding parameters
   (format, value_semantics, value_scale, expression_unit, platform_ids),
-  otherwise geo.expression.v1 rejects the build.
+  otherwise geo.expression.v1 rejects the build. Declare value_scale only
+  from what the series itself proves — the !Sample_data_processing text
+  saying log2 → log2, a proven-linear pipeline (e.g. MAS5) → linear,
+  otherwise unknown (never guessed).
 - Gene-level builds from probe data require a GPL platform annotation: pass
   the file from `download_geo_platform_annotation` (gpl from platform_ids in
   the series matrix) via `execute_dataset_execution`'s `mapping_files` so probe
