@@ -30,6 +30,13 @@ import {
   type BioMedSessionConfig,
   type RunOptions,
 } from "./contracts.js";
+import {
+  installSearchInfoProbe,
+  registerSearchProbe,
+  releaseSearchProbe,
+  SEARCH_PROBE_HEADER,
+  type ProviderSearchResult,
+} from "./search-info-capture.js";
 import { PHASE1_SYSTEM_PROMPT, SYSTEM_BRIEFING, phase1ResourceRoots } from "./phase1-prompt.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
 import {
@@ -97,6 +104,12 @@ export interface PiUpstreamSession {
     percent: number | null;
   } | undefined;
   subscribe(listener: (event: PiUpstreamEvent) => void): () => void;
+  /**
+   * Bounded web-search results captured from Bailian's ``search_info`` payload
+   * (one callback per model call that performed a platform-side search). The
+   * channel stays silent for every other provider and when 联网搜索 is off.
+   */
+  onSearchInfo?(listener: (results: ProviderSearchResult[]) => void): () => void;
   abort(): Promise<void>;
   dispose(): void;
 }
@@ -811,13 +824,35 @@ async function createRealUpstreamSession(
   await modelRuntime.setRuntimeApiKey(current.provider, current.apiKey, {
     allowNetwork: false,
   });
+  // Installs the process-wide search_info fetch tee once (idempotent); the
+  // tee only activates for requests carrying a registered probe header.
+  installSearchInfoProbe();
+  const searchInfoListeners = new Set<(results: ProviderSearchResult[]) => void>();
   const streamSimple = modelRuntime.streamSimple.bind(modelRuntime);
   modelRuntime.streamSimple = (model, context, options) => {
     const upstreamPayload = options?.onPayload;
+    // Probe only DashScope Qwen chat calls with 联网搜索 enabled: the probe
+    // header correlates the tee'd response with this exact request, so
+    // concurrent sessions never cross-attach captured results.
+    const searchProbe = current.enableSearch === true && usesDashScopeQwen(current)
+      ? registerSearchProbe()
+      : undefined;
+    if (searchProbe !== undefined) {
+      void searchProbe.slot.done.then((results) => {
+        releaseSearchProbe(searchProbe.probeId);
+        if (results.length === 0) return;
+        for (const listener of searchInfoListeners) listener(results);
+      }).catch(() => {
+        releaseSearchProbe(searchProbe.probeId);
+      });
+    }
     return streamSimple(model, context, {
       ...options,
       maxTokens: resolveRequestMaxTokens(current.maxTokens, options?.maxTokens),
       temperature: current.temperature ?? options?.temperature,
+      ...(searchProbe === undefined ? {} : {
+        headers: { ...options?.headers, [SEARCH_PROBE_HEADER]: searchProbe.probeId },
+      }),
       onPayload: async (payload, payloadModel) => {
         const transformed = upstreamPayload === undefined
           ? payload
@@ -1013,6 +1048,12 @@ async function createRealUpstreamSession(
     sessionId: session.sessionId,
     prompt: promptWithStreamRecovery,
     resetRunProgress: () => runProgressTracker?.reset(),
+    onSearchInfo(listener) {
+      searchInfoListeners.add(listener);
+      return () => {
+        searchInfoListeners.delete(listener);
+      };
+    },
     continueAfterLength: () => session.sendCustomMessage({
       customType: "biomed_length_continuation",
       content: LENGTH_CONTINUATION_MESSAGE,
