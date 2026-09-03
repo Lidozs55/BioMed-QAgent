@@ -9,6 +9,7 @@ import {
 
 export type FamilySpecTopologyIssueCode =
   | "ALLOW_EMPTY_OUTSIDE_TOPOLOGY"
+  | "ALLOW_EMPTY_PRIMARY"
   | "DECLARED_OUTPUT_SCHEMA_MISMATCH"
   | "DECLARED_OUTPUT_TABLE_UNDEFINED"
   | "DUPLICATE_DECLARED_OUTPUT_TABLE_ID"
@@ -455,6 +456,16 @@ function checkProjectionPartition(
         "ALLOW_EMPTY_OUTSIDE_TOPOLOGY",
         `${path}.allow_empty`,
         `allow_empty table ${tableId} is outside the projection topology`,
+        tableId,
+      );
+      continue;
+    }
+    if (roleSets.find((roleSet) => roleSet.field === "primary_tables")?.values.has(tableId)) {
+      addIssue(
+        issues,
+        "ALLOW_EMPTY_PRIMARY",
+        `${path}.allow_empty`,
+        `primary table ${tableId} must not be allow_empty: the publication gate requires a non-empty primary table`,
         tableId,
       );
     }

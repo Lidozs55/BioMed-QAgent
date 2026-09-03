@@ -6,6 +6,7 @@ import { OperationStep } from "./OperationStep";
 import { PermissionStep } from "./PermissionStep";
 import { ProgressStep } from "./ProgressStep";
 import { ReasoningBlock } from "./ReasoningBlock";
+import { SearchInfoStep } from "./SearchInfoStep";
 import { StageStep } from "./StageStep";
 import { ToolCallStep } from "./ToolCallStep";
 import { UserMessageBubble } from "./UserMessageBubble";
@@ -41,6 +42,8 @@ export function ConversationStep({ item, downloadControl }: ConversationStepProp
       return <PermissionStep item={item} />;
     case "publication_report":
       return <PublicationReportCard item={item} />;
+    case "search_info":
+      return <SearchInfoStep item={item} />;
     default:
       return null;
   }

@@ -1,4 +1,4 @@
-import type { ModelRetryPolicy } from "@biomed/contracts";
+import type { ModelRetryPolicy, ProviderSearchResult } from "@biomed/contracts";
 
 export type BioMedAgentErrorCode =
   | "INVALID_CONFIGURATION"
@@ -69,6 +69,11 @@ export type BioMedAgentEvent =
         totalTokens: number;
         reasoning?: number;
       };
+    }
+  | {
+      /** Bounded hits from one model call's provider-side web search (联网搜索). */
+      type: "provider_search_info";
+      results: ProviderSearchResult[];
     };
 
 export interface BioMedToolResult {

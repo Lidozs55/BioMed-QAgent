@@ -376,6 +376,25 @@ describe("Pi model profile mapping", () => {
     )).toEqual({ model: "custom-chat", top_p: 0.75 });
   });
 
+  test("maps DashScope-specific parameters on the international endpoint too", () => {
+    expect(applyModelProfileToPayload(
+      { model: "qwen-plus", messages: [] },
+      {
+        provider: "dashscope-intl",
+        modelId: "qwen-plus",
+        apiKey: "secret",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        enableSearch: true,
+        thinkingMode: true,
+      },
+    )).toEqual({
+      model: "qwen-plus",
+      messages: [],
+      enable_search: true,
+      enable_thinking: true,
+    });
+  });
+
   test("injects saved registry parameters into the upstream payload", () => {
     expect(applyModelProfileToPayload(
       { model: "custom-chat" },

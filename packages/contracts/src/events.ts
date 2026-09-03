@@ -112,6 +112,24 @@ export type ContextUsagePayload = {
   usage?: ModelCallUsage;
 };
 
+/** One web-search hit reported by a provider-side search (Bailian 联网搜索). */
+export interface ProviderSearchResult {
+  site_name: string;
+  url: string;
+  title?: string;
+  icon?: string;
+}
+
+export type ProviderSearchInfoPayload = {
+  type: "provider_search_info";
+  /**
+   * Bounded results captured from one model call's provider-side search
+   * (≤20 entries, fields ≤200 chars). Display metadata only — never
+   * formal evidence.
+   */
+  results: ProviderSearchResult[];
+};
+
 export type EventPayload =
   | { type: "task_created"; topic: string }
   | { type: "plan_ready"; specification: Record<string, JsonValue> }
@@ -228,6 +246,7 @@ export type EventPayload =
   | AssistantDeltaPayload
   | AssistantReasoningDeltaPayload
   | ContextUsagePayload
+  | ProviderSearchInfoPayload
   | {
       type: "tool_started";
       tool_call_id: string;

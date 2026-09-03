@@ -2,6 +2,7 @@ import type {
   EventEnvelope,
   MessageRecord,
   ModelCallUsage,
+  ProviderSearchResult,
   RunUsageTotals,
   TaskPublicationSummary,
   RunRecord,
@@ -103,6 +104,28 @@ function message(
   };
 }
 
+const MAX_MESSAGE_SEARCH_RESULTS = 20;
+
+/**
+ * Merge a search_info batch into a message's aggregated list: dedupe by URL
+ * (one provider search may repeat a hit across model calls) and cap the
+ * total so a long agent loop cannot inflate the message record.
+ */
+function mergeSearchResults(
+  existing: ProviderSearchResult[] | undefined,
+  incoming: ProviderSearchResult[],
+): ProviderSearchResult[] {
+  const merged = [...(existing ?? [])];
+  const seen = new Set(merged.map((result) => result.url));
+  for (const result of incoming) {
+    if (merged.length >= MAX_MESSAGE_SEARCH_RESULTS) break;
+    if (seen.has(result.url)) continue;
+    seen.add(result.url);
+    merged.push(result);
+  }
+  return merged;
+}
+
 function accumulateRunUsage(
   usageByRun: Map<string, RunUsageTotals>,
   runId: string,
@@ -138,6 +161,9 @@ export function reduceTaskEvents(
   const artifactIds = new Set<string>();
   const assistantByRun = new Map<string, MessageRecord>();
   const usageByRun = new Map<string, RunUsageTotals>();
+  // provider_search_info batches that arrived before the run's assistant
+  // message existed; merged on creation and dropped on steer boundaries.
+  const pendingSearchByRun = new Map<string, ProviderSearchResult[]>();
   let currentPublicationId: string | null = null;
   let artifactCount = 0;
 
@@ -192,6 +218,11 @@ export function reduceTaskEvents(
       const existing = assistantByRun.get(event.run_id);
       if (existing === undefined) {
         const created = message(metadata, event, "assistant", event.payload.delta, messages.length + 1);
+        const pendingSearch = pendingSearchByRun.get(event.run_id);
+        if (pendingSearch !== undefined && pendingSearch.length > 0) {
+          created.search_results = pendingSearch;
+          pendingSearchByRun.delete(event.run_id);
+        }
         messages.push(created);
         assistantByRun.set(event.run_id, created);
       } else {
@@ -202,6 +233,19 @@ export function reduceTaskEvents(
       // Text generated after the direction change belongs to a new assistant
       // turn in the snapshot rather than the pre-steer assistant message.
       assistantByRun.delete(event.run_id);
+      pendingSearchByRun.delete(event.run_id);
+    } else if (event.payload.type === "provider_search_info" && event.run_id !== null) {
+      // Attach to the run's assistant message; events may land before the
+      // first delta of a run, so early batches are stashed until creation.
+      const existing = assistantByRun.get(event.run_id);
+      if (existing !== undefined) {
+        existing.search_results = mergeSearchResults(existing.search_results, event.payload.results);
+      } else {
+        pendingSearchByRun.set(
+          event.run_id,
+          mergeSearchResults(pendingSearchByRun.get(event.run_id), event.payload.results),
+        );
+      }
     } else if (event.payload.type === "publication_created") {
       const publication: TaskPublicationSummary = {
         publication_id: event.payload.publication_id,
