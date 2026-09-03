@@ -9,6 +9,9 @@
 - `docs/` — 内部文档（含本清单，它只在 dev 存在）
 - `AGENTS.md`、`PROBLEM.md`、`frontend/AGENTS.md`
 - `.agents/`、`.superpowers/`、`.playwright-mcp/` — agent 工具
+- `scripts/commonly-up.sh`、`scripts/commonly-up.bat` — Commonly 协调脚本，
+  dev-only，后续发布 PR 一律不带进 `main`（`scripts/commonly-agent/` 已被
+  git-ignore，本就不入库）
 - `.husky/` 及 `package.json` 中的 `husky` devDependency 与 `prepare` 脚本
   （同步 `pnpm-lock.yaml`）
 - `data/gold-runs/`、`data/gold/` — 内部评测证据
