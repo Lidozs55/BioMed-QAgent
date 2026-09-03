@@ -1,21 +1,22 @@
 ---
 name: local_cache
-description: Query the local cache for previously imported or cached datasets before searching external databases.
+description: Query the local cache for previously imported datasets before searching external databases.
 ---
 
 # Local cache query
 
-The local cache stores cleaned, schema-neutral long-format datasets (each
-cached dataset carries its own column manifest, recorded at import/caching
-time) from user imports and prior research-task artifacts.
+The local cache stores content-addressed dataset records committed by import
+sessions from user-uploaded files. Each record carries its own column manifest
+and topic/description/keywords metadata, recorded at commit time;
+re-committing identical bytes deduplicates to the same dataset id.
 
 ## When to use
 
 1. **Prefer first** — before calling external APIs such as `search_pubmed` or
    `search_geo`, check `search_local_cache` for matching cached data.
 2. **Supplement** — when external APIs return nothing or are incomplete.
-3. **Reuse cleaning results** — prior tasks' cleaned data is cached; avoid
-   re-cleaning.
+3. **Reuse prior imports** — data committed by earlier import sessions is
+   searchable without re-downloading it.
 
 ## Tools
 
@@ -26,9 +27,7 @@ time) from user imports and prior research-task artifacts.
 
 ## Namespaces
 
-- user_import — data imported through file upload.
-- pipeline_artifact — artifacts auto-cached from prior research tasks
-  (not yet implemented).
+- user_import — records committed by import sessions from user uploads.
 
 ## Constraints
 
