@@ -77,7 +77,7 @@ const PYTHON_EXTRAS = [
 // pyobjc). Pinned like PYTHON_EXTRAS; bump deliberately.
 const DESKTOP_EXTRAS = {
   win: [
-    { name: "pywebview", version: "5.4.0" },
+    { name: "pywebview", version: "5.4.0", checkDir: "webview" },
     { name: "bottle", version: "0.13.2" },
     { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
     { name: "typing_extensions", version: "4.12.2" },
@@ -85,7 +85,7 @@ const DESKTOP_EXTRAS = {
     { name: "clr-loader", version: "0.2.6", checkDir: "clr_loader" },
   ],
   macos: [
-    { name: "pywebview", version: "5.4.0" },
+    { name: "pywebview", version: "5.4.0", checkDir: "webview" },
     { name: "bottle", version: "0.13.2" },
     { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
     { name: "typing_extensions", version: "4.12.2" },
