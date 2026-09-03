@@ -79,7 +79,7 @@ const DESKTOP_EXTRAS = {
   win: [
     { name: "pywebview", version: "5.4.0" },
     { name: "bottle", version: "0.13.2" },
-    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools" },
+    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
     { name: "typing_extensions", version: "4.12.2" },
     { name: "pythonnet", version: "3.0.5" },
     { name: "clr-loader", version: "0.2.6", checkDir: "clr_loader" },
@@ -87,7 +87,7 @@ const DESKTOP_EXTRAS = {
   macos: [
     { name: "pywebview", version: "5.4.0" },
     { name: "bottle", version: "0.13.2" },
-    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools" },
+    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools", sdistOnly: true },
     { name: "typing_extensions", version: "4.12.2" },
     { name: "pyobjc-core", version: "10.3.1", checkDir: "objc" },
     { name: "pyobjc-framework-Cocoa", version: "10.3.1", checkDir: "Cocoa" },
@@ -296,6 +296,33 @@ function resolvePipDriver(key, platform, pythonRoot) {
 // runtime. pip resolves wheels against the TARGET platform tags, downloads
 // them, and unpacks straight into the runtime's site-packages via --target —
 // no venv, no compilation, reproducible via pinned versions + --no-deps.
+// Builds wheels for extras whose PyPI distribution is sdist-only (proxy-tools
+// ships no wheel at all) into a local find-links directory. The packages are
+// pure Python, so the built py3-none-any wheel is target-independent — the
+// pip install below stays --only-binary=:all: (the local wheel satisfies it),
+// keeping the no-sdist-execution-at-install-time policy intact.
+function ensureLocalWheels(extras, driver, localWheelsDir) {
+  const sdistOnly = extras.filter((extra) => extra.sdistOnly === true);
+  if (sdistOnly.length === 0) return null;
+  mkdirSync(localWheelsDir, { recursive: true });
+  for (const extra of sdistOnly) {
+    const packageName = extra.name.replaceAll("-", "_");
+    const existing = readdirSync(localWheelsDir).find(
+      (file) => file.startsWith(`${packageName}-`) && file.endsWith(".whl"),
+    );
+    if (existing !== undefined) continue;
+    console.log(
+      `[pack]   building local wheel for sdist-only ${extra.name}==${extra.version}`,
+    );
+    runOrDie(driver, [
+      "-m", "pip", "wheel", "--no-deps",
+      "--wheel-dir", localWheelsDir,
+      `${extra.name}==${extra.version}`,
+    ]);
+  }
+  return localWheelsDir;
+}
+
 function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
   if (PYTHON_EXTRAS.length === 0) return;
   const sitePackages = path.join(pythonRoot, platform.sitePackages);
@@ -303,6 +330,11 @@ function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
   const driver = resolvePipDriver(key, platform, pythonRoot);
   const extras = [...PYTHON_EXTRAS, ...(DESKTOP_EXTRAS[key] ?? [])];
   const requirements = extras.map((extra) => `${extra.name}==${extra.version}`);
+  const localWheels = ensureLocalWheels(
+    extras,
+    driver,
+    path.join(pipCacheDir, "local-wheels"),
+  );
   console.log(
     `[pack]   installing ${requirements.join(" ")} into embedded Python ` +
       `(${platform.pipPlatforms.join(" / ")})`,
@@ -316,6 +348,7 @@ function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
     "--only-binary=:all:",
     "--no-deps",
     "--cache-dir", pipCacheDir,
+    ...(localWheels !== null ? ["--find-links", localWheels] : []),
     "--target", sitePackages,
     ...requirements,
   ]);
