@@ -248,6 +248,34 @@ describe("target evidence family", () => {
     expect(rows.evidence[1]?.evidence_value).toMatchObject({ gene_id: "10000", gene_symbol: "AKT3" });
   });
 
+  it("expands the live ClinVar germline_classification schema with the legacy fallback", async () => {
+    const rows = expandTargetEvidenceJsonCarriers([
+      { assetId: ASSET_B, sourceId: "src_clinvar", sourceDatabase: "ncbi_clinvar", logicalFile: "source_assets/clinvar.json", retrievedAt: "2026-08-18T00:00:00Z", payload: await jsonFixture("clinvar-api.germline.json") },
+    ]);
+    expect(rows.targets.map((row) => row.entity_id)).toEqual(["VCV000016613"]);
+    expect(rows.evidence[0]?.assertion).toBe("drug response");
+    expect(rows.evidence[0]?.source_locator).toMatchObject({
+      json_pointer: "/result/16613/germline_classification/description",
+    });
+
+    // Records carrying neither classification field cannot support a
+    // significance assertion and stay fail-closed.
+    const significanceless = {
+      header: { type: "esummary", version: "0.3" },
+      result: {
+        uids: ["42"],
+        "42": {
+          accession: "VCV000000042",
+          title: "no classification payload",
+          genes: [{ symbol: "EGFR", geneid: "1956" }],
+        },
+      },
+    };
+    expect(() => expandTargetEvidenceJsonCarriers([
+      { assetId: ASSET_B, sourceId: "src_clinvar", sourceDatabase: "ncbi_clinvar", logicalFile: "source_assets/clinvar.json", retrievedAt: "2026-08-18T00:00:00Z", payload: significanceless },
+    ])).toThrow(/ClinVar clinical_significance/);
+  });
+
   it("fails closed for an unknown provider response shape", async () => {
     const payload = await jsonFixture("unknown-api.non-gold.json");
     expect(() => expandTargetEvidenceJsonCarriers([{
