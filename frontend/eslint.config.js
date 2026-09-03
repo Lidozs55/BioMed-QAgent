@@ -5,7 +5,8 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "src/components/ui"] },
+  // public/sw.js is a runtime service worker (browser globals only, not bundled).
+  { ignores: ["dist", "public/sw.js", "src/components/ui"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

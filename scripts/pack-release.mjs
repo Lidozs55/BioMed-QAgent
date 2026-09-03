@@ -3,18 +3,23 @@
 //
 // Produces a self-contained, runnable bundle per platform into target/:
 //   target/biomed-qagent-<version>-<win|linux|macos>/
-//     BioMed-QAgent.exe      Windows GUI launcher (pywebview; win bundle only) —
-//                          double-click opens the UI in a desktop window with no
-//                          console; falls back to the default browser when the
-//                          WebView2 runtime is unavailable (see packaging/windows/)
-//     start.bat / start.sh   launcher (model credentials are configured in the Web settings)
-//     server/                compiled Application Host + pruned production node_modules
-//     frontend/dist/         compiled SPA, served by the host (--static)
-//     database/              stdlib-only Python persistence bridge
-//     .pi/                   agent skills
-//     runtime/node/          embedded Node.js (portable, nodejs.org)
-//     runtime/python/        embedded CPython (python-build-standalone, same distro uv uses)
-//                            with the pinned scientific stack preinstalled (PYTHON_EXTRAS)
+//     start.bat / start.sh        desktop entry: desktop-app.py — pywebview native
+//                                 window, system-browser fallback (default entry)
+//     start-server.bat / .sh      service entry: host --static --open (no window stack)
+//     BioMed-QAgent.exe           Windows double-click entry (win bundle only) — a
+//                                 windowed PyInstaller shim, built in-script, that
+//                                 runs runtime\python\python.exe desktop-app.py and
+//                                 logs to launcher.log (see win-exe-wrapper.py)
+//     desktop-app.py              desktop launcher logic (spawn host, open window/browser)
+//     assets/icon.ico             app icon (Windows exe / desktop shortcuts)
+//     server/                     compiled Application Host + pruned production node_modules
+//     frontend/dist/              compiled SPA, served by the host (--static); PWA-installable
+//     database/                   stdlib-only Python persistence bridge
+//     .pi/                        agent skills
+//     runtime/node/               embedded Node.js (portable, nodejs.org)
+//     runtime/python/             embedded CPython (python-build-standalone, same distro uv uses)
+//                                 with the pinned scientific stack (PYTHON_EXTRAS) and, on
+//                                 win/macos, the pywebview desktop stack (DESKTOP_EXTRAS)
 //
 // The target machine needs nothing preinstalled: no Node, no Python, no pnpm, no uv.
 // The host resolves the Python interpreter via BIOMED_PYTHON_BIN (see
@@ -22,15 +27,13 @@
 // embedded runtime — that is the only integration point, no source changes needed.
 //
 // Usage (from the repository root):
-//   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp]
+//   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp] [--no-appimage]
 //   pnpm pack:target --platform=all     (alias; plain `pnpm pack` is pnpm's built-in tarball command)
+//   --no-appimage: skip the linux single-file AppImage step (dir bundle is always produced)
 //
-// Build host requirements: git, pnpm (lockfile version), Node 22, tar, curl; the
-// win bundle additionally builds the GUI launcher via uv (packaging/windows/,
-// pinned in its uv.lock). Cross-packing (building a bundle for a different OS
-// than the host) additionally needs any host CPython with pip on PATH — the
-// wheel step never executes target code, but the pip process itself must run
-// somewhere (see installPythonExtras).
+// Cross-packing (building a bundle for a different OS than the host) additionally
+// needs any host CPython with pip on PATH — the wheel step never executes target
+// code, but the pip process itself must run somewhere (see installPythonExtras).
 //
 // If runtime downloads fail (e.g. GitHub unreachable), set HTTPS_PROXY and retry:
 //   https_proxy=http://127.0.0.1:7897 pnpm run pack
@@ -38,6 +41,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -64,17 +68,52 @@ const PYTHON_EXTRAS = [
   { name: "numpy", version: "2.5.2" },
   { name: "scipy", version: "1.18.1" },
 ];
+// Desktop window stack (pywebview) for the desktop launchers: Windows opens a
+// WebView2 window via pythonnet, macOS a WKWebView window via pyobjc. Linux
+// gets nothing — PyGObject cannot be pip-installed, so desktop-app.py falls
+// back to the system browser there. Runtime deps are listed explicitly
+// because the pip step installs with --no-deps; `checkDir` is the
+// site-packages directory a package installs (differs from the pip name for
+// pyobjc). Pinned like PYTHON_EXTRAS; bump deliberately.
+const DESKTOP_EXTRAS = {
+  win: [
+    { name: "pywebview", version: "5.4.0" },
+    { name: "bottle", version: "0.13.2" },
+    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools" },
+    { name: "typing_extensions", version: "4.12.2" },
+    { name: "pythonnet", version: "3.0.5" },
+    { name: "clr-loader", version: "0.2.6", checkDir: "clr_loader" },
+  ],
+  macos: [
+    { name: "pywebview", version: "5.4.0" },
+    { name: "bottle", version: "0.13.2" },
+    { name: "proxy-tools", version: "0.1.0", checkDir: "proxy_tools" },
+    { name: "typing_extensions", version: "4.12.2" },
+    { name: "pyobjc-core", version: "10.3.1", checkDir: "objc" },
+    { name: "pyobjc-framework-Cocoa", version: "10.3.1", checkDir: "Cocoa" },
+    { name: "pyobjc-framework-WebKit", version: "10.3.1", checkDir: "WebKit" },
+  ],
+};
 const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
 
-// Windows GUI launcher (pywebview + PyInstaller), sources in packaging/windows.
-// Versions are pinned by that project's uv.lock, not here.
-const LAUNCHER_PROJECT = path.join("packaging", "windows");
-const LAUNCHER_EXE_NAME = "BioMed-QAgent.exe";
-const LAUNCHER_ICON = path.join("assets", "logo", "biomed-qagent.ico");
+// Windows double-click entry (win bundle only): a windowed PyInstaller shim
+// (win-exe-wrapper.py) that runs the bundle's desktop-app.py with the embedded
+// runtime python. Built with the uv environment from packaging/windows — its
+// lockfile pins the PyInstaller version; the launcher code in that project is
+// NOT part of the exe, desktop-app.py stays the single launcher code path.
+const WIN_EXE_NAME = "BioMed-QAgent.exe";
+const WIN_EXE_WRAPPER = path.join("scripts", "packaging", "win-exe-wrapper.py");
+const WIN_EXE_ICON = path.join("assets", "logo", "icon.ico");
+const WIN_EXE_PROJECT = path.join("packaging", "windows");
 
 const NODE_DIST = "https://nodejs.org/dist";
 const PBS_DIST =
   "https://github.com/astral-sh/python-build-standalone/releases/download";
+// Official continuous build; the only AppImage tool we need at pack time.
+// Run with --appimage-extract-and-run so build hosts without FUSE work.
+const APPIMAGETOOL_URL =
+  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage";
+const APPIMAGETOOL_ASSET = "appimagetool-x86_64.AppImage";
 
 const PLATFORMS = {
   win: {
@@ -262,7 +301,8 @@ function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
   const sitePackages = path.join(pythonRoot, platform.sitePackages);
   mkdirSync(sitePackages, { recursive: true });
   const driver = resolvePipDriver(key, platform, pythonRoot);
-  const requirements = PYTHON_EXTRAS.map((extra) => `${extra.name}==${extra.version}`);
+  const extras = [...PYTHON_EXTRAS, ...(DESKTOP_EXTRAS[key] ?? [])];
+  const requirements = extras.map((extra) => `${extra.name}==${extra.version}`);
   console.log(
     `[pack]   installing ${requirements.join(" ")} into embedded Python ` +
       `(${platform.pipPlatforms.join(" / ")})`,
@@ -279,13 +319,17 @@ function installPythonExtras(key, platform, pythonRoot, pipCacheDir) {
     "--target", sitePackages,
     ...requirements,
   ]);
-  for (const extra of PYTHON_EXTRAS) {
-    if (!existsSync(path.join(sitePackages, extra.name))) {
+  for (const extra of extras) {
+    const installedDir = extra.checkDir ?? extra.name;
+    if (!existsSync(path.join(sitePackages, installedDir))) {
       fail(`embedded Python missing ${extra.name} after pip install`);
     }
   }
   if (key === defaultPlatform()) {
     // Smoke test only possible when the embedded interpreter runs on this host.
+    // Only the scientific stack is import-checked: desktop extras (pythonnet,
+    // pyobjc) may pull native frameworks that are cheap to import but slow to
+    // initialize, and they get their own self-test via desktop-app.py.
     const body = PYTHON_EXTRAS.map((extra) => `print("${extra.name}", ${extra.name}.__version__)`)
       .join("; ");
     const check = runOrDie(
@@ -335,25 +379,59 @@ function injectSupportedArchitectures(srcDir, key) {
 }
 
 // pnpm deploy materializes native binding variants for the PACK HOST only,
-// even though supportedArchitectures made install fetch the target's variants
-// into the workspace store. Copy those target-platform binding packages into
-// the staged bundle's .pnpm/node_modules fallback dir — Node's module
-// resolution walks through it, so e.g. pdfjs-dist finds the real
-// @napi-rs/canvas binding at runtime on the target OS. Native binding
-// packages are self-contained (a single prebuilt binary), so no further
-// dependency wiring is needed. Win bundles skip this: deploy already staged
-// the host's win32 bindings.
+// even though supportedArchitectures made install fetch the target's variants.
+// Two install layouts must be handled here:
+//  - hoisted (nodeLinker: hoisted, this repo's exFAT-safe setting): deploy
+//    materializes the host==target variant directly under
+//    server/node_modules/<pkg>-<os>-<arch> — for cross-packs the target
+//    variant sits at the SNAPSHOT's hoisted top level instead;
+//  - .pnpm virtual store (classic layout): target variants live under
+//    srcDir/node_modules/.pnpm/<entry>/node_modules/... and are copied into
+//    the bundle's .pnpm/node_modules fallback dir — Node's module resolution
+//    walks through it, so e.g. pdfjs-dist finds the real @napi-rs/canvas
+//    binding at runtime on the target OS. Native binding packages are
+//    self-contained (a single prebuilt binary), so no further dependency
+//    wiring is needed. Win bundles skip this: deploy already staged the
+//    host's win32 bindings.
+function findHoistedVariant(modulesDir, osName) {
+  const variantName = new RegExp(`-(?:${osName})-(?:x64|arm64)(?:-(?:gnu|msvc))?$`);
+  for (const entry of readdirSafe(modulesDir)) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (variantName.test(entry.name)) return entry.name;
+    if (entry.name.startsWith("@")) {
+      for (const scoped of readdirSafe(path.join(modulesDir, entry.name))) {
+        if (scoped.isDirectory() && variantName.test(scoped.name)) {
+          return `${entry.name}/${scoped.name}`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 function stageTargetNativeBindings(srcDir, packageDir, key) {
   if (key === "win") return;
   const osName = key === "linux" ? "linux" : "darwin";
+  const stagedServerModules = path.join(packageDir, "server", "node_modules");
+  const fallbackDir = path.join(stagedServerModules, ".pnpm", "node_modules");
+
+  // Same-platform packing with the hoisted linker: deploy already put the
+  // target variant at the top level — nothing to stage.
+  const hoisted = findHoistedVariant(stagedServerModules, osName);
+  if (hoisted !== undefined) {
+    console.log(`[pack]   target native binding materialized by deploy: ${hoisted}`);
+    return;
+  }
+
   const storeDir = path.join(srcDir, "node_modules", ".pnpm");
-  const fallbackDir = path.join(packageDir, "server", "node_modules", ".pnpm", "node_modules");
   const variantPattern = new RegExp(`-(?:${osName})-(?:x64|arm64)(?:-(?:gnu|msvc))?@`);
   let staged = 0;
+  let alreadyDeployed = 0;
   for (const storeEntry of readdirSafe(storeDir)) {
     if (!storeEntry.isDirectory() || !variantPattern.test(storeEntry.name)) continue;
-    if (existsSync(path.join(packageDir, "server", "node_modules", ".pnpm", storeEntry.name))) {
-      continue; // deploy already materialized this variant
+    if (existsSync(path.join(stagedServerModules, ".pnpm", storeEntry.name))) {
+      alreadyDeployed += 1; // deploy already materialized this variant
+      continue;
     }
     const variantNodeModules = path.join(storeDir, storeEntry.name, "node_modules");
     for (const scope of readdirSafe(variantNodeModules)) {
@@ -372,7 +450,20 @@ function stageTargetNativeBindings(srcDir, packageDir, key) {
       }
     }
   }
-  if (staged === 0) {
+  // Cross-packing with the hoisted linker: the supportedArchitectures install
+  // fetched the target variant into the snapshot's hoisted top level.
+  const snapshotHoisted = findHoistedVariant(path.join(srcDir, "node_modules"), osName);
+  if (snapshotHoisted !== undefined) {
+    const source = path.join(srcDir, "node_modules", snapshotHoisted);
+    const dest = path.join(fallbackDir, snapshotHoisted);
+    if (!existsSync(dest)) {
+      mkdirSync(path.dirname(dest), { recursive: true });
+      copyDir(source, dest);
+      console.log(`[pack]   staged native binding for ${key}: ${snapshotHoisted}`);
+      staged += 1;
+    }
+  }
+  if (staged === 0 && alreadyDeployed === 0) {
     fail(
       `no ${osName} native binding packages found in the workspace store — ` +
         "supportedArchitectures install fetched no target variants; refusing to ship a bundle that cannot boot",
@@ -436,108 +527,151 @@ function formatBytes(bytes) {
 
 // ---- generated files -------------------------------------------------------
 
-function startBatScript() {
+// Desktop launcher: pywebview native window via desktop-app.py, with an
+// automatic system-browser fallback when the platform webview backend is
+// unavailable (default entry on every platform).
+function desktopStartBatScript() {
   return [
     "@echo off",
     "setlocal",
     'cd /d "%~dp0"',
     'set "BIOMED_PYTHON_BIN=%~dp0runtime\\python\\python.exe"',
-    '"runtime\\node\\node.exe" --env-file-if-exists=.env server\\dist\\index.js --static',
+    '"%~dp0runtime\\python\\python.exe" desktop-app.py',
     "",
   ].join("\r\n");
 }
 
-function startShScript() {
+function desktopStartShScript() {
   return [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'cd "$(dirname "$0")"',
     `export BIOMED_PYTHON_BIN="$(pwd)/runtime/python/bin/python${PYTHON_MAJOR_MINOR}"`,
-    'exec "./runtime/node/bin/node" --env-file-if-exists=.env server/dist/index.js --static',
+    `exec "./runtime/python/bin/python${PYTHON_MAJOR_MINOR}" desktop-app.py`,
     "",
   ].join("\n");
 }
 
-// Builds the pywebview GUI launcher (sources: packaging/windows/, versions
-// pinned in its uv.lock) into a windowed onefile exe staged at the bundle
-// root. The windowed exe has no console; the launcher's own log lands in
-// launcher.log next to it (see biomed_launcher/config.py).
-function buildWindowsLauncher(srcDir, packageDir, tmpDir) {
-  runOrDie("uv", ["sync", "--project", LAUNCHER_PROJECT, "--locked"], { cwd: srcDir });
+// Headless/service launcher: run the host directly and auto-open the system
+// browser (--open); no windowing stack involved. Also the recovery path when
+// the embedded Python cannot start desktop-app.py.
+function serverStartBatScript() {
+  return [
+    "@echo off",
+    "setlocal",
+    'cd /d "%~dp0"',
+    'set "BIOMED_PYTHON_BIN=%~dp0runtime\\python\\python.exe"',
+    '"runtime\\node\\node.exe" --env-file-if-exists=.env server\\dist\\index.js --static --open',
+    "",
+  ].join("\r\n");
+}
+
+function serverStartShScript() {
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'cd "$(dirname "$0")"',
+    `export BIOMED_PYTHON_BIN="$(pwd)/runtime/python/bin/python${PYTHON_MAJOR_MINOR}"`,
+    'exec "./runtime/node/bin/node" --env-file-if-exists=.env server/dist/index.js --static --open',
+    "",
+  ].join("\n");
+}
+
+// AppImage entry (linux only). The squashfs mount is read-only, so all
+// writable state — settings, tasks, workspaces, cache, skill data — is
+// relocated by exporting an ABSOLUTE OUTPUT_DIR: the host derives every data
+// root from it (dataRoot = tasksRoot/../.., see server/src/bootstrap.ts and
+// resolveOutputDir in server/src/config.ts). Relative values would re-anchor
+// to the read-only mount, so keep the ${HOME}-based default.
+function appRunScript() {
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'APPDIR="${APPDIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"',
+    'export OUTPUT_DIR="${OUTPUT_DIR:-$HOME/.local/share/biomed-qagent/output}"',
+    `exec "$APPDIR/runtime/python/bin/python${PYTHON_MAJOR_MINOR}" "$APPDIR/desktop-app.py"`,
+    "",
+  ].join("\n");
+}
+
+// appimagetool rewrites Exec/Icon to the deployed AppImage path on install;
+// these values only need to be present and valid desktop-entry syntax.
+function desktopEntryFile() {
+  return [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Name=BioMed QAgent",
+    "Comment=Biomedical research-question agent with a deterministic dataset core",
+    "Exec=bio-med-qagent",
+    "Icon=biomed-qagent",
+    "Terminal=false",
+    "Categories=Science;",
+    "",
+  ].join("\n");
+}
+
+// Assemble the AppImage from the (already self-contained) bundle directory:
+// AppRun + .desktop + icon make the bundle a valid AppDir in place.
+// Builds the Windows double-click entry (BioMed-QAgent.exe) into the bundle
+// root: a windowed onefile PyInstaller shim from win-exe-wrapper.py. The uv
+// environment from packaging/windows (versions pinned in its uv.lock) only
+// provides the PyInstaller toolchain — no launcher code is collected, so the
+// build stays fast and desktop-app.py remains the single launcher code path.
+function buildWindowsExeWrapper(srcDir, packageDir, tmpDir) {
+  runOrDie("uv", ["sync", "--project", WIN_EXE_PROJECT, "--locked"], { cwd: srcDir });
   runOrDie(
     "uv",
     [
-      "run",
-      "--project",
-      LAUNCHER_PROJECT,
-      "--no-sync",
+      "run", "--project", WIN_EXE_PROJECT, "--no-sync",
       "pyinstaller",
-      "--noconfirm",
-      "--clean",
-      "--onefile",
-      "--windowed",
-      "--name",
-      LAUNCHER_EXE_NAME.replace(/\.exe$/u, ""),
-      "--icon",
-      path.join(srcDir, LAUNCHER_ICON),
-      // Embedded payload for the runtime window/taskbar icon (resource_path).
-      "--add-binary",
-      `${path.join(srcDir, LAUNCHER_ICON)};.`,
-      // pywebview resolves its Windows backend (and WebView2 loader DLLs)
-      // dynamically; pythonnet/clr_loader load .NET assemblies the same way.
-      "--collect-all",
-      "webview",
-      "--collect-all",
-      "pythonnet",
-      "--collect-all",
-      "clr_loader",
-      "--distpath",
-      packageDir,
-      "--workpath",
-      path.join(tmpDir, "pyinstaller", "work"),
-      "--specpath",
-      path.join(tmpDir, "pyinstaller", "spec"),
-      "--paths",
-      path.join(srcDir, LAUNCHER_PROJECT),
-      path.join(srcDir, LAUNCHER_PROJECT, "launcher_entry.py"),
+      "--noconfirm", "--clean", "--onefile", "--windowed",
+      "--name", WIN_EXE_NAME.replace(/\.exe$/u, ""),
+      "--icon", path.join(srcDir, WIN_EXE_ICON),
+      "--distpath", packageDir,
+      "--workpath", path.join(tmpDir, "pyinstaller", "work"),
+      "--specpath", path.join(tmpDir, "pyinstaller", "spec"),
+      path.join(srcDir, WIN_EXE_WRAPPER),
     ],
     { cwd: srcDir },
   );
-  if (!existsSync(path.join(packageDir, LAUNCHER_EXE_NAME))) {
-    fail(`launcher exe missing after PyInstaller: ${path.join(packageDir, LAUNCHER_EXE_NAME)}`);
+  if (!existsSync(path.join(packageDir, WIN_EXE_NAME))) {
+    fail(`exe wrapper missing after PyInstaller: ${path.join(packageDir, WIN_EXE_NAME)}`);
   }
 }
 
-function readmeText(version, platform, key) {
+function buildAppImage(packageDir, cacheDir, outRoot, version) {
+  const appImage = path.join(outRoot, `BioMed-QAgent-${version}-x86_64.AppImage`);
+  if (existsSync(appImage)) rmSync(appImage, { force: true });
+  writeFileSync(path.join(packageDir, "AppRun"), appRunScript());
+  chmodSync(path.join(packageDir, "AppRun"), 0o755);
+  writeFileSync(path.join(packageDir, "biomed-qagent.desktop"), desktopEntryFile());
+  copyFileSync(
+    path.join(packageDir, "frontend", "dist", "icons", "icon-512.png"),
+    path.join(packageDir, "biomed-qagent.png"),
+  );
+  const appimagetool = path.join(cacheDir, APPIMAGETOOL_ASSET);
+  if (!existsSync(appimagetool)) {
+    download(APPIMAGETOOL_URL, appimagetool);
+  }
+  chmodSync(appimagetool, 0o755);
+  runOrDie(appimagetool, [
+    "--appimage-extract-and-run",
+    "--no-appstream",
+    "--comp", "zstd",
+    packageDir,
+    appImage,
+  ]);
+  const info = statSync(appImage);
+  if (!info.isFile() || info.size < 1024 * 1024) {
+    fail(`AppImage output missing or suspiciously small: ${appImage}`);
+  }
+  console.log(`[pack]   AppImage: ${appImage} (${formatBytes(info.size)})`);
+  return appImage;
+}
+
+function readmeText(version, platform) {
   const nodeBinPath = `runtime/node/${platform.nodeBin}`;
   const extras = PYTHON_EXTRAS.map((extra) => `${extra.name} ${extra.version}`).join(" / ");
-  const winIntro = key === "win";
-  const startupSteps = winIntro
-    ? [
-        "一、启动步骤",
-        "  1. Windows 推荐直接双击 BioMed-QAgent.exe：桌面窗口打开界面，全程无命令行；",
-        "     桌面窗口组件（WebView2）不可用时会自动改用系统浏览器打开。",
-        "  2. 也可双击 start.bat 以命令行方式启动（排障时更直观），然后访问",
-        "     http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
-        "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
-        "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
-        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）；端口被占用时",
-        "     服务自动改用系统分配的端口（实际地址见 launcher.log），不会干扰本机",
-        "     已有的 5173 服务。",
-      ]
-    : [
-        "一、启动步骤",
-        "  1. 启动服务：",
-        `     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python${PYTHON_MAJOR_MINOR}`,
-        "              然后执行 ./start.sh",
-        "     macOS  ：与 Linux 相同",
-        "  2. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
-        "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
-        "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
-        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）；端口被占用时",
-        "     服务自动改用系统分配的端口（实际地址见 launcher.log），不会干扰本机",
-        "     已有的 5173 服务。",
-      ];
   return [
     `BioMed-QAgent v${version} 独立部署包（${platform.label}）`,
     "=============================================================",
@@ -546,36 +680,41 @@ function readmeText(version, platform, key) {
     `内嵌运行时：Node.js v${NODE_VERSION} · CPython ${PYTHON_VERSION}`,
     `（python-build-standalone ${PYTHON_PBS_TAG}，与 uv 同源；已预装科学计算栈：${extras}）`,
     "",
-    ...startupSteps,
+    "一、启动步骤",
+    "  1. 启动（推荐，桌面窗口）：",
+    "     Windows：双击 BioMed-QAgent.exe，或双击 start.bat（命令行排障更直观）",
+    "     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python" + PYTHON_MAJOR_MINOR,
+    "              然后执行 ./start.sh",
+    "     macOS  ：与 Linux 相同",
+    "     桌面窗口基于系统 WebView（Windows: WebView2 / macOS: WKWebView）；",
+    "     组件缺失时自动改用系统默认浏览器打开，服务不受影响。",
+    "     Linux 包未内嵌窗口组件，将直接以系统浏览器打开。",
+    "  2. 服务模式（不开窗口，启动后自动打开浏览器）：",
+    "     Windows：双击 start-server.bat；Linux/macOS：执行 ./start-server.sh",
+    "  3. 访问地址默认 http://127.0.0.1:5173（API 在 /api/v1 下，WebSocket 在 /api/v1/ws）；",
+    "     端口被占用时自动回退，以启动日志打印的 BIOMED_QAGENT_URL 为准。",
+    "  4. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
+    "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
+    "     如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
     "",
     "二、注意事项",
-    ...(winIntro
-      ? [
-          "  1. BioMed-QAgent.exe 未做代码签名，首次运行如遇 SmartScreen 提示，",
-          "     选择「更多信息 → 仍要运行」。",
-          "  2. 关闭桌面窗口即停止后台服务；运行中的任务会按事件日志在下次启动时",
-          "     恢复为 interrupted，已完成的结果不会丢失。",
-        ]
-      : []),
-    "  3. Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时在目标机安装：",
+    "  1. Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时在目标机安装：",
     `     ${nodeBinPath} server/node_modules/playwright/cli.js install chromium`,
-    "  4. Linux/macOS 首次运行必须先执行上面的 chmod +x；从 Windows 分发请打 tar.gz",
+    "  2. Linux/macOS 首次运行必须先执行上面的 chmod +x；从 Windows 分发请打 tar.gz",
     "     （zip 会丢失可执行位）。",
-    "  5. 平台要求：Linux 需 glibc >= 2.28（Ubuntu 20.04+ / Debian 11+ 等）；",
+    "  3. 平台要求：Linux 需 glibc >= 2.28（Ubuntu 20.04+ / Debian 11+ 等）；",
     "     macOS 需 Apple Silicon（arm64）与 macOS 12 及以上版本。",
-    "  6. 内嵌 Python 已预装 numpy/scipy，分析类脚本可直接运行，无需联网安装。",
-    "  7. data/settings 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
-    "  8. 若安全软件拦截内嵌的 node/python，请将本目录加入信任区。",
+    "  4. 内嵌 Python 已预装 numpy/scipy，分析类脚本可直接运行，无需联网安装。",
+    "  5. data/settings 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
+    "  6. 若安全软件拦截内嵌的 node/python，请将本目录加入信任区。",
     "",
     "三、问题排查",
-    ...(winIntro
-      ? [
-          "  - 桌面窗口打不开：查看同目录 launcher.log；设置环境变量 BIOMED_FORCE_BROWSER=1",
-          "    可跳过桌面窗口，直接改用系统浏览器。",
-        ]
-      : []),
     "  - 启动即退出：检查端口是否被占用；模型未配置时在 Web 设置中完成配置。",
-    "  - Linux/macOS 报 Permission denied：见注意事项第 4 条。",
+    "  - Linux/macOS 报 Permission denied：见注意事项第 2 条。",
+    "  - 桌面窗口未打开或一闪而过：改用 start-server.bat / start-server.sh",
+    "    （浏览器模式，行为等价）。",
+    "  - Windows 双击 BioMed-QAgent.exe 无反应或报错：查看同目录 launcher.log；",
+    "    该文件在每次通过 exe 启动时重写。",
     "",
   ].join("\n");
 }
@@ -604,6 +743,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     ref: { type: "string" },
     "keep-temp": { type: "boolean" },
+    "no-appimage": { type: "boolean" },
   },
   strict: false,
 });
@@ -725,15 +865,38 @@ for (const key of selected) {
   renameWithRetry(pyInner, path.join(packageDir, "runtime", "python"));
   installPythonExtras(key, platform, path.join(packageDir, "runtime", "python"), path.join(cacheDir, "pip"));
 
-  step(7, "write launchers and README");
-  writeFileSync(path.join(packageDir, "start.bat"), startBatScript());
-  writeFileSync(path.join(packageDir, "start.sh"), startShScript());
-  chmodSync(path.join(packageDir, "start.sh"), 0o755);
-  writeFileSync(path.join(packageDir, "README.txt"), readmeText(version, platform, key));
+  step(7, "write launchers, desktop entry and README");
+  if (key === "win") {
+    writeFileSync(path.join(packageDir, "start.bat"), desktopStartBatScript());
+    writeFileSync(path.join(packageDir, "start-server.bat"), serverStartBatScript());
+  } else {
+    writeFileSync(path.join(packageDir, "start.sh"), desktopStartShScript());
+    writeFileSync(path.join(packageDir, "start-server.sh"), serverStartShScript());
+    chmodSync(path.join(packageDir, "start.sh"), 0o755);
+    chmodSync(path.join(packageDir, "start-server.sh"), 0o755);
+  }
+  // Desktop entry comes from the git snapshot (not the working tree) so a
+  // bundle is reproducible from its --ref; icon.ico is the exe/shortcut icon.
+  copyFileSync(
+    path.join(srcDir, "scripts", "packaging", "desktop-app.py"),
+    path.join(packageDir, "desktop-app.py"),
+  );
+  mkdirSync(path.join(packageDir, "assets"), { recursive: true });
+  copyFileSync(path.join(srcDir, "assets", "logo", "icon.ico"), path.join(packageDir, "assets", "icon.ico"));
+  writeFileSync(path.join(packageDir, "README.txt"), readmeText(version, platform));
+
+  step(8, "desktop-app self-test");
+  const selfTestPython = resolvePipDriver(key, platform, path.join(packageDir, "runtime", "python"));
+  runOrDie(selfTestPython, [path.join(packageDir, "desktop-app.py"), "--self-test"]);
 
   if (key === "win") {
-    step(8, "build pywebview GUI launcher (BioMed-QAgent.exe)");
-    buildWindowsLauncher(srcDir, packageDir, tmpDir);
+    step(9, "build BioMed-QAgent.exe (windowed desktop-entry wrapper)");
+    buildWindowsExeWrapper(srcDir, packageDir, tmpDir);
+  }
+
+  if (key === "linux" && values["no-appimage"] !== true) {
+    step(10, "assemble AppImage (single-file linux release)");
+    buildAppImage(packageDir, cacheDir, outRoot, version);
   }
 
   if (values["keep-temp"] !== true) {

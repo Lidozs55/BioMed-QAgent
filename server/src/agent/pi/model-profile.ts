@@ -57,7 +57,7 @@ export function applyModelProfileToPayload(
     if (value === undefined) continue;
     if (key === "top_logprobs" && selected.params?.logprobs !== true) continue;
     if (key === "max_tokens" || key === "temperature" || key === "top_p") continue;
-    if (key === "reasoning_effort" && value === "off") continue; // 思考强度=关闭：不向上游透传无效值
+    if (key === "reasoning_effort" && (value === "off" || value === "none")) continue; // 思考强度=关闭：不向上游透传无效值
     if (key === "context_window" || key === "max_output_tokens" ||
         key === "suggested_max_tokens" || key === "capabilities") continue;
     if (dashScopeQwen &&
@@ -82,10 +82,20 @@ export function applyModelProfileToPayload(
       next.repetition_penalty = selected.repetitionPenalty;
     }
     if (selected.enableSearch !== undefined) next.enable_search = selected.enableSearch;
-    if (selected.thinkingMode !== undefined) next.enable_thinking = selected.thinkingMode;
-    // 思考开关已并入思考强度：显式选择“关闭”时强制关闭思考，
-    // 优先级高于旧的思维链模式开关。
-    if (selected.params?.reasoning_effort === "off") next.enable_thinking = false;
+    // 思考强度是思考开关的唯一入口（DashScope 语义：enable_thinking 与
+    // reasoning_effort 必须一致，"xhigh + enable_thinking:false" 这类组合会被
+    // 400 invalid_parameter 拒绝）。effort 为非关闭值时强制开启思考——存量设置
+    // 里 thinking_mode:false + effort:xhigh 的脏组合在这里被纠正；effort 显式
+    // 关闭（off/none）时强制关闭；未配置 effort 时回退旧思维链开关。
+    // 与 settings/model-registry/model-resolution.ts 的 resolveThinkingMode 同一规则。
+    const effort = selected.params?.reasoning_effort;
+    if (effort === "off" || effort === "none") {
+      next.enable_thinking = false;
+    } else if (effort !== undefined) {
+      next.enable_thinking = true;
+    } else if (selected.thinkingMode !== undefined) {
+      next.enable_thinking = selected.thinkingMode;
+    }
   }
   return next;
 }

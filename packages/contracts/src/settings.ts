@@ -109,6 +109,14 @@ export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
  * so the settings default and the code fallback can no longer drift apart.
  */
 export const DEFAULT_MAX_TOKENS = 8192;
+/**
+ * Context-window fallback when neither the active model record nor the runtime
+ * settings pin one (i.e. models missing from the vendor catalog). 256k so the
+ * >100k knowledge-injection payloads fit; single source for the server budget
+ * math (model-resolution / budget / upstream-session) and the frontend display
+ * fallback. Within SETTING_NUMBER_BOUNDS.context_window (max 4_194_304).
+ */
+export const DEFAULT_CONTEXT_WINDOW = 262_144;
 export const DEFAULT_SAFETY_RESERVE_RATIO = 0.05;
 export const DEFAULT_COMPACTION_TRIGGER_RATIO = 0.85;
 export const DEFAULT_COMPACTION_TARGET_RATIO = 0.45;

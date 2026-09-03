@@ -341,7 +341,9 @@ export function ModelDetailDialog({
               specs={model.param_specs}
               params={params}
               onChange={setParams}
-              hiddenKeys={["max_tokens", "enable_thinking"]}
+              // thinking_mode 不再单独配置：思考模式由思考强度推导
+              // （服务端 model-resolution.resolveThinkingMode），旧记录残留值不渲染。
+              hiddenKeys={["max_tokens", "enable_thinking", "thinking_mode"]}
             />
           )}
         </div>

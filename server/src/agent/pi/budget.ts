@@ -5,6 +5,7 @@
  */
 
 import {
+  DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
   DEFAULT_MODEL_RETRY_POLICY,
   DEFAULT_SAFETY_RESERVE_RATIO,
@@ -120,7 +121,7 @@ export function resolveManualPiCompactionOverrides(
 
 /** Model budget facts for the run-entry preflight, derived from config. */
 export function resolveSessionBudget(config: BioMedModelConfig): BioMedSessionBudget {
-  const contextWindow = config.contextWindow ?? 131_072;
+  const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   return {
     contextWindow,
     maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -199,7 +200,7 @@ export function shouldReconfigureSession(
   current: BioMedModelConfig,
   next: BioMedModelConfig,
 ): boolean {
-  const windowOf = (config: BioMedModelConfig): number => config.contextWindow ?? 131_072;
+  const windowOf = (config: BioMedModelConfig): number => config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   return (
     current.provider !== next.provider ||
     current.modelId !== next.modelId ||
