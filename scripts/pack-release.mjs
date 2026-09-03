@@ -361,25 +361,59 @@ function injectSupportedArchitectures(srcDir, key) {
 }
 
 // pnpm deploy materializes native binding variants for the PACK HOST only,
-// even though supportedArchitectures made install fetch the target's variants
-// into the workspace store. Copy those target-platform binding packages into
-// the staged bundle's .pnpm/node_modules fallback dir — Node's module
-// resolution walks through it, so e.g. pdfjs-dist finds the real
-// @napi-rs/canvas binding at runtime on the target OS. Native binding
-// packages are self-contained (a single prebuilt binary), so no further
-// dependency wiring is needed. Win bundles skip this: deploy already staged
-// the host's win32 bindings.
+// even though supportedArchitectures made install fetch the target's variants.
+// Two install layouts must be handled here:
+//  - hoisted (nodeLinker: hoisted, this repo's exFAT-safe setting): deploy
+//    materializes the host==target variant directly under
+//    server/node_modules/<pkg>-<os>-<arch> — for cross-packs the target
+//    variant sits at the SNAPSHOT's hoisted top level instead;
+//  - .pnpm virtual store (classic layout): target variants live under
+//    srcDir/node_modules/.pnpm/<entry>/node_modules/... and are copied into
+//    the bundle's .pnpm/node_modules fallback dir — Node's module resolution
+//    walks through it, so e.g. pdfjs-dist finds the real @napi-rs/canvas
+//    binding at runtime on the target OS. Native binding packages are
+//    self-contained (a single prebuilt binary), so no further dependency
+//    wiring is needed. Win bundles skip this: deploy already staged the
+//    host's win32 bindings.
+function findHoistedVariant(modulesDir, osName) {
+  const variantName = new RegExp(`-(?:${osName})-(?:x64|arm64)(?:-(?:gnu|msvc))?$`);
+  for (const entry of readdirSafe(modulesDir)) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (variantName.test(entry.name)) return entry.name;
+    if (entry.name.startsWith("@")) {
+      for (const scoped of readdirSafe(path.join(modulesDir, entry.name))) {
+        if (scoped.isDirectory() && variantName.test(scoped.name)) {
+          return `${entry.name}/${scoped.name}`;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 function stageTargetNativeBindings(srcDir, packageDir, key) {
   if (key === "win") return;
   const osName = key === "linux" ? "linux" : "darwin";
+  const stagedServerModules = path.join(packageDir, "server", "node_modules");
+  const fallbackDir = path.join(stagedServerModules, ".pnpm", "node_modules");
+
+  // Same-platform packing with the hoisted linker: deploy already put the
+  // target variant at the top level — nothing to stage.
+  const hoisted = findHoistedVariant(stagedServerModules, osName);
+  if (hoisted !== undefined) {
+    console.log(`[pack]   target native binding materialized by deploy: ${hoisted}`);
+    return;
+  }
+
   const storeDir = path.join(srcDir, "node_modules", ".pnpm");
-  const fallbackDir = path.join(packageDir, "server", "node_modules", ".pnpm", "node_modules");
   const variantPattern = new RegExp(`-(?:${osName})-(?:x64|arm64)(?:-(?:gnu|msvc))?@`);
   let staged = 0;
+  let alreadyDeployed = 0;
   for (const storeEntry of readdirSafe(storeDir)) {
     if (!storeEntry.isDirectory() || !variantPattern.test(storeEntry.name)) continue;
-    if (existsSync(path.join(packageDir, "server", "node_modules", ".pnpm", storeEntry.name))) {
-      continue; // deploy already materialized this variant
+    if (existsSync(path.join(stagedServerModules, ".pnpm", storeEntry.name))) {
+      alreadyDeployed += 1; // deploy already materialized this variant
+      continue;
     }
     const variantNodeModules = path.join(storeDir, storeEntry.name, "node_modules");
     for (const scope of readdirSafe(variantNodeModules)) {
@@ -398,7 +432,20 @@ function stageTargetNativeBindings(srcDir, packageDir, key) {
       }
     }
   }
-  if (staged === 0) {
+  // Cross-packing with the hoisted linker: the supportedArchitectures install
+  // fetched the target variant into the snapshot's hoisted top level.
+  const snapshotHoisted = findHoistedVariant(path.join(srcDir, "node_modules"), osName);
+  if (snapshotHoisted !== undefined) {
+    const source = path.join(srcDir, "node_modules", snapshotHoisted);
+    const dest = path.join(fallbackDir, snapshotHoisted);
+    if (!existsSync(dest)) {
+      mkdirSync(path.dirname(dest), { recursive: true });
+      copyDir(source, dest);
+      console.log(`[pack]   staged native binding for ${key}: ${snapshotHoisted}`);
+      staged += 1;
+    }
+  }
+  if (staged === 0 && alreadyDeployed === 0) {
     fail(
       `no ${osName} native binding packages found in the workspace store — ` +
         "supportedArchitectures install fetched no target variants; refusing to ship a bundle that cannot boot",
