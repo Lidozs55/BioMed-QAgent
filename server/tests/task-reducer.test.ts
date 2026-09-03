@@ -87,4 +87,59 @@ describe("reduceTaskEvents", () => {
 
     expect(snapshot.runs[0]?.execution_context).toBeNull();
   });
+
+  test("aggregates provider_search_info onto the assistant message with dedupe and cap", () => {
+    const results = (prefix: string, from: number, to: number) =>
+      Array.from({ length: to - from }, (_, index) => ({
+        site_name: `Site ${prefix}${from + index}`,
+        url: `https://site-${prefix}${from + index}.example`,
+      }));
+
+    const snapshot = reduceTaskEvents(metadata, [
+      event(1, { type: "run_queued", request_id: "request_1", input: "initial", execution_context: null }),
+      event(2, { type: "assistant_delta", delta: "checking sources" }),
+      event(3, { type: "provider_search_info", results: results("a", 0, 5) }),
+      event(4, { type: "provider_search_info", results: [
+        { site_name: "Site a0", url: "https://site-a0.example" }, // duplicate URL across calls
+        ...results("b", 15, 20),
+      ] }),
+    ]);
+
+    const assistant = snapshot.messages.find((message) => message.role === "assistant");
+    // 5 + 1 duplicate (dropped) + 5 = 10 unique entries
+    expect(assistant?.search_results).toHaveLength(10);
+    expect(assistant?.search_results?.[0]).toEqual({ site_name: "Site a0", url: "https://site-a0.example" });
+    expect(assistant?.search_results?.at(-1)?.url).toBe("https://site-b19.example");
+  });
+
+  test("caps aggregated search results at twenty and keeps early batches", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      site_name: `Site ${index}`,
+      url: `https://many-${index}.example`,
+    }));
+
+    const snapshot = reduceTaskEvents(metadata, [
+      event(1, { type: "run_queued", request_id: "request_1", input: "initial", execution_context: null }),
+      // Batch lands before the first delta: stashed, then merged on creation.
+      event(2, { type: "provider_search_info", results: many }),
+      event(3, { type: "assistant_delta", delta: "answer" }),
+    ]);
+
+    const assistant = snapshot.messages.find((message) => message.role === "assistant");
+    expect(assistant?.search_results).toHaveLength(20);
+    expect(assistant?.search_results?.at(-1)?.url).toBe("https://many-19.example");
+  });
+
+  test("drops stashed search batches on steer boundaries", () => {
+    const snapshot = reduceTaskEvents(metadata, [
+      event(1, { type: "run_queued", request_id: "request_1", input: "initial", execution_context: null }),
+      event(2, { type: "provider_search_info", results: [{ site_name: "Old", url: "https://old.example" }] }),
+      event(3, { type: "run_steered", input: "focus elsewhere" }),
+      event(4, { type: "assistant_delta", delta: "new turn" }),
+    ]);
+
+    const assistant = snapshot.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("new turn");
+    expect(assistant?.search_results).toBeUndefined();
+  });
 });
