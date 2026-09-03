@@ -127,7 +127,7 @@ describe("Pi system prompt", () => {
       /if a listed static family exactly matches the product, use the static route/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /author the FamilySpec topology yourself/i,
+      /never hand-write topology or pass a dynamic FamilySpec to the static validator/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never infer provider availability from static enums/i,
