@@ -12,7 +12,8 @@
 > - **实现状态**：迁移 Phase 0-9 已完成；显式 `in_process_unisolated` Family Host/Core
 >   publication chain 已形成稳定 `main` 基线。唯一正式拓扑为
 >   TypeScript Host 权威实现 formal `/api/v1`、durable Task/Run/Event、模型设置、
->   product API 与 TS Dataset Core；Agent = Pi（`server/src/agent/pi-adapter.ts`）。
+>   product API 与 TS Dataset Core；Agent = Pi（适配层包 `server/src/agent/pi/`，公共入口
+>   `server/src/agent/pi-adapter.ts`）。
 >   legacy FastAPI / Python Core / experimental Pi / rollback feature flags 已全部
 >   物理删除（`backend/` 不复存在）；Python 进程边界只剩按需启动的
 >   `database/bridge.py`（JSONL named-op persistence）。
