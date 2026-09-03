@@ -3,7 +3,7 @@
 % =====================================================================
 % 2026-09-02 章节重构（框架版，第二轮）：
 %   5.1 实验设计总览与评测协议 —— 两层实验入口（全局一览 + 2x2x2 对照）
-%   5.2 十案例结果一览         —— 一页略写总览表【结果列待填】
+%   5.2 十案例结果一览         —— 一页略写总览表【gold1--5 flash 已填；gold6--10 与 max 行待补】
 %   5.3 2x2x2 对照实验设计     —— 因子、环境输入构成、控制变量【关键事实已落地】
 %   5.4 比较维度与指标定义     —— 时长 / token / 完整度 / 真实性
 %   5.5 对照实验结果           —— 效率表 / 质量表 / 观察框架【全部待填】
@@ -25,7 +25,7 @@
 本项目整理了 10 份参考输入输出样例，覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。BioMed QAgent 以统一协议（\ref{sec:eval-protocol} 节）对十个案例全量执行，输入只有对应的 \code{TOPIC.txt} 原文。表~\ref{tab:gold-overview} 给出结果总览。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=1.3\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.3\hsize}L>{\hsize=0.8\hsize}L}
-\caption{BioMed QAgent 十案例结果一览（略写；结果待填）}\label{tab:gold-overview}\\
+\caption{BioMed QAgent 十案例结果一览（略写；gold1--5 为 flash 实测，gold6--10 待补）}\label{tab:gold-overview}\\
 \toprule
 \textbf{案例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
 \midrule
@@ -34,11 +34,11 @@
 \textbf{案例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
 \midrule
 \endhead
-gold1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & （待填） & （待填） & （待填） \\
-gold2 & LUAD EGFR 突变表达的基因 / 探针双粒度整合 & （待填） & （待填） & （待填） \\
-gold3 & EGFR NSCLC 靶点多源证据整合 & （待填） & （待填） & （待填） \\
-gold4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & （待填） & （待填） & （待填） \\
-gold5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & （待填） & （待填） & （待填） \\
+gold1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & 成功发布 & GSE86374 肿瘤/正常表达长表（GPL6244 探针→基因映射），5{,}294{,}223 行，校验通过 & 26 min / 5{,}952 K \\
+gold2 & LUAD EGFR 突变表达的基因 / 探针双粒度整合 & 成功发布 & GSE31547 探针级 + 基因级双发布（各 1{,}114{,}150 行），校验通过 & 23 min / 10{,}999 K \\
+gold3 & EGFR NSCLC 靶点多源证据整合 & 成功发布 & 靶点证据（11 行）+ 结构（6 行）+ 药物活性（100 行）三发布，校验通过 & 12 min / 3{,}818 K \\
+gold4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & 成功发布 & 五表：结构 2 / 病毒蛋白 2 / Spike 变异 110 / 界面残基 119 / 文献 2，校验通过 & 61 min / 9{,}916 K \\
+gold5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & 成功发布 & ChEMBL 活性 + 化合物交叉对照双发布（各 100 行），校验通过 & 14 min / 2{,}493 K \\
 gold6 & EGFR 突变体抑制实验与论文图表提取 & （待填） & （待填） & （待填） \\
 gold7 & 阿尔茨海默病 GWAS 风险位点多源整合 & （待填） & （待填） & （待填） \\
 gold8 & 药物性肝损伤（DILI）风险药物证据整合 & （待填） & （待填） & （待填） \\
@@ -48,6 +48,8 @@ gold10 & 肠道微生物组-疾病关联整合（T2D /\allowbreak{} IBD /\allowb
 \end{xltabular}
 
 本表为结果总览：终态沿用监督程序三分类口径，交付与成本列为缩略口径。逐案例的事件流、发布清单、逐件 SHA-256 重验记录与人工复核记录随项目资料完整保留，可按案例逐项核查复现。
+
+\textbf{终态简报（gold1--5，qwen3.8-flash）}。五个案例全部以\emph{成功发布}到达终态：每次运行都以当前 commit 的不可变 Publication 收束，发布产物逐件通过字节与 SHA-256 重验，无一例落入“未发布阻塞”或“失败或取消”。单案例墙钟时长 12--61 min（中位 23 min），token 总耗 2.5M--11.0M（中位 5{,}952 K）；全程零人工审批介入（评审与权限请求零发生），单次运行内出现的工具级错误均由 agent 依重试与止损条款自行恢复，未累积为运行失败。
 
 \section{2×2×2 对照实验设计}\label{sec:factorial-design}
 
@@ -115,7 +117,7 @@ token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
 \midrule
 \endhead
-gold1 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
+gold1 & flash & BioMed QAgent & 成功发布 & 26 min & 5{,}952 K \\
 gold1 & flash & Qoder & （待填） & 168 min & 52,940 K \\
 gold1 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
 gold1 & max & Qoder & （待填） & 35 min & 4,474 K \\
