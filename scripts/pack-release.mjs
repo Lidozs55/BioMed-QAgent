@@ -83,6 +83,11 @@ const DESKTOP_EXTRAS = {
     { name: "typing_extensions", version: "4.12.2", checkDir: "typing_extensions.py" },
     { name: "pythonnet", version: "3.0.5" },
     { name: "clr-loader", version: "0.2.6", checkDir: "clr_loader" },
+    // clr_loader imports cffi at runtime; cffi pulls pycparser. With --no-deps
+    // every transitive module must be listed (verified against a real WebView2
+    // window: pythonnet -> clr_loader -> cffi -> pycparser -> .NET Framework).
+    { name: "cffi", version: "1.17.1", checkDir: "cffi" },
+    { name: "pycparser", version: "2.22", checkDir: "pycparser" },
   ],
   macos: [
     { name: "pywebview", version: "5.4.0", checkDir: "webview" },
