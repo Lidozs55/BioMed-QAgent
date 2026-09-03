@@ -16,6 +16,12 @@ export {
   topicStem,
   type ResearchDataGuidanceOptions,
 } from "./guidance.js";
+export {
+  READ_DATASET_CORE_SOURCE_TOOL_NAME,
+  createReadDatasetCoreSourceTool,
+  defaultCoreSourceRoot,
+  type CoreSourceOptions,
+} from "./core-source.js";
 export { noopHooks, type QueryStatus, type ToolHooks, type ToolServiceDeps } from "./tool-hooks.js";
 export {
   LOOKUP_GWAS_CATALOG_TOOL_NAME,
