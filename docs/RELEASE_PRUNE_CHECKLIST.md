@@ -19,21 +19,25 @@
 
 ## 2. 排除 dev-only 能力（按能力与路径识别，不按哈希）
 
-Agent 自代码访问设计只在 `dev` 可见可用：
+源码**只读**访问是正式产品能力，可以随产品代码合并到 `main`，不属于本节
+dev-only 清单。受支持的发布包必须保留 Agent 运行时的源码根：
+`server/src/` 与 `packages/contracts/src/`。standalone 包由
+`scripts/pack-release.mjs` 显式复制并校验这两个目录；CI bundle 由
+`.github/workflows/package.yml` 显式 staging。
 
-- `read_dataset_core_source` 工具：`server/src/agent/tools/core-source.ts`；
-  注册点 `business-tools.ts`、`tools/index.ts`、`skill-tool-map.ts`、
-  `.pi/skills/dataset-construction/SKILL.md` 段落；相关测试
-  （`tools-deterministic.test.ts` 的测试块、`skill-tool-map.test.ts` 的条目）。
-- `server/src/agent/phase1-prompt.ts` 中的两项执行授权：Agent 自行编写
-  FamilySpec 拓扑、读 Core 源码修 rejection——恢复授权前措辞；
-  `pi-adapter.test.ts` 的断言须与恢复后的措辞一致。
+以下能力仍只在 `dev` 可见可用：
+
+- Agent 自行编写 FamilySpec 拓扑；`server/src/agent/phase1-prompt.ts` 中该项
+  执行授权在 release 分支须恢复为未授权措辞，`pi-adapter.test.ts` 的断言须同步。
+- Agent 修改仓库代码（任何 write/edit 工具或等价能力）。治理边界见
+  `docs/AGENT_SELF_MODIFICATION_CHARTER.md`；该能力未启用，宪章本身也必须随
+  发布剪枝，永不进入 `main`。
 
 历史来源：分支 `feat/relax-publication-gates`，提交 `cef17009`、`b1fd4e4b`
 ——仅作注记；哈希会因 amend/rebase 失效，以能力与路径为准。
 
-校验：`git diff main..<release-branch>` 中不得出现 `read_dataset_core_source`
-及授权措辞的任何实例。
+校验：release 分支不得把 Agent 自行编写拓扑或任何代码 write/edit 能力带入
+`main`；但不得因本节而删除 `read_dataset_core_source` 或源码只读授权。
 
 ## 3. 必须发布（不得与 dev-only 集一起回退）
 

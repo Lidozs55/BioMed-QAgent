@@ -577,9 +577,18 @@ for (const key of selected) {
     ["--filter", "@biomed/server", "deploy", "--prod", "--legacy", path.join(packageDir, "server")],
     { cwd: srcDir },
   );
+  // Source remains part of the supported runtime contract: Phase 1 validates
+  // these roots and the read-only source tool reads Dataset Core directly.
+  copyDir(path.join(srcDir, "server", "src"), path.join(packageDir, "server", "src"));
+  copyDir(
+    path.join(srcDir, "packages", "contracts", "src"),
+    path.join(packageDir, "packages", "contracts", "src"),
+  );
   for (const staged of [
     path.join(packageDir, "server", "dist", "index.js"),
     path.join(packageDir, "server", "node_modules", "@biomed", "contracts", "dist", "index.js"),
+    path.join(packageDir, "server", "src", "dataset", "service", "dataset-core.ts"),
+    path.join(packageDir, "packages", "contracts", "src", "index.ts"),
   ]) {
     if (!existsSync(staged)) fail(`expected staged file missing after deploy: ${staged}`);
   }

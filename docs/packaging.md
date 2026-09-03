@@ -26,7 +26,9 @@ pnpm run pack -- --keep-temp                 # 保留中间构建目录（调试
 target/biomed-qagent-<version>-<win|linux|macos>/
 ├── start.bat / start.sh     启动器（模型与 API key 在 Web 设置中配置）
 ├── README.txt               目标机使用说明
-├── server/                  编译后的 Application Host + pnpm deploy 剪枝的生产依赖
+├── server/                  编译后的 Application Host + `src/` 源码 + pnpm deploy 剪枝的生产依赖
+│   └── src/                 Agent 只读源码所需（至少包含 `src/dataset/`）
+├── packages/contracts/src/  Agent 只读源码所需的 contracts 源码
 ├── frontend/dist/           前端产物（host 以 --static 托管）
 ├── database/                Python 持久化桥（纯标准库）
 ├── .pi/                     agent skills
@@ -74,6 +76,21 @@ https_proxy=http://127.0.0.1:7897 pnpm run pack
 - **CLI 参数转发**：pnpm 11 会把 `--` 分隔符原样转发给脚本，parseArgs 会把它当 positional 边界吞掉其后所有参数（历史上 `--platform=win` "能用"纯属默认值碰巧是 win）。脚本已改为过滤游离的 `--`，`pnpm run pack -- --platform=all` 与 `pnpm run pack --platform=all` 等价。
 - **验证情况**：win 包在 Windows 实测独立启动（health ok / 静态 200 / bridge 进程确用内嵌 python）；linux 包在 WSL Ubuntu-22.04 全链路实测通过（health 200 / 静态页 200 / databases 接口返回真实数据 / bridge 进程为内嵌 `python3.12`，内嵌 numpy 2.5.2 / scipy 1.18.1 数值计算通过。注：从 Windows 盘符的 9P 挂载冷启动需约 2 分钟加载模块，属 WSL 跨文件系统开销，原生 ext4 上无此问题）；macos 包未经真机验证（wheel 解析与绑定落位已验证），建议首次使用前在真机跑一次 `start.sh`。
 - **分发注意**：从 Windows 分发建议打 tar.gz（zip 会丢执行位）；linux 目标机要求 glibc ≥ 2.28；macOS 目标机要求 Apple Silicon + macOS 12+。
+
+## 源码只读能力与打包要求
+
+Agent 的源码读取是正式产品能力，不是 dev-only 能力。运行时会从发行根目录读取
+`server/src/` 与 `packages/contracts/src/`；其中 `read_dataset_core_source` 直接读取
+`server/src/dataset/` 下的 TypeScript 实现，源码映射文件不包含 `sourcesContent`，不能
+替代原始源码。因此不支持只分发 `server/dist` + `frontend/dist` 的精简包。
+
+- **Git checkout：** `pnpm build && pnpm start` 直接使用 checkout 中保留的源码。
+- **CI bundle：** `.github/workflows/package.yml` staging 阶段显式复制
+  `server/src` 和整个 `packages`，目标机按说明安装依赖后运行。
+- **Standalone bundle：** `pnpm run pack` 从已提交的 git ref 构建，显式把上述两个
+  源码根复制到 bundle，并在 staging 阶段检查代表文件；源码缺失时打包立即失败。
+- **代码修改：** Agent 的任何代码 write/edit 能力仍是 dev-only，且当前未启用；不得
+  通过打包把代码写入能力带入 `main`。
 
 ## 边界与已知事项
 

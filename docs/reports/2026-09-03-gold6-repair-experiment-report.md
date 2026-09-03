@@ -394,9 +394,10 @@ provenance coverage 138/138 为准。
    可复核的 point-bearing VLM carrier。
 2. **来源覆盖不等于 activity 覆盖。** 3 篇 paper 中只有 PMC10408569 和 PMC5355725 贡献
    最终 activity rows。
-3. **R7c3 使用 dev-only 能力。** 产品 commit 含 `read_dataset_core_source` 和 agent-authored
-   topology 等 dev-only 自代码访问能力；按当前分支治理，不得原样发布到 `main`。发布 PR
-   必须剪除此能力，同时保留合法的 Dataset Core gate/topology 产品修复。
+3. **R7c3 使用了不同边界的能力。** 产品 commit 含 `read_dataset_core_source` 与
+   agent-authored topology；前者是受限只读源码能力，正式打包会保留并可进入 `main`，后者
+   仍是 dev-only，发布 PR 必须剪除 agent-authored topology，同时保留合法的 Dataset Core
+   gate/topology 产品修复。Agent 修改仓库代码的任何 write/edit 能力也仍为 dev-only。
 4. **dirty-build caveat。** R7c3 worktree 当时有一行未提交的 TS2731 构建兼容修复：
    `runtime_limits.${String(key)}`。Health 报告 commit 仍为 `ae271a79`；若要求 release-grade
    可重现性，应从包含该修复的干净不可变 dev commit 重跑。
