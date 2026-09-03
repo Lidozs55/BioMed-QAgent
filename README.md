@@ -18,10 +18,12 @@ BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可
 前往 [GitHub Releases](https://github.com/Lidozs55/BioMed-QAgent/releases) 下载对应平台的部署包。包内自包含内嵌 Node.js 与 CPython（预装 numpy/scipy），目标机无需预装任何环境：
 
 1. 解压后启动：
-   - Windows：双击 `start.bat`
+   - Windows：双击 `BioMed-QAgent.exe`（桌面窗口打开界面，无命令行；桌面窗口组件不可用时自动改用浏览器打开）。`start.bat` 保留为命令行/排障入口。
    - Linux/macOS：`chmod +x start.sh` 后执行 `./start.sh`
 2. 访问 `http://127.0.0.1:5173`，在「设置 → 模型」中添加 Provider 和 API key 并激活主模型；图形任务需另选具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。
 3. 如需修改端口，在包目录下创建 `.env` 并设置 `PORT`（默认 5173）。
+
+Windows 桌面窗口基于 pywebview（WebView2）。启动异常时查看包内 `launcher.log`；设置环境变量 `BIOMED_FORCE_BROWSER=1` 可跳过桌面窗口直接用浏览器。exe 未做代码签名，首次运行如遇 SmartScreen 提示请选择「更多信息 → 仍要运行」。
 
 Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时执行：
 `runtime/node/bin/node server/node_modules/playwright/cli.js install chromium`（Windows 为 `runtime\node\node.exe`）。
@@ -59,6 +61,7 @@ pnpm start
 | `server/`              | TS Host、Pi adapter、durable runtime、Dataset Core |
 | `frontend/`            | React 19 + Vite + Tailwind v4 + shadcn/ui    |
 | `database/`            | stdlib Python JSONL/SQLite persistence bridge |
+| `packaging/windows/`   | Windows 桌面启动器（pywebview GUI shell）      |
 | `.pi/skills/`          | Agent 领域技能（数据源、分析、数据构建规范） |
 | `examples/families/`   | 非生产 family 示例                           |
 

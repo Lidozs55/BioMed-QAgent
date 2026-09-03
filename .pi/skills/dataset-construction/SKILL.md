@@ -129,14 +129,7 @@ Treat only the resulting Publication as formal output.
    review-status or human-review-status remains human-review-pending until
    genuine HIL acceptance exists.
 6. Treat a failed result as actionable state. Retry unchanged inputs only when
-   retryable is true and the external condition may have changed. When a
-   provider, validation, transform-admission, or publication rejection is
-   ambiguous and a second adjusted attempt still fails, stop guessing parameter
-   shapes and call `read_dataset_core_source` on the implementing file — e.g.
-   `acquisition/<provider>.ts`, `families/<family>/validation.ts`,
-   `transform-admission/admission.ts`, `dynamic-family/preflight.ts` — to read
-   the exact accepted contract, then fix the single rejected fact to that shape.
-   The source is the authoritative description of what the gate accepts. A non-retryable
+   retryable is true and the external condition may have changed. A non-retryable
    static adapter/transform rejection or requested-field/topology mismatch means
    the registered static family is unsuitable: stop static execution and required-
    field vocabulary probing, then switch immediately to the fixed dynamic
