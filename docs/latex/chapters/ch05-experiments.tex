@@ -117,25 +117,25 @@ token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
 \midrule
 \endhead
-gold1 & flash & BioMed QAgent & 成功发布 & 26 min & 5{,}952 K \\
-gold1 & flash & Qoder & （待填） & 168 min & 52,940 K \\
-gold1 & max & BioMed QAgent & 成功发布 & 50 min & 3{,}286 K \\
-gold1 & max & Qoder & （待填） & 35 min & 4,474 K \\
+gold1 & flash & BioMed QAgent & 成功发布 & \textbf{26 min} & 5{,}952 K \\
+gold1 & flash & Qoder & 存在\code{output/} & 168 min & 52,940 K \\
+gold1 & max & BioMed QAgent & 成功发布 & 30 min & \textbf{4{,}182 K} \\
+gold1 & max & Qoder & 存在\code{output/} & 35 min & 4,474 K \\
 gold6 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold6 & flash & Qoder & （待填） & 175 min & 67,912 K \\
+gold6 & flash & Qoder & 存在\code{output/} & 175 min & 67,912 K \\
 gold6 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold6 & max & Qoder & （待填） & 46 min & 5,160 K \\
+gold6 & max & Qoder & 存在\code{output/} & 46 min & 5,160 K \\
 \bottomrule
 \end{xltabular}
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=0.5\hsize}L>{\hsize=1.0\hsize}L>{\hsize=0.7\hsize}L>{\hsize=0.7\hsize}L>{\hsize=2.7\hsize}L}
 \caption{$2\times2\times2$ 对照：质量（完整度 / 真实性，待填）}\label{tab:factorial-quality}\\
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口（略）} \\
+\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口（略）} \\
+\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口} \\
 \midrule
 \endhead
 gold1 & flash & BioMed QAgent & 6/7（初步） & 通过 & 需求②差异表达未执行（交付肿瘤/正常分组表供下游分析） \\
