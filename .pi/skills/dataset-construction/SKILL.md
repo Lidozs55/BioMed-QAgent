@@ -25,7 +25,10 @@ Treat only the resulting Publication as formal output.
    transform validity, source availability, or publication eligibility.
 2. After source discovery and vetting, construct one DatasetExecutionSpec per
    dataset family + row granularity (expression, mutation, pathway demands
-   split into separate requirements).
+   split into separate requirements). Within the request's scope, prefer a
+   diverse, complementary source set (several independent series, accessions,
+   or studies) over a single-source deep dive; narrow to one source only when
+   the request names its sources or only one relevant source exists.
 3. Choose exactly one execution route before substantive acquisition:
    - Static-first heuristic: when `inspect_dataset_execution_routes` lists a
      static family whose tables cover the requested product (for example,
