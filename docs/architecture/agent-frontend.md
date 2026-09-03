@@ -15,10 +15,30 @@
 ### 16.1 Skill 内容与直接工具
 
 - **Skill 知识**：`.pi/skills/<name>/SKILL.md`（frontmatter name/description +
-  SOP 正文），由 Pi 资源加载器按任务注入；Pi 侧经 `pi-adapter.ts` 的 skill
-  roots 加载，缺失时优雅降级不崩溃。
+  SOP 正文），经 `pi-adapter.ts` 的 skill roots 加载，缺失时优雅降级不崩溃。
+  注入链路有两个上游陷阱（2026-09 审计发现并修复，集成测试
+  `server/tests/pi-adapter-skills-injection.test.ts` 钉住）：
+  1. **Pi 的 read 门控**：Pi 只在活动工具集包含字面名为 `read` 的工具时，才把
+     `<available_skills>` 清单追加进自定义 system prompt（上游
+     `customPromptHasRead`）。本仓库的读取工具叫 `workspace_read`，因此清单曾被
+     静默丢弃，模型完全看不到 SKILL.md 语料，而 phase1 prompt 里的
+     "consult the matching skill" 指令悬空。修复：adapter 注册
+     `skillReadToolDefinition`——复用 Pi 原生 `createReadToolDefinition` 工厂，
+     注入受控 operations，把读写范围限制在 curated skill roots（resolve 与
+     realpath 双重围栏，防符号链接逃逸），并让它在整个 Session 常驻激活
+     （`activate_agent_tools` 的回调也会保留它——一旦被移除，下一轮 prompt
+     重建时清单会再次消失）。
+  2. **加载器的外来技能扫描**：`DefaultResourceLoader` 会额外扫描
+     `~/.agents/skills` 与从 cwd 向上到 git 根的每个 `.agents/skills`（任务
+     workspace 位于仓库内，必然命中仓库自身的 `.agents/skills`）。若不治理，
+     开启清单后用户级技能（如 bailian-*）会泄漏进生产 system prompt。修复：
+     `curateSkillsOverride` 过滤器只保留位于 curated skill roots 之下的技能。
 - **稳定映射**：`server/src/agent/skills/skill-tool-map.ts` 是 Skill ↔ Tool
   名称的单一事实源；`server/tests/skill-manifests.test.ts` 钉住，禁止漂移。
+  首轮激活的 Dataset Core 工具名单抽为
+  `durable-agent-runtime.ts` 的 `INITIAL_ACTIVE_TOOL_NAMES`，由
+  `server/tests/initial-active-tools.test.ts` 钉住与 dataset-construction
+  条目的一致性。
 - **直接工具实现**：业务工具在 `server/src/agent/tools/`（PubMed/NCBI、GEO、
   GDC/Xena、GWAS Catalog、ChEMBL/UniProt/PDB/PubChem/Reactome、浏览器与网页截图、PDF/VLM、
   统计绘图、local cache 等），经 `createBusinessToolBundle` 注册进 Pi Session。
