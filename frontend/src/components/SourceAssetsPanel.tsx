@@ -108,7 +108,7 @@ export default function SourceAssetsPanel({ taskId }: SourceAssetsPanelProps) {
             {items.map((item) => (
               <Card key={item.receipt_id} size="sm">
                 <CardHeader>
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="min-w-0">
                       <CardTitle className="truncate" title={item.relative_path}>
                         {item.relative_path}
