@@ -20,9 +20,8 @@
 - API keys: load from environment variables or a local untracked `.env`; never
   commit real secrets, and never log or expose raw credentials (the settings
   surfaces mask stored keys).
-- Package managers: **pnpm** for TypeScript (never `npm`); **uv** for Python —
-  the only Python project is `database/`, managed through the root
-  `pyproject.toml` / `uv.lock`.
+- Package managers: **pnpm** for TypeScript (never `npm`); **uv** for Python
+  (root `pyproject.toml` / `uv.lock`).
 - `npx`/`npm i -g` installs in this file (the Commonly CLI in § Commonly Setup)
   are the single exception to the "no npm" rule — they are Node package
   installs, not the repo's dependency manager.
@@ -103,10 +102,7 @@ Before starting any task, consult:
 ```bash
 pnpm install --frozen-lockfile    # single workspace lockfile
 pnpm dev                          # TS Host + Pi + TS Core + Vite (only normal entry)
-pnpm test                         # full workspace tests. ONLY use for cross-cutting changes. Prefer targeted filters (see Quality Gates).
-pnpm --filter @biomed/server test     # targeted: server/ changes only
-pnpm --filter @biomed/frontend test   # targeted: frontend/ changes only
-pnpm --filter @biomed/contracts test  # targeted: packages/contracts/ quick feedback
+pnpm test                         # full workspace tests — cross-cutting changes only; per-area commands: see Quality Gates
 pnpm lint                         # workspace lint
 pnpm typecheck                    # workspace TypeScript checks
 pnpm build                        # workspace production builds
@@ -119,34 +115,16 @@ throttling options see [docs/architecture/test-concurrency.md](docs/architecture
 ### Python database bridge (cwd: repository root)
 
 ```bash
-uv sync                                     # install database project deps
-uv run python database/bridge.py --self-test
-uv run pytest database/tests
-uv run ruff check database                  # zero warnings allowed
+uv sync    # install database project deps
 ```
 
-The bridge is stdlib-only (argparse/json/sqlite3/pathlib/dataclasses); pytest and
-ruff are dev-only dependencies.
-
-### Frontend
-
-Run from the repository root with the workspace filter (running the same scripts
-inside `frontend/` also works — pnpm resolves the workspace root; there is a
-single workspace lockfile):
-
-```bash
-pnpm --filter @biomed/frontend build        # production build (tsc -b && vite build)
-pnpm --filter @biomed/frontend lint         # ESLint (--max-warnings 0)
-pnpm --filter @biomed/frontend tsc          # type check (tsc --noEmit)
-pnpm --filter @biomed/frontend test         # unit tests once (vitest run)
-pnpm --filter @biomed/frontend test:watch   # unit tests watch mode (vitest)
-pnpm dev:frontend-standalone                # standalone Vite diagnostic; not the normal entry
-```
+Test/lint commands for `database/` (`--self-test`, pytest, ruff) are listed
+under Quality Gates.
 
 ## Technical Conventions
 
 - **Python**: PEP 8, mandatory type annotations on all function signatures;
-  restricted to `database/`; flat imports.
+  flat imports.
 - **TypeScript / React**: follow shadcn/ui component patterns and Tailwind
   utility classes; use the `@/` path alias.
 - **Type safety**: never suppress type errors — no `as any`, `@ts-ignore`, or
@@ -183,39 +161,30 @@ pnpm dev:frontend-standalone                # standalone Vite diagnostic; not th
 ## Commonly Setup
 
 Everyone in the pod runs a local Commonly agent via the **official CLI +
-webhook-SDK** (`@commonlyai/cli`), **not** MCP. The `commonly_*` names in this file
-are the kernel tool *surface* (tasks, messages, memory, board); under the CLI flow
-they are realized in the agent's Python SDK handler, not called as MCP tools.
+webhook-SDK** (`@commonlyai/cli`), **not** MCP — the CLI flow below is the only
+path in this repository.
 
 ```bash
-npm i -g @commonlyai/cli@latest   # once, per machine (Node 20+)
+npm i -g @commonlyai/cli@latest   # once, per machine
 commonly login                     # interactive, once per machine (verify: commonly whoami)
 bash scripts/commonly-up.sh        # POSIX/Git Bash; Windows-native: scripts\commonly-up.bat
 ```
 
-The script checks the CLI and login state, scaffolds the webhook-SDK agent into
-`scripts/commonly-agent/` on first run (idempotent), then runs it (Ctrl+C to
-stop). The CLI bootstraps and launches the agent; the webhook-SDK process
-carries the agent identity, polls events, and posts agent replies. MCP is not a
-prerequisite for this repository — the CLI flow above is the only path; if the
-CLI/SDK agent process is not available, report `[BLOCKED]` rather than claiming
-that a check-in happened.
+`scripts/commonly-up.sh` checks the CLI and login state, scaffolds the
+webhook-SDK agent into `scripts/commonly-agent/` on first run (idempotent), then
+runs it (Ctrl+C to stop). If the CLI/SDK agent process is not available, report
+`[BLOCKED]` rather than claiming that a check-in happened.
 
-- **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
-  `.env` when present; both `scripts/commonly-up.{sh,bat}` fall back to this same
-  default value.
+- **Pod ID**: `6a520e34f4baa9b280bba195` (default in `scripts/commonly-up.{sh,bat}`;
+  override via `COMMONLY_POD_ID` in the project `.env`).
 - **Agent name**: first positional arg of `scripts/commonly-up.sh` >
-  `COMMONLY_AGENT_NAME` > `<hostname>-agent`, sanitized to the registry charset
-  `[a-z0-9-]` (lowercased, other chars dropped, edge dashes trimmed).
+  `COMMONLY_AGENT_NAME` > `<hostname>-agent` (sanitized to `[a-z0-9-]`).
 - **Runtime token** lives in `scripts/commonly-agent/.commonly-env`
   (git-ignored); never print or commit it.
 - **Check-in integrity**: do **not** use a human or operator `commonly pod send`
   session as a substitute for agent check-ins — it misattributes the message.
-  The `[TASK]`, `[DONE]`, and `[BLOCKED]` rules and board synchronization
-  requirements are unchanged.
-- Known CLI/tooling quirks (e.g. the v0.1.11 `agent init` template bug) are
-  tracked in [docs/ISSUES.md](docs/ISSUES.md). Official docs are authoritative
-  for the full tool surface:
+- Known CLI/tooling quirks are tracked in [docs/ISSUES.md](docs/ISSUES.md).
+  Official docs are authoritative for the full tool surface:
   [CONNECTING_LOCAL_AGENTS.md](https://github.com/Team-Commonly/commonly/blob/main/docs/agents/CONNECTING_LOCAL_AGENTS.md).
 
 ## Commonly Workflow
@@ -238,8 +207,8 @@ When told to handle a Commonly board task:
 4. **Verify & commit**: after self-check passes,
    `git commit -m "[TASK-XXX] <type>: description" && git push`
    (message format: § Quality Gates).
-5. **Merge & close**: merge to `dev` (see Git Workflow), post `[DONE]`
-   (branch info required), then complete the board task.
+5. **Merge & close**: merge to `dev` (see Git Workflow), post `[DONE]`, then
+   complete the board task.
 6. Stuck for a full round with no progress → post `[BLOCKED]` and unclaim.
 
 ### Direct-instruction workflow (non-board task)
@@ -253,8 +222,9 @@ No claim/complete actions are needed.
 
 ### High-value findings
 
-If research or review reveals issues worth tracking, start a discussion with
-`[Q]`, or create a board task (title prefix `[P0]` / `[P1]` / `[P2]`, `source` set,
+If work reveals issues worth tracking — research/review findings, new bugs,
+tech debt, uncovered requirements — start a discussion with `[Q]`, or create a
+board task immediately (title prefix `[P0]` / `[P1]` / `[P2]`, `source` set,
 hard dependencies in `dep`).
 
 ### Keep the board in sync with `docs/TODO.md`
@@ -269,23 +239,20 @@ Commonly board is the execution-status view. To avoid circular updates:
   matching `docs/TODO.md` checkbox.
 - Never edit the same semantic field (status, priority, claim/assignee, task
   description) in both places at once.
-- Create board tasks immediately for new bugs / tech debt / uncovered requirements
-  found during work (prefix `[P0]` / `[P1]` / `[P2]`, fill `dep`).
 
 ### Coordination & message prefixes
 
 - Before a branchless direct edit to `dev`, scan recent messages (~10) to confirm
   no other agent is working on the same file; if a conflict is suspected, negotiate
   via `[Q]` or switch to a branch.
-- After pushing/merging a branch, always post `[DONE]` summarizing changes, impact,
-  and the branch name.
+- After pushing/merging a branch, post `[DONE]` (content: see table).
 
-| Prefix      | Purpose                                   |
-| ----------- | ----------------------------------------- |
-| `[TASK]`    | Task start check-in / new task record     |
-| `[Q]`       | Question, discussion                      |
-| `[DONE]`    | Work completed (must include branch info) |
-| `[BLOCKED]` | Blocker announcement                      |
+| Prefix      | Purpose                                               |
+| ----------- | ----------------------------------------------------- |
+| `[TASK]`    | Task start check-in / new task record                 |
+| `[Q]`       | Question, discussion                                  |
+| `[DONE]`    | Work completed — branch name, change summary, impact  |
+| `[BLOCKED]` | Blocker announcement                                  |
 
 - Use `replyToMessageId` to keep threads.
 - Every message must contain substantive information; avoid empty notifications.
@@ -334,8 +301,7 @@ Merge steps:
   sides touched the same files), `git fetch origin dev && git merge origin/dev`.
 - After resolving conflicts, **re-run targeted tests for the affected areas**.
 - Check out local `dev`, ensure it is clean and up to date, then merge with
-  `git merge --no-ff <branch>`; push `dev`.
-- After merging, post a `[DONE]` message summarizing the result.
+  `git merge --no-ff <branch>`; push `dev`, then post `[DONE]`.
 
 Merge constraints:
 
@@ -345,10 +311,9 @@ Merge constraints:
   branch; for immediate shared-branch breakage, `git revert -m 1 <merge-commit>`
   is allowed and must be announced (`[DONE]` with the reason, or `[Q]` if
   unsure).
-- One merge to `dev` = one complete functional unit; bundle related
-  `feat`/`fix`/test/doc changes into the same branch and merge together.
-- One feature, one merge: don't chain multiple merges for sub-steps; if not
-  complete, keep committing on the branch.
+- One merge to `dev` = one complete functional unit: bundle related
+  `feat`/`fix`/test/doc changes into the same branch; don't chain multiple
+  merges for sub-steps — if not complete, keep committing on the branch.
 
 ### Quality Gates
 
@@ -363,18 +328,19 @@ pushing a branch and before merging to `dev`**:
   - `database/` → `uv run python database/bridge.py --self-test`,
     `uv run pytest database/tests`, `uv run ruff check database`
   - Cross-cutting sources (`packages/contracts/`, root config files,
-    `scripts/`) → full `pnpm test`, because the blast radius spans workspaces.
+    `scripts/`) → full `pnpm test`, because the blast radius spans workspaces
+    (contracts-only tweaks may use `pnpm --filter @biomed/contracts test` for
+    quick feedback first).
 
 **Failing-test loop**: while tests fail, re-run only the failing tests —
 `pnpm --filter <pkg> test -- <test-file>` or
-`uv run pytest database/tests/<file>::<case>` — until every failure passes;
-If a fix breaks a previously passing test, stop and fix the regression 
-before proceeding. Then re-run the targeted suite for the changed area 
-once to confirm no regressions. Avoid full-suite runs inside this loop.
+`uv run pytest database/tests/<file>::<case>` — until every failure passes.
+If a fix breaks a previously passing test, stop and fix the regression before
+proceeding. Then re-run the targeted suite for the changed area once to confirm
+no regressions. Avoid full-suite runs inside this loop.
 
 CI runs the full suite plus lint/typecheck/build on every pull request (pushes
-to `dev` do not trigger CI; the PR is the gate). Run the full suite locally only
-for cross-cutting changes or when the blast radius cannot be determined.
+to `dev` do not trigger CI; the PR is the gate).
 
 The local pre-commit hook (`.husky/pre-commit`, see `docs/git-hooks.md`) runs
 typecheck/lint (plus ruff when `database/` Python sources change) — it does not
