@@ -149,6 +149,8 @@ const STATUS_LABELS = {
  * 前端提示任务可能挂起/异常终止，并给出取消重试入口（异常终止的及时提示）。
  */
 const STALL_THRESHOLD_MS = 2 * 60 * 1000;
+// 距底部不超过该值时视为"停在底部"，内容变化后自动贴回底部（见下方 RO 说明）。
+const AUTO_STICK_BOTTOM_PX = 96;
 
 function formatActiveItemStatus(item: ConversationItem): string {
   switch (item.kind) {
@@ -352,6 +354,16 @@ export function ChatPanel({
   const scrollDetachRef = useRef<(() => void) | null>(null);
   const anchorItemIdRef = useRef<string | null>(null);
   const anchorCountRef = useRef(0);
+
+  // ===== 流式期间的位置感知自动跟随 =====
+  // message-scroller 的 autoScroll 模式机只把 wheel/touch/键盘当作"用户滚动
+  // 意图"；滚动条拖拽、自动滚动等纯滚动不会退出 following-bottom 模式。此后
+  // 任何内容高度变化（流式思维链增长/收起、新工具行、历史页合并）都会触发其
+  // ResizeObserver → scrollToEnd，把视口强行拽回底部——表现为"向上滚一点就
+  // 被闪回原位、进度拖不动"。因此不用 autoScroll，改由 ChatPanel 依据滚动
+  // 位置本身判定是否跟随：只有视口本就停在底部附近时，内容变化才贴回底部。
+  const conversationContentRef = useRef<HTMLDivElement | null>(null);
+  const initialStickTaskRef = useRef<string | null>(null);
 
   const continuationInput =
     activeTaskId === null ? "" : continuationDrafts[activeTaskId] ?? "";
@@ -874,6 +886,39 @@ export function ChatPanel({
     capturePrependAnchor();
   }, [activeTaskId, anchorCount, anchorItemId, capturePrependAnchor]);
 
+  // 新选中任务的首屏内容落地后跟随到底部（等价于旧的 defaultScrollPosition=end）。
+  useEffect(() => {
+    initialStickTaskRef.current = activeTaskId;
+  }, [activeTaskId]);
+
+  const attachScrollerContent = useCallback((node: HTMLDivElement | null) => {
+    conversationContentRef.current = node;
+  }, []);
+
+  useEffect(() => {
+    const content = conversationContentRef.current;
+    if (content === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const viewport = scrollerViewportRef.current;
+      if (viewport === null) return;
+      // 首次内容落地：无条件跟随到底部，随后交还给位置判定。
+      if (initialStickTaskRef.current !== null) {
+        if (viewport.scrollHeight > viewport.clientHeight) {
+          initialStickTaskRef.current = null;
+          viewport.scrollTop = viewport.scrollHeight;
+        }
+        return;
+      }
+      const distanceFromBottom =
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      if (distanceFromBottom <= AUTO_STICK_BOTTOM_PX) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const node = olderSentinelRef.current;
     if (!hasOlderMessages || node === null) return;
@@ -1059,11 +1104,14 @@ export function ChatPanel({
         </Alert>
       )}
 
-      <MessageScrollerProvider autoScroll>
+      <MessageScrollerProvider>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <MessageScroller className="min-w-0 flex-1">
             <MessageScrollerViewport ref={attachScrollerViewport}>
-              <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-3 px-5 py-6">
+              <MessageScrollerContent
+                ref={attachScrollerContent}
+                className="mx-auto w-full max-w-3xl gap-3 px-5 py-6"
+              >
                 {hasOlderMessages && (
                   <MessageScrollerItem
                     ref={olderSentinelRef}

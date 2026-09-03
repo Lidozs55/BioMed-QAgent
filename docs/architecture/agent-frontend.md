@@ -319,7 +319,14 @@ HTTP `/inject-context` 的响应不直接生成本地气泡，因此回放、刷
 "最后更新时间"语义时用专用字段（如 `ToolCallItem.completedSequence`），不复用
 `sequence`。`itemSequences` 记录每项的稳定首入序列，供 `capTaskItems` 对齐裁剪。
 
-对话滚动由 shadcn `MessageScroller` 独占。实时状态默认跟随 live edge；用户主动滚轮、
+对话滚动由 shadcn `MessageScroller` 独占。ChatPanel 不开启原语的
+`autoScroll`：该模式机只把 wheel/touch/键盘当作"用户滚动意图"，滚动条拖拽、
+自动滚动等纯滚动不会退出 `following-bottom` 模式；此后任何内容高度变化
+（流式思维链增长/收起、新工具行、历史页合并）都会经其内容 ResizeObserver →
+`scrollToEnd` 把视口强行拽回底部——表现为"向上滚一点就被闪回原位、进度条
+拖不动"。跟随逻辑改为由 ChatPanel 以滚动位置自行判定（内容 ResizeObserver：
+距底部 ≤ `AUTO_STICK_BOTTOM_PX` 才贴回底部；新选中任务首屏内容落地后无条件
+跟随一次），用户由位置本身"投票"，而非由输入事件类型猜断。用户主动滚轮、
 触摸或键盘上滚后停止跟随，并由 `MessageScrollerButton` 返回最新内容。普通用户消息
 不设置 `scrollAnchor`，否则新回合会进入 `anchored-to-message` 并在流式内容增高时
 持续把提问钉回视口，表现为列表从底部反弹到中间。conversation row 在
