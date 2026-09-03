@@ -138,7 +138,17 @@ Agent 的源码读取是正式产品能力，不是 dev-only 能力。运行时�
 
 ## 边界与已知事项
 
+- **桌面入口验证状态（2026-09-03）**：linux 链路全实测——`start.sh` → desktop-app.py
+  spawn host → 端口回退下 banner 解析 → health 就绪 → 无 pywebview 自动回退浏览器
+  （health/SPA/manifest/sw/icon 全 200）→ SIGTERM 有界停止 host 无孤儿进程；
+  `desktop-app.py --self-test` 全绿。**未验证**：win/macos 的 `DESKTOP_EXTRAS` pip
+  解析（构建时网络隔离未能交叉打包；版本钉死基于发布记录，解析失败会在打包步
+  显式报错）、pywebview 真机开窗（Windows WebView2/pythonnet、macOS WKWebView）、
+  Windows exe 启动器（协作者产出）。首次真机使用前先跑
+  `runtime/python/<bin> desktop-app.py --self-test`。
 - Playwright 浏览器不随包（体积原因）；目标机用到浏览器工具时按 `README.txt` 中的命令安装 chromium。
 - Linux/macOS 目标机首次运行需按 README 执行一次 `chmod +x`（从 Windows 打 zip 会丢失执行位；跨平台分发建议打 tar.gz）。
 - bundle 内 `server/node_modules` 由 `pnpm deploy --prod --legacy` 物化，自包含、可随目录整体搬移；dev 依赖不进包。开发安装现为兼容 exFAT 启用了 workspace injection，`scripts/build-contracts-if-needed.mjs` 会在构建后刷新物理 contracts 副本；打包仍保留 `--legacy`，因为 deploy 必须在 contracts 构建完成后再物化自包含依赖，不能依赖 install 时的早期快照。
 - CI bundle 现状注记：上游 `package.yml` 已补上 `scripts/build-contracts-if-needed.mjs` 的 staging，并在冒烟测试里显式执行 `pnpm --filter @biomed/server run prestart` 后直接 `node server/dist/index.js --static` 启动（绕开根 `pnpm start` 递归调用不触发钩子的坑），同时新增端口回退与单实例锁验证——解包启动路径已可用，但 CI bundle 仍是"源码+产物"形态，目标机仍需全套构建环境。本打包器产出"便携整机"形态，打包时即构建 contracts 并物化依赖，二者互不影响。
+- 运行时下载缓存（`target/.cache`）不含完整性校验：下载中途断网会留下截断归档，
+  下次打包跳过下载并在解压时 EOF 失败——删除 `target/.cache` 里对应归档后重试即可。
