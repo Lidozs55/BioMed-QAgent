@@ -41,7 +41,7 @@ PDF 解析保留页面和位置证据。对于可提取文本的表格，可依�
 
 \subsection{图表与视觉模型}\label{subsec:chart-vlm}
 
-图表工具采用多层降级策略。系统优先通过 \code{qwen3.8-flash} 理解页面图像或嵌入图像；失败后尝试解析 PDF 表格；再次失败时，只提取标题（caption）作为有限信息。模型抽取结果必须携带模型名，点级结果必须包含置信度及其原因。其可信级受 4.7 的确定性上限约束，不会因为模型自报 high 就自动成为正式真值。
+图表工具采用多层降级策略。系统优先通过 \code{qwen3.8-flash} 理解页面图像或嵌入图像；失败后尝试解析 PDF 表格；再次失败时，只提取标题（caption）作为有限信息。模型抽取结果必须携带模型名，点级结果必须包含置信度及其原因。其可信级受 4.7 节的确定性上限约束，不会因为模型自报 high 就自动成为正式真值。
 
 规范侧已实现的是：结构化图表证据（chart-evidence）数据（含点级图表证据与来源绑定）经摘要绑定的证据资产进入生产 bioactivity\_\allowbreak{}measurement 数据家族的图表四表；点级溯源与复核门在组装前“拿不准就拒绝”，
 未通过时写入结构化 \code{chart\_\allowbreak{}evidence\_\allowbreak{}gate} 检查并阻断发布，不会让任意工作区 CSV 直接获得正式发布权；人工修正（HIL correction）保留原始值并记录 human\_\allowbreak{}correction 步骤。VLM/\allowbreak{}PDF/\allowbreak{}caption 抽取当前仍停在工作区 CSV，尚无生产转换/注册为 canonical chart-evidence 的通道，自然语言端到端案例仍待办。
