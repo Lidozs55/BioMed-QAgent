@@ -15,9 +15,11 @@ function ScrollArea({
       className={cn("relative", className)}
       {...props}
     >
+      {/* Viewport 是实际滚动容器:height:100% 在根元素仅有 max-height 时无法解析,
+          会被子内容撑开溢出,故让它继承根元素的 max-height 来限高 */}
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        className="size-full max-h-[inherit] rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
