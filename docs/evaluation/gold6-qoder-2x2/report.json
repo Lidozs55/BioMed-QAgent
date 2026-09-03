@@ -1,0 +1,616 @@
+{
+ "title": "BioMed-QAgent Gold6 Qoder Flash/Max offline output 2x2 analysis",
+ "generated_utc": "2026-09-03T20:03:38Z",
+ "scope": "read-only offline analysis of two Qoder export zips; no Host/task control, no runs, no tracked-source changes",
+ "disclaimers": {
+  "not_a_publication": "these offline Qoder zips are NOT formal BioMed-QAgent Publications; they did not pass the Publication byte-verified evidence chain",
+  "historical_paths": "paths like C:\\Users\\25943\\Documents\\Qoder\\2026-09-02\\... and work/raw/** found in chat.md and methods logs are historical Windows paths from the generation environment, not current paths",
+  "coverage_is_not_trust": "broad data coverage does not equal trustworthiness; every count below is a measurement, not an endorsement",
+  "unavailable_metrics": "raw payloads, extraction scripts, exact per-claim row filters, and per-figure pixel data are unavailable in the zips and marked unavailable"
+ },
+ "inputs": {
+  "flash_zip": {
+   "path": "data/qoder_flash_gold6_output.zip",
+   "sha256": "74317e075e2f702a9a5d24cb85d59e881356fedfe9d721af26f33d07e12c3990"
+  },
+  "max_zip": {
+   "path": "data/qoder_max_gold6_output.zip",
+   "sha256": "10faf91f8994b473f1b47eee91981886a616076ff694b301d3ede007941073bb"
+  },
+  "extracted_file_sha256": {
+   "input/flash/output/chat.md": "abcbb63927459eabb768512e431a9c90ec068c18fe10499e737c89d98ed04196",
+   "input/flash/output/chembl_assay_catalog.csv": "88ccdcc21cfe4fcb04c10d2047433f132861ea2ab74a8deec82abd39ff547a56",
+   "input/flash/output/chembl_molecule_dimension.csv": "338cf41d4116a621407e58a9ada98d12321ef292739c6497ab49acde64ff28e6",
+   "input/flash/output/confidence_rubric.csv": "b70f61637ed412fc29bc51c19e93ac41180db1974f83b15a113e869f15918e70",
+   "input/flash/output/dataset_manifest.csv": "14c1499119c783fe58342b55f458488a54e944da375a511a2a017de35661b1da",
+   "input/flash/output/dose_response_curve_points.csv": "5fbafcec7e3844362d5f8cd5ec7223d2f5c0382f2a20579f9f4aca9aef1a81a4",
+   "input/flash/output/dose_response_curve_series.csv": "8c584a8064589b1f7e3b9088da9ea67296070f58c15a40bfe9abf8d9a08ac3a6",
+   "input/flash/output/egfr_mutant_inhibition_activities.csv": "95f255da8e19c117e49799da321d23f24695917b6841116733e5c818a28a8f9b",
+   "input/flash/output/egfr_mutant_single_dose_screening.csv": "11ed3c75be320f87678fb6e7989910f242afc71b1f812cf69848c5c3266d89a8",
+   "input/flash/output/egfr_other_metric_records.csv": "d1ae6024905d985766084822862b232166210ae929b26a432df4f14bfb639dd6",
+   "input/flash/output/excluded_records.csv": "b95248237921a76c7b256315c93ce91e564417c3b648fa6f627fe75106edce23",
+   "input/flash/output/extraction_rejected_candidates.csv": "352ddf3f6729bef135146624130370ef0ed8b83f0b25eb7cc6e4428cedb3e574",
+   "input/flash/output/field_alignment_crosswalk.csv": "a6dd32372053bafa6fdd9d4ff04131511b74abc7370fd20bbd70e46e5515d940",
+   "input/flash/output/figure_inventory.csv": "d0a61225976a854d74313dde0adda89fb4ed6080f213d6c6742975748db824b8",
+   "input/flash/output/methods_qc_log.csv": "0b4dac2b547f0e1552cd00038c9e53ad10597f062441ad532f5e69cb3b9e66c8",
+   "input/flash/output/pubchem_assay_inventory.csv": "ee7df7cdfb85c328d99ee6579062bdbf3561a1b2e8d7a8219a7d4a3f39606abd",
+   "input/flash/output/qc_checks.csv": "b9835dce555ea03fd209a24f22ece46a3f0e88673f7095a4b905242acf4dba73",
+   "input/flash/output/reference_cellline_egfr_genotype.csv": "3a403a8ffd378666142d441123f30468972e90ce410aeaa3c2b4758347ff7fb3",
+   "input/flash/output/reference_compound_name_resolution.csv": "7ba20a1a4bf9408c3b8d6d85d45807deb5f7f11dc388f8dca776b60dd09a6156",
+   "input/flash/output/reference_variant_classification.csv": "aedd0e0d7a31b102c992bf9f13c341094741eec550a4695af6d14c02ac22aa27",
+   "input/flash/output/source_papers.csv": "a001aa80c4ab6352bbeb248f5384ce65d2aa5d59217e17a5670e10d2a90d6aa2",
+   "input/flash/output/supplementary_access_log.csv": "a76f83a090cd366e54204466a4ca1622e9b8a16eb724442ad21aa4aeb6bf598b",
+   "input/flash/output/supplementary_unparsed_files.csv": "747ab23d3f090fa2bf4cad62bffbd963ed7888ec9d7991826d942199fded2444",
+   "input/max/output/chat.md": "f051944dd4b4013958912564d0fc1c744a6a432cbda69fcebfe1867a4a8a3cb2",
+   "input/max/output/egfr_dose_response_inventory.csv": "f93c883a05f241459c5b8c3d018cbe5d99a6f7bd4928fcede32c772685ba5e24",
+   "input/max/output/egfr_figure_table_verification.csv": "a406d364226ef33e4435c4109e44fb3e6828dde9944dbbddc01afc4cc8437371",
+   "input/max/output/egfr_inhibition_data.csv": "5226371302cadd0fc70df65d91ca97ef5dd1e9bad0f898f588569a78b0473831",
+   "input/max/output/egfr_manifest.csv": "b2313f8c5115a927f174a191837be2c97d9b85c85525c45fcba3371f8b41a6a4",
+   "input/max/output/egfr_methods_qc_log.csv": "652f22e66de0337efad0bf479f62f78f91550c7191710f54763c21dc18730fe9",
+   "input/max/output/egfr_sources.csv": "24064a0cff7a30d0989d4c60f78ca043b96f0acf05bb1b0b2bdb14d39885ee94"
+  },
+  "chat_md": {
+   "flash": {
+    "bytes": 1812496,
+    "lines": 19548
+   },
+   "max": {
+    "bytes": 469890,
+    "lines": 5447
+   }
+  }
+ },
+ "axes": {
+  "x": {
+   "name": "structural coverage / reusability",
+   "indicators": {
+    "x1_schema_decomposition": {
+     "flash": 1.0,
+     "max": 0.3,
+     "evidence": "Flash 22 files decomposed into facts/screening/other-metric/excluded/rejected/figures/papers/supplementary/reference dims; Max 1 flat fact table + 5 registries"
+    },
+    "x2_identifier_normalization": {
+     "flash": 1.0,
+     "max": 0.5,
+     "evidence": "Flash: value_nM+pXC recomputed (10682/10682 consistent), 26 canonical variant tokens, InChIKey identity (8852 resolved/1830 name-only); Max: value_nM normalized (6431/6439, 8 documented exceptions), variants as-reported incl. mixed separators"
+    },
+    "x3_unit_dose_normalization": {
+     "flash": 1.0,
+     "max": 0.9,
+     "evidence": "Flash 100% potency rows positive nM, non-convertible routed to other-metric/excluded; Max 99.9% + ug.mL-1/pIC50-range rows kept with reliability note"
+    },
+    "x4_reusable_dimension_tables": {
+     "flash": 1.0,
+     "max": 0.1,
+     "evidence": "Flash assay/molecule/compound-name/cellline/variant reference tables (1859/3917/2794/31/16 rows); Max: source registry only"
+    },
+    "x5_manifest_completeness": {
+     "flash": 0.7,
+     "max": 1.0,
+     "evidence": "Flash rows/cols/bytes 22/22 match but sha1 truncated to 16 hex + self-row sha1 mismatch; Max md5 5/5 full verified"
+    },
+    "x6_rejection_exclusion_audit": {
+     "flash": 1.0,
+     "max": 0.2,
+     "evidence": "Flash excluded_records(190)+rejected_candidates(845)+supplementary_unparsed(836); Max decisions embedded in methods log only"
+    }
+   },
+   "thresholds": {
+    "high": ">=0.66",
+    "low": "<0.50",
+    "borderline": "0.50-0.66 or within 0.05 of boundary"
+   }
+  },
+  "y": {
+   "name": "evidence auditability / provenance closure",
+   "indicators": {
+    "y1_provenance_nonempty": {
+     "flash": 1.0,
+     "max": 1.0,
+     "evidence": "both fact tables 100% source_database/retrieved_date/location non-empty"
+    },
+    "y2_provenance_granularity": {
+     "flash": 1.0,
+     "max": 0.65,
+     "evidence": "Flash: 9849 chembl_activity_id + 587 table_id/row_index + 207 evidence_text + 39 supplement file::sheet; Max: 6285 ChEMBL ids but location_in_source has 11 unique values for 6439 rows, 9 literature rows paragraph-level"
+    },
+    "y3_manifest_hash_verifiable": {
+     "flash": 0.6,
+     "max": 1.0,
+     "evidence": "Flash 21/22 sha1 prefix-verified, truncated digest, self-row mismatch; Max 5/5 full md5 match"
+    },
+    "y4_qc_claims_reproducible": {
+     "flash": 0.85,
+     "max": 0.8,
+     "evidence": "Flash 16 qc_checks: record_id/value_nM/pXC/mutant-count/cross-source counts reproduced exactly, 5 biology-median claims direction-only (filter undocumented); Max S12 claims (rows/cols/md5/provenance) all reproduced"
+    },
+    "y5_methods_log_depth": {
+     "flash": 1.0,
+     "max": 0.7,
+     "evidence": "Flash 57 steps with n_returned/n_kept/evidence_artifact; Max 13 steps with thresholds and decisions"
+    },
+    "y6_raw_evidence_retained": {
+     "flash": 0.4,
+     "max": 0.4,
+     "evidence": "neither zip contains raw payloads or scripts; work/raw and raw/ paths are historical Windows paths not present offline"
+    }
+   },
+   "thresholds": {
+    "high": ">=0.66",
+    "low": "<0.50",
+    "borderline": "0.50-0.66 or within 0.05 of boundary"
+   }
+  }
+ },
+ "placement": {
+  "flash": {
+   "x": 0.95,
+   "x_band": "high",
+   "y": 0.808,
+   "y_band": "high",
+   "quadrant": "Q1_high_coverage_high_auditability",
+   "borderline": false
+  },
+  "max": {
+   "x": 0.5,
+   "x_band": "borderline",
+   "y": 0.758,
+   "y_band": "high",
+   "quadrant": "borderline",
+   "borderline": true
+  }
+ },
+ "file_counts_note": "Flash 22 CSV vs Max 6 CSV file counts are NOT used as a quality verdict; the crosswalk compares field-level equivalents instead",
+ "crosswalk": [
+  {
+   "domain": "fact table",
+   "flash": "egfr_mutant_inhibition_activities.csv (10682x109)",
+   "max": "egfr_inhibition_data.csv (6439x35)",
+   "shared": "record_id, variant, compound, chembl id, activity type, value_nM, cell line, source db, retrieved date, extraction method, confidence/reliability",
+   "flash_only_fields": "pXC, cross-source agreement (423 consistent/310 divergent), identity resolution, evidence text, table/row/column coordinates, sem/percent"
+  },
+  {
+   "domain": "screening data",
+   "flash": "egfr_mutant_single_dose_screening.csv (8549x103)",
+   "max": "unavailable",
+   "shared": "-",
+   "flash_only_fields": "percent_inhibition, dose_value"
+  },
+  {
+   "domain": "non-potency metrics",
+   "flash": "egfr_other_metric_records.csv (553x67)",
+   "max": "unavailable",
+   "shared": "-",
+   "flash_only_fields": "ratio/rate standard types"
+  },
+  {
+   "domain": "excluded/rejected",
+   "flash": "excluded_records.csv (190) + extraction_rejected_candidates.csv (845)",
+   "max": "unavailable (decisions in methods log)",
+   "shared": "-",
+   "flash_only_fields": "exclusion_reason, rejection_stage"
+  },
+  {
+   "domain": "dose-response curves",
+   "flash": "dose_response_curve_series.csv (7) + _points.csv (16 extracted points)",
+   "max": "egfr_dose_response_inventory.csv (6 curves, all identified_not_digitized)",
+   "shared": "curve id, figure ref, inhibitors, system",
+   "flash_only_fields": "actual extracted concentration-response points"
+  },
+  {
+   "domain": "figure verification",
+   "flash": "figure_inventory.csv (2295 panels corpus-wide)",
+   "max": "egfr_figure_table_verification.csv (22 items, 3 papers)",
+   "shared": "figure id, caption, verification status",
+   "flash_only_fields": "corpus-wide coverage, HTTP probe status"
+  },
+  {
+   "domain": "source registry",
+   "flash": "source_papers.csv (849 per-paper rows)",
+   "max": "egfr_sources.csv (7 per-source rows incl. 2 failed sources documented)",
+   "shared": "identifiers, access url, retrieved date",
+   "flash_only_fields": "per-paper selection route and record counts"
+  },
+  {
+   "domain": "supplementary audit",
+   "flash": "supplementary_access_log.csv (473 attempts) + supplementary_unparsed_files.csv (836)",
+   "max": "documented inside figure_table_verification (3 supplement rows)",
+   "shared": "route/url/status",
+   "flash_only_fields": "every attempt + unparsed file reasons"
+  },
+  {
+   "domain": "reference dims",
+   "flash": "chembl_assay_catalog (1859), chembl_molecule_dimension (3917), compound name resolution (2794), cellline genotype (31), variant classification (16), pubchem_assay_inventory (794)",
+   "max": "unavailable",
+   "shared": "-",
+   "flash_only_fields": "reusable star-schema dimensions"
+  },
+  {
+   "domain": "manifest",
+   "flash": "dataset_manifest.csv (sha1-16hex, 1 self-row mismatch)",
+   "max": "egfr_manifest.csv (full md5, 5/5 verified)",
+   "shared": "file/rows/columns/bytes/hash"
+  },
+  {
+   "domain": "methods log",
+   "flash": "methods_qc_log.csv (57 steps)",
+   "max": "egfr_methods_qc_log.csv (13 steps)",
+   "shared": "step, endpoint, parameters, outcome, date"
+  },
+  {
+   "domain": "qc",
+   "flash": "qc_checks.csv (16 checks w/ evidence)",
+   "max": "embedded in methods log (S12/S13)",
+   "shared": "automated checks"
+  }
+ ],
+ "fact_table_stats": {
+  "flash_main": {
+   "rows": 10682,
+   "source_database_counts": {
+    "ChEMBL": 9849,
+    "EuropePMC_fullText": 794,
+    "publisher_supplementary": 39
+   },
+   "retrieved_date_counts": {
+    "2026-09-02": 10682
+   },
+   "source_location_nonempty": 10682,
+   "source_location_unique": 10215,
+   "is_egfr_mutant_true": 5703,
+   "not_flagged_mutant": 4979,
+   "unique_dois": 380,
+   "unique_pmcids": 78,
+   "unique_pmids": 378,
+   "unique_titles": 383,
+   "unique_test_articles": 4152,
+   "unique_chembl_molecule_ids": 3950,
+   "unique_cell_lines": 49,
+   "activity_type_top": {
+    "IC50": 7961,
+    "Kd": 1227,
+    "Ki": 1034,
+    "EC50": 239,
+    "GI50": 162,
+    "Potency": 37,
+    "KD": 6,
+    "KINACT": 5,
+    "KI": 5,
+    "DC50": 4
+   },
+   "value_nM_positive": 10682,
+   "value_nM_min": 0.002,
+   "value_nM_max": 83000000.0,
+   "pXC_consistent": 10682,
+   "pXC_inconsistent": 0,
+   "confidence_counts": {
+    "A_high": 7689,
+    "B_medium": 2156,
+    "C_low": 837
+   },
+   "extraction_method_counts": {
+    "database_api_record": 9849,
+    "jats_table_multilevel_header_parse": 587,
+    "body_text_regex_sentence_evidence": 207,
+    "supplement_csv_grid_scan": 32,
+    "supplement_docx_grid_scan": 7
+   },
+   "rows_with_table_id": 587,
+   "rows_with_row_index": 587,
+   "cross_source_agreement_counts": {
+    "single_source": 9949,
+    "cross_source_divergent": 310,
+    "cross_source_consistent": 423
+   },
+   "unique_record_ids": 10682,
+   "duplicate_record_ids": 0,
+   "rows_with_chembl_activity_id": 9849,
+   "unique_chembl_activity_ids": 9849
+  },
+  "flash_screening": {
+   "rows": 8549,
+   "source_database_counts": {
+    "ChEMBL": 8479,
+    "EuropePMC_fullText": 12,
+    "publisher_supplementary": 58
+   },
+   "unique_pmcids": 57,
+   "unique_dois": 3,
+   "rows_with_chembl_activity_id": 8479,
+   "percent_inhibition_numeric": 7303,
+   "dose_value_nonempty": 2089
+  },
+  "max_main": {
+   "rows": 6439,
+   "source_database_counts": {
+    "ChEMBL": 6285,
+    "IUPHAR/BPS Guide to PHARMACOLOGY": 145,
+    "PubMed Central full text": 9
+   },
+   "retrieved_date_counts": {
+    "2026-09-02": 6439
+   },
+   "unique_inhibitors": 214,
+   "unique_chembl_ids": 2621,
+   "unique_cell_lines": 64,
+   "endpoint_type_top": {
+    "IC50": 4997,
+    "Kd": 861,
+    "Ki": 311,
+    "EC50": 142,
+    "GI50": 118,
+    "pKi": 4,
+    "AC50": 3,
+    "IC90": 2,
+    "fold_selectivity_vs_L858R_T790M": 1
+   },
+   "location_in_source_nonempty": 6439,
+   "location_in_source_unique": 11,
+   "value_nM_positive": 6431,
+   "value_nM_min": 0.002,
+   "value_nM_max": 933254000.0,
+   "extraction_method_counts": {
+    "ChEMBL REST API programmatic extraction": 6285,
+    "GtoPdb REST API programmatic extraction": 145,
+    "manual curation of open-access JATS full text (regex-assisted sentence extraction)": 9
+   },
+   "reliability_counts": {
+    "high": 5158,
+    "medium": 1200,
+    "low": 81
+   },
+   "unique_record_ids": 6439,
+   "duplicate_record_ids": 0,
+   "rows_with_source_primary_id": 6439,
+   "unique_source_primary_ids": 6431,
+   "target_variant_reported_top": {
+    "L858R,T790M": 2322,
+    "L858R": 1113,
+    "": 1090,
+    "L858R,T790M,C797S": 803,
+    "T790M": 395,
+    "L861Q": 176,
+    "UNDEFINED MUTATION": 162,
+    "G719C": 124,
+    "G719S": 123,
+    "C797S,L858R": 48,
+    "T790M,C797S": 33,
+    "T790M,L858M": 30
+   },
+   "dose_response_curve_data_counts": {
+    "endpoint summary only (fitted value)": 6285,
+    "endpoint summary only": 145,
+    "curve shown in cited figure; endpoint value from text": 9
+   },
+   "rows_with_variant_inferred": 112,
+   "unique_source_pubmed_ids": 563,
+   "unique_source_titles": 621
+  }
+ },
+ "manifest_verification_summary": {
+  "flash": {
+   "rows_match": "22/22",
+   "bytes_match": "22/22",
+   "columns_match": "22/22",
+   "sha1_prefix_match": "21/22 (self-row mismatch; digests truncated to 16 hex)"
+  },
+  "max": {
+   "rows_match": "5/5",
+   "bytes_match": "5/5",
+   "columns_match": "5/5",
+   "md5_full_match": "5/5"
+  }
+ },
+ "qc_reproduction": {
+  "flash": {
+   "reproduced_exactly": [
+    "record_id unique 10682",
+    "value_nM positive 10682/10682 min 0.002 max 8.3e7",
+    "pXC consistent 10682/10682",
+    "mutant 5703/10682",
+    "cross-source 9949/423/310",
+    "source counts ChEMBL 9849 / EPMC 794 / supplementary 39"
+   ],
+   "direction_only": [
+    "gefitinib L858R<T790M double median",
+    "afatinib ditto",
+    "osimertinib C797S resistance",
+    "osimertinib mutant-selectivity",
+    "lazertinib selectivity (n=1 group)"
+   ],
+   "note": "median claims depend on undocumented per-claim row filters; recomputed values differ (e.g. gefitinib L858R/T790M 941 vs claimed 845 nM)"
+  },
+  "max": {
+   "reproduced_exactly": [
+    "rows/cols/bytes/md5 5/5",
+    "source counts 6285/145/9",
+    "provenance non-empty 6439/6439",
+    "reliability 5158/1200/81",
+    "duplicate record_id 0"
+   ],
+   "verified_claims": [
+    "S12 re-parse QC",
+    "missing value_nM rows are the 8 documented non-convertible ones"
+   ]
+  }
+ },
+ "chat_md_comparison": {
+  "scoring_note": "chat.md length is NOT scored; only strategy content extracted",
+  "flash": {
+   "strategy": "anchor on ChEMBL assay_variant_mutation (11713 mutant activities) + WT comparators restricted to the same 483 documents; EuropePMC multi-query open-access paper selection (23 queries logged); parallel figure catalogue; supplementary serial download with backoff after EBI throttling (10054)",
+   "tools_sources": [
+    "ChEMBL REST (activity/document/assay/molecule)",
+    "EuropePMC REST search + fullTextXML (8 workers, resumable)",
+    "NCBI esearch/esummary PubChem BioAssay (794 AID inventory)",
+    "supplementary package retrieval",
+    "openpyxl/docx grid scan"
+   ],
+   "failures_fallbacks": [
+    "EBI intermittent 5xx -> serial + backoff",
+    "connection reset 10054 under concurrency -> serial retry",
+    "figure raster assets not served (520/no OCR) -> no pixel digitization, curves only from numeric tables",
+    "PubChem record-level values not exposed from environment -> kept as assay inventory only"
+   ],
+   "self_corrections": [
+    "multi-panel table compound mis-attribution fix",
+    "EGFRL858R concatenation miss fix",
+    "unannotated EGFR row misjudged as L858R/T790M -> inference rule fixed",
+    "metric column fallback-to-table-header mismatch fix",
+    "cross-assay curve merge + docx merged-cell duplicates -> regroup/dedupe",
+    "final full ordered rerun"
+   ],
+   "self_checks": "biological-order QC (osimertinib C797S ~237 vs 1.9 nM spot checks), 16 automated qc_checks, exon19 coverage verification rerun"
+  },
+  "max": {
+   "strategy": "download all 58847 CHEMBL203 activities (118 pages) then filter (5178 defined-mutant + 1622 notable-drug overlap -> 6285); GtoPdb target 1797 interactions (145 kept); 3 landmark PMC papers full-text (Cross 2014, Floc'h 2018, Baker 2020); honest documentation of blocked routes",
+   "tools_sources": [
+    "ChEMBL REST",
+    "GtoPdb REST",
+    "PMC eutils efetch JATS",
+    "PubChem PUG REST/PUG View (failed, documented)"
+   ],
+   "failures_fallbacks": [
+    "PubChem geneid assay endpoint 504x2 then 404 -> excluded with evidence",
+    "PMC /bin/ supplements 404, oa.fcgi retired -> documented blocked with exact filenames",
+    "AACR tables delivered as figure images -> text regex extraction instead"
+   ],
+   "self_corrections": [
+    "non-JSON ChEMBL response diagnosed via content-type",
+    "URL-encoding fix for bracket queries",
+    "Windows encoding fix for parser",
+    "QC caught figure-verification column mismatch -> rebuild",
+    "edit accidentally dropped supplements block -> re-added",
+    "32 GtoPdb rows lacked primary id -> fallback identifier added"
+   ],
+   "self_checks": "provenance completeness validation, reliability rules in log, final re-parse of all CSVs"
+  },
+  "shared_limit": "neither performed pixel-level digitization of dose-response figures; both record why and where"
+ },
+ "issues": [
+  {
+   "id": "H1",
+   "sev": "high",
+   "side": "flash",
+   "file": "dataset_manifest.csv",
+   "field": "sha1",
+   "count": "1/22 rows",
+   "issue": "manifest self-row sha1 mismatch: claimed 389e64b2acd77011 vs actual d57d6e9a4b12efc3... (all other 21 files prefix-match)",
+   "impact": "manifest not self-consistent; downstream integrity chain has one broken link"
+  },
+  {
+   "id": "H2",
+   "sev": "high",
+   "side": "both",
+   "file": "methods_qc_log.csv / egfr_methods_qc_log.csv",
+   "field": "evidence_artifact / raw paths",
+   "count": "flash 57 steps reference work/raw/**; max references raw/**",
+   "issue": "neither zip contains raw payloads, scripts, or paper XML; Flash additionally claims 'reproducible from scripts/' but scripts/ is absent from the zip",
+   "impact": "provenance closure stops at the output tables; claims of reproducibility are not verifiable offline"
+  },
+  {
+   "id": "M1",
+   "sev": "medium",
+   "side": "flash",
+   "file": "dataset_manifest.csv",
+   "field": "sha1",
+   "count": "22/22 rows",
+   "issue": "sha1 digests truncated to 16 hex chars (64-bit prefix), not full SHA-1",
+   "impact": "weaker integrity guarantee; collision resistance far below SHA-1"
+  },
+  {
+   "id": "M2",
+   "sev": "medium",
+   "side": "flash",
+   "file": "egfr_mutant_single_dose_screening.csv",
+   "field": "variant_reported header",
+   "count": "1 duplicated header name",
+   "issue": "header 'variant_reported' appears twice (103 columns); DictReader-style consumers silently lose one column",
+   "impact": "downstream parsing hazard"
+  },
+  {
+   "id": "M3",
+   "sev": "medium",
+   "side": "flash",
+   "file": "egfr_mutant_single_dose_screening.csv",
+   "field": "paper_doi / paper_pmcid",
+   "count": "8479/8549 DOI empty; 7782/8549 PMCID empty",
+   "issue": "99.2% screening rows have no direct paper DOI; paper linkage only via chembl_activity_id -> document join",
+   "impact": "direct per-row paper traceability weak in this table"
+  },
+  {
+   "id": "M4",
+   "sev": "medium",
+   "side": "flash",
+   "file": "qc_checks.csv",
+   "field": "evidence (median claims)",
+   "count": "5/16 checks",
+   "issue": "reference-biology medians not exactly reproducible from published tables (gefitinib L858R/T790M claimed 845.0 vs recomputed 941.0 nM, n=40; afatinib 6.9 vs 10.0; osimertinib WT 14.335 vs 114.0; lazertinib L858R/T790M n=1). Direction of every claim reproduces; the row filter per claim is undocumented",
+   "impact": "QC evidence partially unavailable for independent verification"
+  },
+  {
+   "id": "M5",
+   "sev": "medium",
+   "side": "max",
+   "file": "egfr_inhibition_data.csv",
+   "field": "location_in_source",
+   "count": "11 unique values / 6439 rows",
+   "issue": "record-level, not cell-level provenance: 6285 rows share one string ('original table/figure number not exposed by ChEMBL curation')",
+   "impact": "auditor must re-query ChEMBL by activity id; no table/figure/row/column coordinates"
+  },
+  {
+   "id": "M6",
+   "sev": "medium",
+   "side": "max",
+   "file": "egfr_inhibition_data.csv",
+   "field": "value_nM",
+   "count": "8 rows >1e7 nM (max 933,254,000 nM) + 8 rows missing value_nM",
+   "issue": "extreme values (up to ~933 mM) retained in main table, only flagged reliability=low 'Outside typical range'; 8 non-convertible rows (ug.mL-1, pIC50 ranges, fold) kept with empty value_nM",
+   "impact": "usable but requires reliability filter before analysis"
+  },
+  {
+   "id": "L1",
+   "sev": "low",
+   "side": "flash",
+   "file": "supplementary_access_log.csv",
+   "field": "whole-row duplicates",
+   "count": "117 duplicate rows",
+   "issue": "retry attempts logged as identical rows",
+   "impact": "minor; inflates log"
+  },
+  {
+   "id": "L2",
+   "sev": "low",
+   "side": "flash",
+   "file": "dataset_manifest.csv",
+   "field": "purpose/key_grain",
+   "count": "19 null cells",
+   "issue": "manifest metadata partially empty",
+   "impact": "minor"
+  },
+  {
+   "id": "L3",
+   "sev": "low",
+   "side": "max",
+   "file": "egfr_manifest.csv",
+   "field": "self coverage",
+   "count": "1 file",
+   "issue": "manifest does not cover itself (conventional, noted for completeness)",
+   "impact": "none material"
+  },
+  {
+   "id": "L4",
+   "sev": "low",
+   "side": "flash",
+   "file": "reference_variant_classification.csv",
+   "field": "variant_token coverage",
+   "count": "19/26 distinct target_variant values not exactly listed",
+   "issue": "composite tokens (e.g. L858R/T790M/C797S, exon19del/...) not itemized in the 16-row reference table",
+   "impact": "minor; composites follow implied convention"
+  }
+ ],
+ "verification": {
+  "csv_row_counts_consistent": true,
+  "json_parseable": true,
+  "credential_scan": "see analysis-metadata.json"
+ }
+}
