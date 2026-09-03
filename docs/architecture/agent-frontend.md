@@ -1,7 +1,7 @@
 
 # BioMed-QAgent 架构 — Skill 仓库与前端
 
-> 本文是 [docs/ARCHITECTURE.md](../ARCHITECTURE.md) 的拆分章节（原 §16-§17），
+> 本文是 `docs/ARCHITECTURE.md`（已随发布裁剪，见 git 历史）的拆分章节（原 §16-§17），
 > 章节编号与主文件保持一致。
 
 ---

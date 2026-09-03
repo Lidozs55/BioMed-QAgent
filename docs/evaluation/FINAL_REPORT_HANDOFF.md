@@ -29,11 +29,11 @@ Read these files in this order:
    - The complete structured 2x2 analysis, including per-axis scores and supporting counts.
    - Use this instead of inventing scores from file counts or narrative impressions.
 
-5. [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) and the linked topic chapters
+5. `docs/ARCHITECTURE.md` and the linked topic chapters
    - Use these to explain why Agent work is proposal/discovery while Dataset Core owns deterministic validation, B3, ProductAssessment, and Publication.
    - The architecture is the authority for current system behavior; dated evaluation reports are snapshots of observed runs.
 
-6. [`docs/FEATURES.md`](../FEATURES.md)
+6. `docs/FEATURES.md`
    - Use for product capability language and the current feature surface.
    - Do not use it as evidence for a particular Gold run unless it links to a dated evidence artifact.
 
@@ -204,24 +204,24 @@ For Gold9, distinguish evidence levels:
 
 | Document | Use in the final report | Avoid |
 | --- | --- | --- |
-| [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) | Current system boundary, Agent/Core split, durable runtime, publication ownership | Treating architecture prose as proof that a particular run succeeded |
-| [`docs/architecture/dataset-execution.md`](../architecture/dataset-execution.md) | Deterministic operation sequence and Core execution constraints | Replacing run evidence with generic pipeline claims |
-| [`docs/architecture/canonical-evidence.md`](../architecture/canonical-evidence.md) | Publication/evidence product concepts, provenance and artifact roles | Calling workspace staging files formal outputs |
-| [`docs/architecture/runtime-events.md`](../architecture/runtime-events.md) | Event-sourcing, replay, lifecycle and durable evidence semantics | Assuming monitor output is authoritative when event archives disagree |
-| [`docs/architecture/chart-exact-data-policy.md`](../architecture/chart-exact-data-policy.md) | Exact-only chart policy and why estimated image points cannot be promoted | Describing historical estimated-point compatibility tests as current production behavior |
-| [`docs/adr/043-exact-only-chart-values.md`](../adr/043-exact-only-chart-values.md) | Decision authority for the exact-only chart boundary | Reviving the superseded image-estimate acceptance path |
-| [`docs/architecture/hil-approval-policy.md`](../architecture/hil-approval-policy.md) | Human/LLM/auto approval policy language | Inferring HIL counts without the run evidence |
-| [`docs/FEATURES.md`](../FEATURES.md) | Product-facing capability summary | Using it as a dated benchmark record |
-| [`docs/TODO.md`](../TODO.md) | Open work, known gaps, and current priorities | Presenting open TODO items as completed capabilities |
-| [`docs/ISSUES.md`](../ISSUES.md) | Known unresolved defects and operational limitations | Treating old or closed issue text as current run evidence |
-| [`docs/reports/2026-08-30-gold6-live-analysis.md`](../reports/2026-08-30-gold6-live-analysis.md) | Gold6 repair/history context before the corrected campaign | Using R1-R4 historical blockers as the corrected Gold6 result |
-| [`docs/reports/2026-09-03-gold6-r7c3-artifact-inventory.md`](../reports/2026-09-03-gold6-r7c3-artifact-inventory.md) | Historical Gold6 R7c3 artifact and exact-table extraction context | Merging R7c3 into the six-run corrected campaign statistics |
-| [`docs/reports/gold789-case-chapter.md`](../reports/gold789-case-chapter.md) | Earlier case-study narrative and domain context | Overriding corrected campaign values without checking current evidence |
-| [`docs/reports/2026-08-29-gold-qwen-direct-validation-study.md`](../reports/2026-08-29-gold-qwen-direct-validation-study.md) | Earlier model/route observations and limitations | Treating pre-campaign observations as the corrected six-run cohort |
-| [`docs/evaluation/model-blockers.md`](model-blockers.md) | Categorizing model and interface failure modes | Counting blocker inventory as a run outcome |
-| [`docs/evaluation/triage.md`](triage.md) | Mapping known issues to product/prompt/interface causes | Treating triage labels as causal proof |
-| [`docs/audit/README.md`](../audit/README.md) | How dated audit snapshots are organized | Assuming audit snapshots automatically update with `dev` |
-| [`docs/README.md`](../README.md) | Document lifecycle and authority rules | Adding another duplicate report index |
+| `docs/ARCHITECTURE.md` | Current system boundary, Agent/Core split, durable runtime, publication ownership | Treating architecture prose as proof that a particular run succeeded |
+| `docs/architecture/dataset-execution.md` | Deterministic operation sequence and Core execution constraints | Replacing run evidence with generic pipeline claims |
+| `docs/architecture/canonical-evidence.md` | Publication/evidence product concepts, provenance and artifact roles | Calling workspace staging files formal outputs |
+| `docs/architecture/runtime-events.md` | Event-sourcing, replay, lifecycle and durable evidence semantics | Assuming monitor output is authoritative when event archives disagree |
+| `docs/architecture/chart-exact-data-policy.md` | Exact-only chart policy and why estimated image points cannot be promoted | Describing historical estimated-point compatibility tests as current production behavior |
+| `docs/adr/043-exact-only-chart-values.md` | Decision authority for the exact-only chart boundary | Reviving the superseded image-estimate acceptance path |
+| `docs/architecture/hil-approval-policy.md` | Human/LLM/auto approval policy language | Inferring HIL counts without the run evidence |
+| `docs/FEATURES.md` | Product-facing capability summary | Using it as a dated benchmark record |
+| `docs/TODO.md` | Open work, known gaps, and current priorities | Presenting open TODO items as completed capabilities |
+| `docs/ISSUES.md` | Known unresolved defects and operational limitations | Treating old or closed issue text as current run evidence |
+| `docs/reports/2026-08-30-gold6-live-analysis.md` | Gold6 repair/history context before the corrected campaign | Using R1-R4 historical blockers as the corrected Gold6 result |
+| `docs/reports/2026-09-03-gold6-r7c3-artifact-inventory.md` | Historical Gold6 R7c3 artifact and exact-table extraction context | Merging R7c3 into the six-run corrected campaign statistics |
+| `docs/reports/gold789-case-chapter.md` | Earlier case-study narrative and domain context | Overriding corrected campaign values without checking current evidence |
+| `docs/reports/2026-08-29-gold-qwen-direct-validation-study.md` | Earlier model/route observations and limitations | Treating pre-campaign observations as the corrected six-run cohort |
+| `docs/evaluation/model-blockers.md` | Categorizing model and interface failure modes | Counting blocker inventory as a run outcome |
+| `docs/evaluation/triage.md` | Mapping known issues to product/prompt/interface causes | Treating triage labels as causal proof |
+| `docs/audit/README.md` | How dated audit snapshots are organized | Assuming audit snapshots automatically update with `dev` |
+| `docs/README.md` | Document lifecycle and authority rules | Adding another duplicate report index |
 
 Historical material under `docs/archive/` and `docs/migration/` is for explicit history questions only. It is not current behavior evidence.
 
