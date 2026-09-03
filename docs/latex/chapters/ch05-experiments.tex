@@ -138,10 +138,10 @@ gold6 & max & Qoder & （待填） & 46 min & 5,160 K \\
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口（略）} \\
 \midrule
 \endhead
-gold1 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold1 & flash & Qoder & （待填） & （待填） & （待填） \\
-gold1 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold1 & max & Qoder & （待填） & （待填） & （待填） \\
+gold1 & flash & BioMed QAgent & 6/7（初步） & 通过 & 需求②差异表达未执行（交付肿瘤/正常分组表供下游分析） \\
+gold1 & flash & Qoder & 7/7（初步） & 通过 & ---（覆盖最广，含跨研究 meta 分析） \\
+gold1 & max & BioMed QAgent & 6/7（初步） & 通过 & 差异表达未执行；探针 / 基因双水平分布于两个研究 \\
+gold1 & max & Qoder & 6/7（初步） & 通过 & 差异表达未交付 \\
 gold6 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
 gold6 & flash & Qoder & （待填） & （待填） & （待填） \\
 gold6 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
@@ -150,6 +150,29 @@ gold6 & max & Qoder & （待填） & （待填） & （待填） \\
 \end{xltabular}
 
 需要注意的是：\code{Qwen3.8-flash}在 Qoder 环境运行 gold1 任务时，途中出现两次异常任务中断，手动恢复。这也指示着通用框架在处理较大科研数据或复杂任务时可能也会表现不稳定。
+
+\subsection{gold1 对照的产物级横向比较（初步）}\label{subsec:gold1-artifact-compare}
+
+对 gold1 四个运行单元的实际交付产物逐一盘点（表~\ref{tab:gold1-artifacts}）。表~\ref{tab:factorial-quality} 的完整度初评即以本盘点为依据，按需求原文拆条（①查找肿瘤/正常 GEO 数据 ②两组比较得出差异表达 ③汇总样本元数据与平台注释 ④表达数据探针与基因双水平及对应 ⑤整理为便于后续分析的数据文件，附加：仅 CSV 正式产出、来源标注）计条；得分标注“初步”，正式得分仍按协议由人工双人复核确认。
+
+\begin{xltabular}{\linewidth}{>{\hsize=0.55\hsize}L>{\hsize=0.75\hsize}L>{\hsize=0.7\hsize}L>{\hsize=0.85\hsize}L>{\hsize=0.6\hsize}L>{\hsize=1.3\hsize}L}
+\caption{gold1 四组交付产物盘点（BioMed QAgent 侧为正式 Publication，Qoder 侧为交付 CSV 包）}\label{tab:gold1-artifacts}\\
+\toprule
+\textbf{组} & \textbf{纳入研究} & \textbf{样本元数据} & \textbf{探针水平} & \textbf{基因水平} & \textbf{溯源形态} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{组} & \textbf{纳入研究} & \textbf{样本元数据} & \textbf{探针水平} & \textbf{基因水平} & \textbf{溯源形态} \\
+\midrule
+\endhead
+flash · BioMed QAgent & 1（GSE86374） & 支撑表（GSM 分组：tumor/normal） & 与基因级融合于同一长表 & 长表 5{,}294{,}223 行（GPL6244 映射） & 逐格资产哈希链 + 发布逐件 SHA-256 重验 \\
+flash · Qoder & 16 纳入（1{,}008 系列筛选审计） & 3{,}226 行 & 5 研究宽表 & 13 研究宽表 + 1 汇总 & URL / MD5 / 检索日期 + 筛选审计 CSV \\
+max · BioMed QAgent & 2（GSE139038、GSE86374） & 支撑表（同上形态） & GSE139038 长表 2{,}895{,}360 行 & GSE86374 长表 5{,}294{,}223 行（128 肿瘤 vs 31 正常） & 同 flash \\
+max · Qoder & 4 & 443 行 & 4 研究宽表 & 4 研究宽表 & URL / MD5 + QC 日志 \\
+\bottomrule
+\end{xltabular}
+
+四个运行单元的比较呈现四点结构差异。其一，\textbf{交付形态分岔}：Qoder 侧以“每研究一张宽表矩阵”直出（每行一个探针 / 基因、每列一个 GSM 样本，可直接读入分析）；BioMed QAgent 侧以“单细胞溯源长表”发布（每样本 × 每探针 / 基因一行，行数大两个数量级，但每行携带资产标识与定位符），两者数据同源、形态面向不同消费者——前者面向人直接分析，后者面向管线复用与机器核验。其二，\textbf{广度差}：flash 档 Qoder 纳入 16 个研究，BioMed QAgent 同档仅 1 个（max 档 2 个）；统一协议下每个研究须走一次完整“采集—验证—发布”构建，广度让位于单研究深度的可验证交付。其三，\textbf{差异表达是共同的完整度缺口，但程度不同}：需求第 2 条要求“通过两组样本的基因表达比较得出差异表达”，四组中仅 Qoder flash 实际执行（单研究差异分析 + 跨研究 meta 分析两个交付文件），BioMed QAgent 两档均交付了可直接用于差异分析的肿瘤/正常分组表但未执行比较本身。其四，\textbf{真实性机制不同强度}：四组均未发现编造行，Qoder 以来源 URL、MD5 与检索日期支撑人工抽查，BioMed QAgent 则以逐格资产哈希链、验证闭环与发布产物逐件重验支撑机器核验——真实性结论一致，可复核方式与成本不同。
 
 结果冻结后，观察沿四条线撰写（当前仅立框架，不预设结论）：
 
