@@ -35,6 +35,7 @@ import type {
   EventPage,
   ManifestArtifactEntry,
   MessagePage,
+  ProviderSearchResult,
   PublicationCandidateRef,
   TaskPublicationSummary,
   RelationDefinition,
@@ -192,6 +193,7 @@ function parseTaskPublicationSummary(json: unknown, idx: number): TaskPublicatio
 function parseMessageRecord(json: unknown, idx: number): TaskSnapshot["messages"][number] {
   const obj = assertObject(json, `messages[${idx}]`);
   const rawSequence = Reflect.get(obj, "sequence");
+  const rawSearchResults = Reflect.get(obj, "search_results");
   return {
     schema_version: optSchemaVersion(Reflect.get(obj, "schema_version"), `messages[${idx}].schema_version`),
     message_id: assertString(Reflect.get(obj, "message_id"), `messages[${idx}].message_id`),
@@ -201,10 +203,32 @@ function parseMessageRecord(json: unknown, idx: number): TaskSnapshot["messages"
     role: assertMessageRole(Reflect.get(obj, "role"), `messages[${idx}].role`),
     content: assertString(Reflect.get(obj, "content"), `messages[${idx}].content`),
     created_at: assertString(Reflect.get(obj, "created_at"), `messages[${idx}].created_at`),
+    ...(rawSearchResults === undefined
+      ? {}
+      : { search_results: assertSearchResults(rawSearchResults, `messages[${idx}].search_results`) }),
     ...(rawSequence === undefined
       ? {}
       : { sequence: assertPositiveInt(rawSequence, `messages[${idx}].sequence`) }),
   };
+}
+
+function assertSearchResults(json: unknown, path: string): ProviderSearchResult[] {
+  const results = assertArray(json, path, (entry, idx) => {
+    const obj = assertObject(entry, `${path}[${idx}]`);
+    const result: ProviderSearchResult = {
+      site_name: assertString(Reflect.get(obj, "site_name"), `${path}[${idx}].site_name`),
+      url: assertString(Reflect.get(obj, "url"), `${path}[${idx}].url`),
+    };
+    const title = Reflect.get(obj, "title");
+    if (title !== undefined) result.title = assertString(title, `${path}[${idx}].title`);
+    const icon = Reflect.get(obj, "icon");
+    if (icon !== undefined) result.icon = assertString(icon, `${path}[${idx}].icon`);
+    return result;
+  });
+  if (results.length > 20) {
+    throw new TypeError(`${path} exceeds the 20-entry bound`);
+  }
+  return results;
 }
 
 function parseSubagentRecord(

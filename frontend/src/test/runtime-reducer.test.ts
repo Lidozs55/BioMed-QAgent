@@ -3207,4 +3207,57 @@ describe("conversation items projection", () => {
       });
     },
   );
+
+  it("creates a per-run SearchInfoItem deduped by url", () => {
+    let state = setup();
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, {
+        type: "provider_search_info",
+        results: [
+          { site_name: "Nature", url: "https://nature.example/a" },
+          { site_name: "PubMed", url: "https://pubmed.example/b" },
+        ],
+      }),
+    );
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 2, {
+        type: "provider_search_info",
+        results: [
+          { site_name: "Nature", url: "https://nature.example/a" },
+          { site_name: "ChEMBL", url: "https://chembl.example/c" },
+        ],
+      }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "search_info",
+      itemId: "search_info:run_items",
+      runId: "run_items",
+    });
+    expect((items[0] as { results: Array<{ url: string }> }).results).toHaveLength(3);
+  });
+
+  it("caps the SearchInfoItem results at twenty entries", () => {
+    let state = setup();
+    const results = Array.from({ length: 30 }, (_, index) => ({
+      site_name: `Site ${index}`,
+      url: `https://site-${index}.example`,
+    }));
+    state = reduceRuntimeEvent(
+      state,
+      envelope("task_items", "run_items", 1, { type: "provider_search_info", results }),
+    );
+
+    const items = state.tasksById.task_items.items;
+    expect((items[0] as { results: unknown[] }).results).toHaveLength(20);
+    expect(
+      (items[0] as { results: Array<{ url: string }> }).results[
+        (items[0] as { results: Array<{ url: string }> }).results.length - 1
+      ]?.url,
+    ).toBe("https://site-19.example");
+  });
 });
