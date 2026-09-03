@@ -100,6 +100,7 @@
 
 ## Deferred / 非当前工作
 
+- **shadcn vendored skill 整包 re-vendor：** `.agents/skills/shadcn/` 是 2026-07-12（`e50130fa`）的上游快照；2026-09-03 skill 冗杂审计只同步了 `SKILL.md`（toast 指引两处，本项目为 Base UI 系），并把 `skills-lock.json` 的 `computedHash` 约定固定为「上游 pinned 文件字节的 SHA-256」。其余参考文件（`cli.md`、`mcp.md`、`registry.md`、`customization.md`、`rules/*`、`evals/`、`agents/openai.yml`）相对上游已漂移约 4.7k 行，应作为独立任务整包 re-vendor 并逐文件过目，不与其它改动夹带。
 - **Publication 驱动 Run 终态闭包：** 不实施“只有产生 Publication 时 Run 才完成”。非数据汇报无需 Publication；简短 Run progress context 仅作软提示，数据产品的正式完成由 ProductAssessment + Publication 证明。
 - **通用 Agent DAG、Transform 市场、一次性删除静态 Registry：** 不属于当前发布闭环。
 
