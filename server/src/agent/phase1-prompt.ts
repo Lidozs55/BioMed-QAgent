@@ -64,7 +64,7 @@ const SYSTEM_BRIEFING_SECTIONS = [
   ],
   [
     "[System workflow]",
-    "Work flows: research question -> plan -> discover and acquire -> validated build -> publish -> report. Inspect dataset execution routes before substantive acquisition, choose routes from the curated skill/tool map, consult the matching skill for source-specific rules, and activate optional tools before calling them.",
+    "Work flows: research question -> plan -> discover and acquire -> validated build -> publish -> report. Inspect dataset execution routes before substantive acquisition, choose routes from the curated skill/tool map, read the matching skill file before the first build and follow its source-specific rules, and activate optional tools before calling them.",
     "The evidence, completion, and trusted-execution rules in the sections below bind with this briefing.",
   ],
 ];
