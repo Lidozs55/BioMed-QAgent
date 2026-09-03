@@ -90,13 +90,17 @@ Dataset Runtime 不暴露数据集级 `BuildRecipe`，也不让 Agent 生成 nod
 ```text
 acquire[*]
   -> parse[*]
-  -> canonicalize / normalize[*]
+  -> canonicalize[*]
   -> compatibility gate
   -> integrate
+  -> assemble
   -> [fixed derive slot]
-  -> validate profile
+  -> validate_profile
   -> publish
 ```
+
+`assemble` 装配 Core-only `PublicationCandidate`（多表 family 的 assembler 经独立
+handler registry 注册，缺 handler 不能构造 assembly capability）。
 
 `derive` 是服务端固定骨架中的单一可选 slot，不是 Agent 可提交的节点或通用 DAG。
 它只接受 registered SourceAsset 或 committed Core result，使用服务端 registry 中的

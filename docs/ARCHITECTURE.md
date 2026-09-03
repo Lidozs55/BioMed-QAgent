@@ -19,7 +19,8 @@
 > - **验证与失效**：每个里程碑、每次新增/修订 ADR、数据族接入或执行模型变化
 >   时对照本文校验一致性；与代码现状矛盾且未标注待落地、或被新 ADR 推翻而未
 >   同步修订时，本文标记为 `stale`。
-> - **最后验证（Last Verified）**：2026-09-02（对照 `main@401ae983`，重点复核 exact-only 图表策略、family 清单、API 路由与前端组件名）。
+> - **最后验证（Last Verified）**：2026-09-03（对照 `dev@7037c987`，重点复核执行骨架
+>   OperationKind、Acquisition 执行类名、scope-wide 授权例外与缓存文件名约束）。
 > - **交叉引用约定**：本文档章节写作 `§N`；引用 ADR 索引的章节写作 `ADR §N`。
 
 ---
@@ -109,10 +110,12 @@ Dataset Construction Runtime（服务端固定构建骨架）
         |     +-- built-in Acquisition Provider
         |     `-- PROMOTED WorkflowRecipe -> SourceAsset
         +-- parse[*]                    SourceAdapter 解析
-        +-- canonicalize / normalize[*] 映射、实体与单位规范化
+        +-- canonicalize[*]             映射、实体与单位规范化
         +-- compatibility gate          family / granularity / key / measurement 兼容性
         +-- integrate                   确定性合并
-        +-- validate                    Validation Profile 驱动
+        +-- assemble                    装配 Core-only PublicationCandidate
+        +-- [fixed derive slot]         可选确定性派生
+        +-- validate_profile            Validation Profile 驱动
         `-- publish when eligible       原子提升
                  |
                  +-- DatasetPublication (0..1)
@@ -124,7 +127,10 @@ Dataset Construction Runtime（服务端固定构建骨架）
 ```
 
 方括号步骤可以按来源并发；fan-out / fan-in 属于 Runtime 内部控制流，不形成 Agent
-可编排 DAG，也不形成数据集级 Recipe。
+可编排 DAG，也不形成数据集级 Recipe。权威 `OperationKind` 集合为 `acquire / parse /
+canonicalize / compatibility_gate / integrate / assemble / derive / validate_profile /
+publish`（`server/src/dataset/contracts/operation-result.ts`）；`assemble` 装配
+Core-only `PublicationCandidate`，`derive` 是服务端固定的单一可选 slot。
 
 **Host 启动边界**（ADR-042）：Host 首选配置端口（默认 5173），只有实际绑定返回
 `EADDRINUSE` 时才以 `port 0` 让操作系统原子选择可用端口；实际入口由启动日志
@@ -146,8 +152,9 @@ Dataset Core 产生并以 manifest + hash 验证——权限放开不改变业�
 `sensitive`（`.env*`/密钥/凭据文件），对所有能力硬拒绝/独立策略，任何授权/规则/preset
 均不能覆盖（ADR-026 §2）。持久路径规则绑定 `resource_scope`（请求 scope 必须等于规则
 scope 才匹配，API 缺省 project）；Restricted 切换会作废全部 pending 并清空全部临时
-授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权以批准路径为根
-（canonical root + 子树），不覆盖整个 scope（ADR-026 §2）。
+授权；Run 结束时经 `onRunEnd` 清理该 run 的 grants。Run/Task 文件授权默认以批准路径为根
+（canonical root + 子树）；仅当用户在批准卡片显式选择「整个范围」（resolve API
+`scope_wide`）时才授予整个 scope，exec 授权天然覆盖整个 scope（ADR-026 §2）。
 
 当前不存在固定五阶段、固定 22 列 `main_data.csv` 全局协议或 metadata-only
 占位主表：dataset requirement 由自包含 `DatasetExecutionSpec`（§3）驱动，产物由
@@ -186,8 +193,8 @@ TASK-048-B2W/B6W 跟踪项已闭环）；基础 Registry 仍不能据此伪装�
 family `runtime_id` 命中 Core 已实现的 runtime allowlist。仅有 Schema、或 Adapter/Profile
 无真实实现的数据族不得进入 production default Registry（ADR-027）。
 
-不建立正式 `DatasetRequest` 契约。自然语言解析过程中可以使用 Agent 内部的
-`ParsedDatasetIntent`，但它不进入持久化、API 或执行协议，避免
+不建立正式 `DatasetRequest` 契约。自然语言解析的中间意图产物只存在于 Agent 会话
+内部，不进入持久化、API 或执行协议，避免
 `DatasetRequest -> DatasetExecutionSpec` 两个对象之间重复、漂移和跨引用读取。
 
 ### 3.2 dataset_family 与 row_granularity
@@ -242,9 +249,12 @@ Schema Registry 是字段元数据的唯一权威来源，不在 Builder / Valid
 Adapter。获取方式只能是：
 
 - `builtin`：由可信内置 Acquisition Provider 执行；
-- `workflow_recipe`：生产默认引用已提升的 `PROMOTED WorkflowRecipe`，由
-  `WorkflowRecipeSourceFetcher` 调用 `RecipeExecutor` 可信解释执行并只产出
-  `SourceAsset`。
+- `workflow_recipe`：生产默认引用已提升的 `PROMOTED WorkflowRecipe`，由 Core
+  Acquisition 子系统可信执行并只产出 `SourceAsset`：`CoreAcquisitionRegistry`
+  （`server/src/dataset/acquisition/runtime.ts`）只接受按
+  `recipe_id@recipe_version` 注册的 `PROMOTED` recipe，并校验绑定 provider 的
+  `implementation_digest`；`CoreAcquisitionRuntime.acquire` 经该 provider handler
+  执行获取与 SourceAsset 注册。
 
 `WorkflowRecipe` 属于 Acquisition 子系统，不属于 Dataset 核心契约，也不是数据集
 级工作流。它是**声明式、非代码**的来源获取描述；不能包含 Python、JavaScript、
@@ -292,8 +302,9 @@ Adapter、Schema Registry、可信元数据、明确规则或人工批准，不�
 ### 3.7 DatasetManifest 与 DatasetPublication
 
 `dataset_manifest.json` 是程序识别主数据和其他 Artifact 的**唯一权威入口**。
-程序不得硬编码 `main_data.csv`、`dataset.csv` 或任何固定文件名。Manifest 至少
-声明：
+Dataset Core 执行与发布路径上，程序不得硬编码 `main_data.csv`、`dataset.csv` 或任何
+固定文件名（用户缓存库 `database/cache_store.py` 的导入记录有自身固定存储布局，
+不属于发布产物识别路径）。Manifest 至少声明：
 
 - Run/requirement identity、版本和 Manifest digest；
 - 主数据 Artifact ID；
