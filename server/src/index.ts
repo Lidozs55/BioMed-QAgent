@@ -8,6 +8,7 @@ import { createBootstrapOptions, type BootstrapOptions } from "./bootstrap.js";
 import { parseHostConfig, resolveOutputDir, resolveWorkspacesRoot } from "./config.js";
 import { createViteMiddleware } from "./dev/vite-middleware.js";
 import { createStaticMiddleware } from "./dev/static-middleware.js";
+import { openInDefaultBrowser } from "./dev/open-browser.js";
 import { acquireApplicationInstanceLock } from "./runtime/application-instance-lock.js";
 
 function bannerHost(publicHost: string, port: number): string {
@@ -30,6 +31,7 @@ function installGracefulSignal(
 async function main(): Promise<void> {
   const config = parseHostConfig(process.env);
   const serveStatic = process.argv.includes("--static");
+  const openWhenReady = process.argv.includes("--open");
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const tasksRoot = path.join(
     resolveOutputDir(repositoryRoot, process.env.OUTPUT_DIR),
@@ -107,6 +109,13 @@ async function main(): Promise<void> {
   console.log(`  ➜ Local: http://${hostname}/`);
   console.log(`  ➜ API:   http://${hostname}/api/v1`);
   console.log(`  ➜ WS:    ws://${hostname}/api/v1/ws`);
+  if (openWhenReady) {
+    void openInDefaultBrowser(`http://${hostname}/`).then((opened) => {
+      if (!opened) {
+        console.warn(`  ➜ Auto-open unavailable; open http://${hostname}/ in a browser.`);
+      }
+    });
+  }
 
   let shutdown: Promise<void> | undefined;
   const close = (): Promise<void> => {

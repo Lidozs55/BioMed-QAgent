@@ -20,22 +20,66 @@ pnpm run pack -- --keep-temp                 # 保留中间构建目录（调试
 
 构建机要求：git、pnpm（锁文件版本）、Node 22、tar、curl。依赖 store 已热时全程可离线；运行时下载见下节。交叉打包（构建非本机平台的 bundle）额外要求 PATH 上有任意带 pip 的 CPython（见"内嵌科学计算栈"）。
 
+## 桌面入口（窗口优先、浏览器回退）
+
+各平台的默认入口是 `start.bat` / `start.sh`，它们用内嵌 Python 运行包根的
+`desktop-app.py`（源文件在 `scripts/packaging/desktop-app.py`，随包复制）：
+
+1. spawn 内嵌 node 运行 `server/dist/index.js --static`，从 stdout 的
+   `BIOMED_QAGENT_URL=` 横幅行解析实际地址（端口回退后依然正确）；
+2. 轮询 `/api/v1/health` 直到就绪；
+3. pywebview 可用 → 打开系统 WebView 原生窗口（Windows: WebView2，经 pythonnet；
+   macOS: WKWebView，经 pyobjc）；不可用（Linux 无 WebKitGTK、Windows 缺
+   WebView2 运行时等）→ 自动回退系统默认浏览器，并保持前台服务直到
+   Ctrl+C 或宿主退出；
+4. 窗口关闭/Ctrl+C → 有界停止 host 进程（bridge 靠 stdin EOF 自行退出）。
+
+窗口栈按平台预装在 `runtime/python` 的 site-packages（`DESKTOP_EXTRAS`，
+与科学栈同一 pip 通道、全部钉版本）：win 装 pywebview + pythonnet，macos 装
+pywebview + pyobjc 全家，**linux 不装**（PyGObject 无法 pip 安装，直接走浏览器
+回退——这是有意的降级，不是缺陷）。`desktop-app.py --self-test` 覆盖纯函数
+（横幅解析、命令拼装），打包流程 step 8 会执行它；pywebview 真实开窗无法在
+无 GUI 环境验证，真机行为依赖各平台实测。
+
+服务模式入口 `start-server.bat` / `start-server.sh` 绕过 Python/窗口栈，直连
+`host --static --open`（就绪后自动开系统浏览器，`--open` 见
+`server/src/dev/open-browser.ts`）——它同时是桌面链路故障时的等价回退路径。
+
+前端已具备 PWA 安装能力（`manifest.json` + 直通 service worker + 192/512 图标）：
+在 Chrome/Edge 中可"安装应用"获得独立窗口与任务栏图标，与桌面入口互补。
+
+### Windows exe（协作者接入点）
+
+`BioMed-QAgent.exe` 不由本打包器产出：它是一个极薄的启动器，只需
+
+- 使用包根 `assets/icon.ico`（256×256 PNG-in-ICO，派生自
+  `assets/logo/biomed-qagent-icon.png` 方形透明 logo）作为 exe 图标；
+- 在 exe 自身目录启动 `runtime\python\python.exe desktop-app.py` 并等待其退出
+  （GUI 子系统、无控制台窗口；进程管理与回退逻辑全部在 desktop-app.py 内）。
+
+可选实现（任选其一）：Node SEA + postject 注入 + rcedit 贴图标/改 GUI 子系统；
+PyInstaller onefile；或任何等价的原生启动器。完成后放入包根即可，README.txt
+的启动说明已为 exe 预留位置。
+
 ## 产物布局
 
 ```
 target/biomed-qagent-<version>-<win|linux|macos>/
-├── start.bat / start.sh     启动器（模型与 API key 在 Web 设置中配置）
+├── start.bat / start.sh     桌面入口：desktop-app.py（窗口优先、浏览器回退）
+├── start-server.bat / .sh   服务入口：host --static --open（自动开浏览器）
+├── desktop-app.py           桌面启动逻辑（spawn host → 窗口/浏览器）
+├── assets/icon.ico          应用图标（Windows exe / 桌面快捷方式用）
 ├── README.txt               目标机使用说明
 ├── server/                  编译后的 Application Host + `src/` 源码 + pnpm deploy 剪枝的生产依赖
 │   └── src/                 Agent 只读源码所需（至少包含 `src/dataset/`）
 ├── packages/contracts/src/  Agent 只读源码所需的 contracts 源码
-├── frontend/dist/           前端产物（host 以 --static 托管）
+├── frontend/dist/           前端产物（host 以 --static 托管；PWA 可安装）
 ├── database/                Python 持久化桥（纯标准库）
 ├── .pi/                     agent skills
 └── runtime/
     ├── node/                内嵌 Node.js 便携版
     └── python/              内嵌 CPython（python-build-standalone）
-                             预装 numpy + scipy（见"内嵌科学计算栈"）
+                             预装 numpy + scipy；win/macos 另装 pywebview 桌面栈
 ```
 
 ## 集成点（为什么不需要改业务源码）
