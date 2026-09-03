@@ -100,9 +100,38 @@ function assertIdentifier(value: unknown, path: string): string {
   return text;
 }
 
+/**
+ * Allowed-source entries are human-readable labels and may conjoin two source
+ * names with an internal slash ("NCBI Gene/ClinVar", frozen gold3 fact).
+ * Everything that makes a slash path- or URL-like is still hostile: scheme
+ * ("://"), drive letters ("C:/"), absolute or parent-relative paths, and
+ * backslash separators.
+ */
+function assertSourceLabel(value: unknown, path: string): string {
+  const text = assertBoundedText(value, path);
+  const parentSegment = /(^|\/)\.\.?(\/|$)/.test(text);
+  if (
+    text.includes("://") ||
+    text.includes("\\") ||
+    text.startsWith("/") ||
+    text.includes(":/") ||
+    parentSegment
+  ) {
+    throw new APIError(502, `Expected a bare source label without URL or path syntax at ${path}: "${text}"`);
+  }
+  return text;
+}
+
 function frozenIdentifierArray(value: unknown, path: string): readonly string[] {
   const values = assertArray(value, path, (item, index) =>
     assertIdentifier(item, `${path}[${index}]`),
+  );
+  return Object.freeze(values);
+}
+
+function frozenSourceLabelArray(value: unknown, path: string): readonly string[] {
+  const values = assertArray(value, path, (item, index) =>
+    assertSourceLabel(item, `${path}[${index}]`),
   );
   return Object.freeze(values);
 }
@@ -163,7 +192,7 @@ export function parseTaskExecutionContext(
     runtime_profile_sha256: assertHex64(obj.runtime_profile_sha256, `${path}.runtime_profile_sha256`),
     expected_family: assertBoundedText(obj.expected_family, `${path}.expected_family`),
     required_tables: frozenUniqueIdentifierArray(obj.required_tables, `${path}.required_tables`),
-    allowed_sources: frozenIdentifierArray(obj.allowed_sources, `${path}.allowed_sources`),
+    allowed_sources: frozenSourceLabelArray(obj.allowed_sources, `${path}.allowed_sources`),
     source_selection: parseSourceSelection(obj.source_selection, `${path}.source_selection`),
     success_definition: assertBoundedText(obj.success_definition, `${path}.success_definition`),
     forbidden_shortcuts: frozenIdentifierArray(obj.forbidden_shortcuts, `${path}.forbidden_shortcuts`),
