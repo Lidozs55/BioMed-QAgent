@@ -15,11 +15,9 @@ import {
   analyzePapers,
   createAnalyzePapersTool,
   createBusinessToolBundle,
-  createReadDatasetCoreSourceTool,
   createResearchDataGuidanceTool,
   GET_RESEARCH_DATA_GUIDANCE_TOOL_NAME,
   loadResearchDataGuidance,
-  READ_DATASET_CORE_SOURCE_TOOL_NAME,
   topicStem,
 } from "../../src/agent/tools/index.js";
 import { SKILL_TOOL_MAP, SKILL_TOOL_NAMES, toolOwner } from "../../src/agent/skills/skill-tool-map.js";
@@ -159,32 +157,6 @@ describe("get_research_data_guidance parity", () => {
     const tool = createResearchDataGuidanceTool();
     const result = await tool.execute({ topic: "strategy" });
     expect(result.content).toContain("research_data_guidance");
-  });
-});
-
-describe("read_dataset_core_source", () => {
-  it("registers under the SKILL_TOOL_MAP name with the dataset-construction owner", () => {
-    expect(SKILL_TOOL_NAMES.has(READ_DATASET_CORE_SOURCE_TOOL_NAME)).toBe(true);
-    expect(toolOwner(READ_DATASET_CORE_SOURCE_TOOL_NAME)).toBe("dataset-construction");
-  });
-
-  it("returns the real implementation source for a Dataset Core file", async () => {
-    const tool = createReadDatasetCoreSourceTool();
-    const result = await tool.execute({ path: "acquisition/chembl-provider.ts" });
-    expect(result.content).toContain("chembl.files.v1");
-    expect(result.content).toContain("parseCompounds");
-  });
-
-  it("rejects path traversal outside the Dataset Core tree", async () => {
-    const tool = createReadDatasetCoreSourceTool();
-    await expect(tool.execute({ path: "../../../.env" })).rejects.toThrow();
-    await expect(tool.execute({ path: "..\\..\\..\\package.json" })).rejects.toThrow();
-  });
-
-  it("rejects a missing or non-file path", async () => {
-    const tool = createReadDatasetCoreSourceTool();
-    await expect(tool.execute({ path: "acquisition/does-not-exist.ts" })).rejects.toThrow();
-    await expect(tool.execute({ path: "acquisition" })).rejects.toThrow();
   });
 });
 
