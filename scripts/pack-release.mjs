@@ -3,6 +3,10 @@
 //
 // Produces a self-contained, runnable bundle per platform into target/:
 //   target/biomed-qagent-<version>-<win|linux|macos>/
+//     BioMed-QAgent.exe      Windows GUI launcher (pywebview; win bundle only) —
+//                          double-click opens the UI in a desktop window with no
+//                          console; falls back to the default browser when the
+//                          WebView2 runtime is unavailable (see packaging/windows/)
 //     start.bat / start.sh   launcher (model credentials are configured in the Web settings)
 //     server/                compiled Application Host + pruned production node_modules
 //     frontend/dist/         compiled SPA, served by the host (--static)
@@ -14,16 +18,19 @@
 //
 // The target machine needs nothing preinstalled: no Node, no Python, no pnpm, no uv.
 // The host resolves the Python interpreter via BIOMED_PYTHON_BIN (see
-// server/src/persistence/db-client.ts probePythonBin), which the launcher sets to the
+// server/src/persistence/db-client.ts probePythonBin), which the launchers set to the
 // embedded runtime — that is the only integration point, no source changes needed.
 //
 // Usage (from the repository root):
 //   pnpm run pack [-- --platform=win|linux|macos|all] [--out=<dir>] [--ref=<git-ref>] [--keep-temp]
 //   pnpm pack:target --platform=all     (alias; plain `pnpm pack` is pnpm's built-in tarball command)
 //
-// Cross-packing (building a bundle for a different OS than the host) additionally
-// needs any host CPython with pip on PATH — the wheel step never executes target
-// code, but the pip process itself must run somewhere (see installPythonExtras).
+// Build host requirements: git, pnpm (lockfile version), Node 22, tar, curl; the
+// win bundle additionally builds the GUI launcher via uv (packaging/windows/,
+// pinned in its uv.lock). Cross-packing (building a bundle for a different OS
+// than the host) additionally needs any host CPython with pip on PATH — the
+// wheel step never executes target code, but the pip process itself must run
+// somewhere (see installPythonExtras).
 //
 // If runtime downloads fail (e.g. GitHub unreachable), set HTTPS_PROXY and retry:
 //   https_proxy=http://127.0.0.1:7897 pnpm run pack
@@ -58,6 +65,12 @@ const PYTHON_EXTRAS = [
   { name: "scipy", version: "1.18.1" },
 ];
 const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
+
+// Windows GUI launcher (pywebview + PyInstaller), sources in packaging/windows.
+// Versions are pinned by that project's uv.lock, not here.
+const LAUNCHER_PROJECT = path.join("packaging", "windows");
+const LAUNCHER_EXE_NAME = "BioMed-QAgent.exe";
+const LAUNCHER_ICON = path.join("assets", "logo", "biomed-qagent.ico");
 
 const NODE_DIST = "https://nodejs.org/dist";
 const PBS_DIST =
@@ -445,9 +458,82 @@ function startShScript() {
   ].join("\n");
 }
 
-function readmeText(version, platform) {
+// Builds the pywebview GUI launcher (sources: packaging/windows/, versions
+// pinned in its uv.lock) into a windowed onefile exe staged at the bundle
+// root. The windowed exe has no console; the launcher's own log lands in
+// launcher.log next to it (see biomed_launcher/config.py).
+function buildWindowsLauncher(srcDir, packageDir, tmpDir) {
+  runOrDie("uv", ["sync", "--project", LAUNCHER_PROJECT, "--locked"], { cwd: srcDir });
+  runOrDie(
+    "uv",
+    [
+      "run",
+      "--project",
+      LAUNCHER_PROJECT,
+      "--no-sync",
+      "pyinstaller",
+      "--noconfirm",
+      "--clean",
+      "--onefile",
+      "--windowed",
+      "--name",
+      LAUNCHER_EXE_NAME.replace(/\.exe$/u, ""),
+      "--icon",
+      path.join(srcDir, LAUNCHER_ICON),
+      // Embedded payload for the runtime window/taskbar icon (resource_path).
+      "--add-binary",
+      `${path.join(srcDir, LAUNCHER_ICON)};.`,
+      // pywebview resolves its Windows backend (and WebView2 loader DLLs)
+      // dynamically; pythonnet/clr_loader load .NET assemblies the same way.
+      "--collect-all",
+      "webview",
+      "--collect-all",
+      "pythonnet",
+      "--collect-all",
+      "clr_loader",
+      "--distpath",
+      packageDir,
+      "--workpath",
+      path.join(tmpDir, "pyinstaller", "work"),
+      "--specpath",
+      path.join(tmpDir, "pyinstaller", "spec"),
+      "--paths",
+      path.join(srcDir, LAUNCHER_PROJECT),
+      path.join(srcDir, LAUNCHER_PROJECT, "launcher_entry.py"),
+    ],
+    { cwd: srcDir },
+  );
+  if (!existsSync(path.join(packageDir, LAUNCHER_EXE_NAME))) {
+    fail(`launcher exe missing after PyInstaller: ${path.join(packageDir, LAUNCHER_EXE_NAME)}`);
+  }
+}
+
+function readmeText(version, platform, key) {
   const nodeBinPath = `runtime/node/${platform.nodeBin}`;
   const extras = PYTHON_EXTRAS.map((extra) => `${extra.name} ${extra.version}`).join(" / ");
+  const winIntro = key === "win";
+  const startupSteps = winIntro
+    ? [
+        "一、启动步骤",
+        "  1. Windows 推荐直接双击 BioMed-QAgent.exe：桌面窗口打开界面，全程无命令行；",
+        "     桌面窗口组件（WebView2）不可用时会自动改用系统浏览器打开。",
+        "  2. 也可双击 start.bat 以命令行方式启动（排障时更直观），然后访问",
+        "     http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
+        "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
+        "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
+        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
+      ]
+    : [
+        "一、启动步骤",
+        "  1. 启动服务：",
+        `     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python${PYTHON_MAJOR_MINOR}`,
+        "              然后执行 ./start.sh",
+        "     macOS  ：与 Linux 相同",
+        "  2. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
+        "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
+        "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
+        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
+      ];
   return [
     `BioMed-QAgent v${version} 独立部署包（${platform.label}）`,
     "=============================================================",
@@ -456,31 +542,36 @@ function readmeText(version, platform) {
     `内嵌运行时：Node.js v${NODE_VERSION} · CPython ${PYTHON_VERSION}`,
     `（python-build-standalone ${PYTHON_PBS_TAG}，与 uv 同源；已预装科学计算栈：${extras}）`,
     "",
-    "一、启动步骤",
-    "  1. 启动服务：",
-    "     Windows：双击 start.bat",
-    `     Linux  ：chmod +x start.sh runtime/node/bin/node runtime/python/bin/python${PYTHON_MAJOR_MINOR}`,
-    "              然后执行 ./start.sh",
-    "     macOS  ：与 Linux 相同",
-    "  2. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
-    "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
-    "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
-    "     如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
+    ...startupSteps,
     "",
     "二、注意事项",
-    "  1. Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时在目标机安装：",
+    ...(winIntro
+      ? [
+          "  1. BioMed-QAgent.exe 未做代码签名，首次运行如遇 SmartScreen 提示，",
+          "     选择「更多信息 → 仍要运行」。",
+          "  2. 关闭桌面窗口即停止后台服务；运行中的任务会按事件日志在下次启动时",
+          "     恢复为 interrupted，已完成的结果不会丢失。",
+        ]
+      : []),
+    "  3. Agent 浏览器工具基于 Playwright，浏览器内核不随包分发，需要时在目标机安装：",
     `     ${nodeBinPath} server/node_modules/playwright/cli.js install chromium`,
-    "  2. Linux/macOS 首次运行必须先执行上面的 chmod +x；从 Windows 分发请打 tar.gz",
+    "  4. Linux/macOS 首次运行必须先执行上面的 chmod +x；从 Windows 分发请打 tar.gz",
     "     （zip 会丢失可执行位）。",
-    "  3. 平台要求：Linux 需 glibc >= 2.28（Ubuntu 20.04+ / Debian 11+ 等）；",
+    "  5. 平台要求：Linux 需 glibc >= 2.28（Ubuntu 20.04+ / Debian 11+ 等）；",
     "     macOS 需 Apple Silicon（arm64）与 macOS 12 及以上版本。",
-    "  4. 内嵌 Python 已预装 numpy/scipy，分析类脚本可直接运行，无需联网安装。",
-    "  5. data/settings 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
-    "  6. 若安全软件拦截内嵌的 node/python，请将本目录加入信任区。",
+    "  6. 内嵌 Python 已预装 numpy/scipy，分析类脚本可直接运行，无需联网安装。",
+    "  7. data/settings 与运行期生成的数据都在本目录内，升级或迁移时整目录备份。",
+    "  8. 若安全软件拦截内嵌的 node/python，请将本目录加入信任区。",
     "",
     "三、问题排查",
+    ...(winIntro
+      ? [
+          "  - 桌面窗口打不开：查看同目录 launcher.log；设置环境变量 BIOMED_FORCE_BROWSER=1",
+          "    可跳过桌面窗口，直接改用系统浏览器。",
+        ]
+      : []),
     "  - 启动即退出：检查端口是否被占用；模型未配置时在 Web 设置中完成配置。",
-    "  - Linux/macOS 报 Permission denied：见注意事项第 2 条。",
+    "  - Linux/macOS 报 Permission denied：见注意事项第 4 条。",
     "",
   ].join("\n");
 }
@@ -634,7 +725,12 @@ for (const key of selected) {
   writeFileSync(path.join(packageDir, "start.bat"), startBatScript());
   writeFileSync(path.join(packageDir, "start.sh"), startShScript());
   chmodSync(path.join(packageDir, "start.sh"), 0o755);
-  writeFileSync(path.join(packageDir, "README.txt"), readmeText(version, platform));
+  writeFileSync(path.join(packageDir, "README.txt"), readmeText(version, platform, key));
+
+  if (key === "win") {
+    step(8, "build pywebview GUI launcher (BioMed-QAgent.exe)");
+    buildWindowsLauncher(srcDir, packageDir, tmpDir);
+  }
 
   if (values["keep-temp"] !== true) {
     rmSync(tmpDir, { recursive: true, force: true });
