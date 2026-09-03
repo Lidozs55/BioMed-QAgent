@@ -618,7 +618,7 @@ function buildAppImage(packageDir, cacheDir, outRoot, version) {
   runOrDie(appimagetool, [
     "--appimage-extract-and-run",
     "--no-appstream",
-    "--comp", "xz",
+    "--comp", "zstd",
     packageDir,
     appImage,
   ]);

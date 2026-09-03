@@ -105,7 +105,9 @@ linux 平台默认在目录包之外追加产出 `target/BioMed-QAgent-<version>
 
 - **AppDir 即目录包**：`AppRun`、`biomed-qagent.desktop`、`biomed-qagent.png`
   三个小文件直接写入包根，便携目录形态不受影响；appimagetool（官方 continuous
-  构建，下载进 `target/.cache`）把整个目录打成 xz 压缩的单文件。appimagetool
+  构建，下载进 `target/.cache`）把整个目录打成 zstd 压缩的单文件（2025-12 起
+  appimagetool 自带 mksquashfs 仅支持 zstd；type2 runtime 均可挂载，内核要求
+  ≥ 4.14，与 glibc ≥ 2.28 的既有平台要求一致）。appimagetool
   自身以 `--appimage-extract-and-run` 运行，构建机不需要 FUSE。
 - **只读挂载的数据重定位**：AppImage 的 squashfs 挂载点只读，`AppRun` 导出
   **绝对** `OUTPUT_DIR=$HOME/.local/share/biomed-qagent/output`——Host 从
