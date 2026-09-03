@@ -127,6 +127,33 @@ describe("skill read tool", () => {
     )).rejects.toThrow(/curated skill documents/u);
   });
 
+  test("reads repository source files inside the code read roots", async () => {
+    const root = await tempDir("biomed-skill-root-");
+    const codeRoot = await tempDir("biomed-code-root-");
+    await mkdir(path.join(codeRoot, "dataset"), { recursive: true });
+    const source = path.join(codeRoot, "dataset", "provider.ts");
+    await writeFile(source, "export const contract = true;\n");
+
+    const read = skillReadToolDefinition([root], [codeRoot]);
+    const allowed = await read.execute(
+      "call-code",
+      { path: source },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    expect(allowed.content.some((block) => block.type === "text" && block.text.includes("contract")))
+      .toBe(true);
+
+    await expect(read.execute(
+      "call-outside-code",
+      { path: path.join(codeRoot, "..", "outside.ts") },
+      undefined,
+      undefined,
+      undefined as never,
+    )).rejects.toThrow(/curated skill documents/u);
+  });
+
   test("rejects symlinks that resolve outside the roots", async () => {
     const root = await tempDir("biomed-skill-root-");
     const outside = await tempDir("biomed-outside-");
@@ -147,7 +174,7 @@ describe("skill read tool", () => {
       undefined,
       undefined,
       undefined as never,
-    )).rejects.toThrow(/outside the curated skill roots/u);
+    )).rejects.toThrow(/outside the curated skill/u);
   });
 });
 

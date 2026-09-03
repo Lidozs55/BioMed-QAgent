@@ -89,12 +89,18 @@ export const PHASE1_SYSTEM_PROMPT = [
   CONTROL_AND_RECOVERY,
 ].map((section) => section.join("\n")).join("\n\n");
 
-export function phase1ResourceRoots(): { skillRoot: string } {
+export function phase1ResourceRoots(): { skillRoot: string; codeReadRoots: readonly string[] } {
   const repositoryRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "..",
     "..",
     "..",
   );
-  return { skillRoot: path.join(repositoryRoot, ".pi", "skills") };
+  return {
+    skillRoot: path.join(repositoryRoot, ".pi", "skills"),
+    codeReadRoots: [
+      path.join(repositoryRoot, "server", "src"),
+      path.join(repositoryRoot, "packages", "contracts", "src"),
+    ],
+  };
 }

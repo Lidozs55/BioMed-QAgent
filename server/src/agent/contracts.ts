@@ -130,6 +130,8 @@ export interface BioMedSessionConfig {
   model?: BioMedModelConfig;
   resourceRoots?: readonly string[];
   skillRoots?: readonly string[];
+  /** Repository source trees the session read tool may additionally open. */
+  codeReadRoots?: readonly string[];
   systemPrompt?: string;
   /**
    * Frozen run context (already serialized as a delimited section) appended to

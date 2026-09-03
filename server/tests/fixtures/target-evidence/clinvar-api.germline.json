@@ -1,0 +1,17 @@
+{
+  "header": { "type": "esummary", "version": "0.3" },
+  "result": {
+    "uids": ["16613"],
+    "16613": {
+      "accession": "VCV000016613",
+      "accession_version": "VCV000016613.46",
+      "title": "NM_005228.5(EGFR):c.2369C>T (p.Thr790Met)",
+      "germline_classification": {
+        "description": "drug response",
+        "last_evaluated": "2021/03/24 00:00",
+        "review_status": "reviewed by expert panel"
+      },
+      "genes": [{ "symbol": "EGFR", "geneid": "1956" }]
+    }
+  }
+}

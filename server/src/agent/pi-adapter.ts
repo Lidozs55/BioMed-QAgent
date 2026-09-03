@@ -127,6 +127,8 @@ export interface PiAgentAdapterOptions {
   ) => Promise<PiUpstreamSession>;
   resolveModel?: () => Promise<BioMedModelConfig>;
   phase1SkillRoot?: string;
+  /** Repository source trees the session read tool may additionally open. */
+  phase1CodeReadRoots?: readonly string[];
   onResourceDiagnostic?: (message: string) => void;
 }
 
@@ -203,8 +205,9 @@ const MAX_ACTIVATED_TOOLS = 12;
  * Pi appends the `<available_skills>` listing to a custom system prompt only
  * when the active tool set contains a tool named exactly ``read`` (upstream
  * ``customPromptHasRead`` gate), and its listing tells the model to load a
- * skill's file with that tool. The session read tool below IS that gate —
- * a read surface confined to the curated skill roots.
+ * skill's file with that tool. The session read tool below IS that gate — a
+ * read surface confined to the curated skill roots plus the configured code
+ * read roots.
  */
 export const SKILL_READ_TOOL_NAME = "read";
 
@@ -467,20 +470,23 @@ export function curateSkillsOverride(
 }
 
 /**
- * The model-facing read surface for skill documents. Reusing Pi's read tool
- * keeps the native offset/limit and truncation semantics, while the injected
- * operations confine every access to the curated skill roots (checked on the
+ * The model-facing read surface for skill documents and repository source
+ * code. Reusing Pi's read tool keeps the native offset/limit and truncation
+ * semantics, while the injected operations confine every access to the
+ * curated skill roots plus the configured code read roots (checked on the
  * resolved path and again on the realpath so symlinks cannot escape).
  */
 export function skillReadToolDefinition(
   skillRoots: readonly string[],
+  codeReadRoots: readonly string[] = [],
 ): ToolDefinition {
-  const roots = canonicalSkillRoots(skillRoots);
+  const roots = [...canonicalSkillRoots(skillRoots), ...canonicalSkillRoots(codeReadRoots)];
   const guard = (absolutePath: string): void => {
     if (!isUnderRoots(path.resolve(absolutePath), roots)) {
       throw new Error(
-        "read only accepts curated skill documents; the path must stay inside " +
-          "the skill roots listed in <available_skills>",
+        "read accepts curated skill documents and repository source files; " +
+          "the path must stay inside the skill roots listed in <available_skills> " +
+          "or the configured code read roots",
       );
     }
     let real: string;
@@ -491,7 +497,7 @@ export function skillReadToolDefinition(
     }
     if (!isUnderRoots(real, roots)) {
       throw new Error(
-        "Skill document resolves outside the curated skill roots; refusing to read",
+        "Path resolves outside the curated skill and code read roots; refusing to read",
       );
     }
   };
@@ -547,10 +553,13 @@ async function validateSessionConfig(
   const skillRoots = await Promise.all(
     (config.skillRoots ?? []).map((root) => requireDirectory("skill root", root)),
   );
+  const codeReadRoots = await Promise.all(
+    (config.codeReadRoots ?? []).map((root) => requireDirectory("code read root", root)),
+  );
   const sessionDir = config.sessionDir === undefined
     ? undefined
     : await requireDirectory("session directory", config.sessionDir);
-  return { ...config, cwd, resourceRoots, skillRoots, sessionDir };
+  return { ...config, cwd, resourceRoots, skillRoots, codeReadRoots, sessionDir };
 }
 
 /**
@@ -1020,7 +1029,7 @@ async function createRealUpstreamSession(
   // instructions dangling again.
   const skillReadTool = skillRoots.length === 0
     ? undefined
-    : skillReadToolDefinition(skillRoots);
+    : skillReadToolDefinition(skillRoots, config.codeReadRoots ?? []);
   const withSkillRead = (names: readonly string[]): readonly string[] =>
     skillReadTool === undefined || names.includes(SKILL_READ_TOOL_NAME)
       ? names
@@ -1772,6 +1781,7 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
     config: BioMedSessionConfig,
   ) => Promise<PiUpstreamSession>;
   private readonly phase1SkillRoot: string;
+  private readonly phase1CodeReadRoots: readonly string[];
   private readonly onResourceDiagnostic: (message: string) => void;
 
   constructor(options: PiAgentAdapterOptions = {}) {
@@ -1780,6 +1790,8 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
       ((config) =>
         createRealUpstreamSession(config, options.resolveModel));
     this.phase1SkillRoot = options.phase1SkillRoot ?? phase1ResourceRoots().skillRoot;
+    this.phase1CodeReadRoots =
+      options.phase1CodeReadRoots ?? phase1ResourceRoots().codeReadRoots;
     this.onResourceDiagnostic = options.onResourceDiagnostic ?? (() => undefined);
   }
 
@@ -1823,6 +1835,10 @@ export class PiAgentAdapter implements BioMedAgentAdapter {
           toolCatalogPrompt(config.tools ?? [], config.initialToolNames ?? (config.tools ?? []).map((tool) => tool.name)) +
           systemContextSection(config.systemContext),
         skillRoots: [...optionalSkillRoots, ...(config.skillRoots ?? [])],
+        codeReadRoots: [
+          ...this.phase1CodeReadRoots,
+          ...(config.codeReadRoots ?? []),
+        ],
       });
       const upstream = await this.createUpstreamSession(validated);
       return new PiBioMedAgentSession(upstream, validated);

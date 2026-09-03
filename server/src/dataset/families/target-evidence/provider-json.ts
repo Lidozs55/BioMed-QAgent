@@ -123,13 +123,22 @@ function parseClinVar(carrier: TargetEvidenceJsonCarrier, rows: MutableRows): vo
     const entry = record(result[uid], `ClinVar /result/${uid}`);
     const accession = text(entry.accession, `ClinVar /result/${uid}/accession`);
     const title = text(entry.title, `ClinVar /result/${uid}/title`);
-    const significance = text(record(entry.clinical_significance, "ClinVar clinical_significance").description, "ClinVar significance");
+    // Live NCBI esummary carries the significance under germline_classification;
+    // clinical_significance is the legacy field kept as a fallback. Absent both,
+    // the record cannot support a significance assertion and stays fail-closed.
+    const significancePointer = entry.germline_classification !== undefined
+      ? "germline_classification"
+      : "clinical_significance";
+    const significance = text(
+      record(entry[significancePointer], `ClinVar ${significancePointer}`).description,
+      "ClinVar significance",
+    );
     const genes = array(entry.genes, "ClinVar genes");
     const gene = record(genes[0], "ClinVar first gene");
     const geneSymbol = text(gene.symbol, "ClinVar gene symbol");
     const evidenceId = stableId("evidence", carrier.assetId, accession);
     rows.targets.push({ entity_id: accession, entity_namespace: "clinvar", entity_type: "variant", preferred_name: title, organism: "Homo sapiens", source_id: carrier.sourceId });
-    rows.evidence.push({ evidence_id: evidenceId, target_id: accession, target_namespace: "clinvar", evidence_type: "clinical_significance", assertion: significance, evidence_value: { clinvar_uid: uid, gene_id: optionalText(gene.geneid), gene_symbol: geneSymbol }, source_id: carrier.sourceId, source_locator: locator(carrier, `/result/${uid}/clinical_significance/description`, significance) });
+    rows.evidence.push({ evidence_id: evidenceId, target_id: accession, target_namespace: "clinvar", evidence_type: "clinical_significance", assertion: significance, evidence_value: { clinvar_uid: uid, gene_id: optionalText(gene.geneid), gene_symbol: geneSymbol }, source_id: carrier.sourceId, source_locator: locator(carrier, `/result/${uid}/${significancePointer}/description`, significance) });
     rows.supporting.push({ supporting_id: stableId("supporting", evidenceId, "clinvar"), evidence_id: evidenceId, supporting_type: "variant_gene_link", supporting_value: { variant_id: accession, gene_id: optionalText(gene.geneid), gene_symbol: geneSymbol }, source_id: carrier.sourceId });
   });
   addSource(rows, carrier, "/result/uids/0", uids[0]!);
