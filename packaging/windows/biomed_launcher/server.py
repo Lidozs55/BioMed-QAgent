@@ -166,21 +166,25 @@ class ManagedServer:
     ) -> str | None:
         """Wait for a healthy base URL; None on startup failure.
 
-        Probes the stdout-reported URL first, then the ``.env``-derived
-        fallback (which covers the "already running" path where this
-        launcher's own node exits immediately because another instance holds
-        the application lock).
+        The stdout-reported URL (this bundle's own server) always wins once it
+        is known. The ``.env``-derived fallback URL is probed only after this
+        launcher's node exited because another instance already holds the
+        application lock (bundle relaunch) — never while it is still starting,
+        so a slow first start (antivirus scans of the embedded runtime) can
+        never silently attach the window to an unrelated BioMed-QAgent
+        instance that happens to answer on the default port (e.g. a permanent
+        deployment on 5173).
         """
         while True:
-            for base in dict.fromkeys(url for url in (self.url, fallback_url) if url):
-                if probe(base):
-                    return base
-            if not self.exited.is_set() or self.already_running:
-                if time.monotonic() >= deadline:
-                    return None
-                sleep(POLL_INTERVAL)
-                continue
-            return None
+            if self.url is not None and probe(self.url):
+                return self.url
+            if self.already_running and probe(fallback_url):
+                return fallback_url
+            if self.exited.is_set() and not self.already_running:
+                return None
+            if time.monotonic() >= deadline:
+                return None
+            sleep(POLL_INTERVAL)
 
     def stop(self, timeout: float = 15.0, killer: Callable[[int], None] | None = None) -> None:
         """Stop the child and its process tree once the UI is done.

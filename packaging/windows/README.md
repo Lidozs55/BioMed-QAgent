@@ -6,7 +6,11 @@
 1. 用内嵌 Node 运行时拉起与 `start.bat` 完全相同的生产入口
    （`node server/dist/index.js --static`，`CREATE_NO_WINDOW`，全程无控制台）；
 2. 从子进程 stdout 解析真实服务地址（`BIOMED_QAGENT_URL=` 行，端口被占时
-   服务器会改用 OS 分配端口，以该行为准），并轮询 `/api/v1/health` 直到 200；
+   服务器会改用 OS 分配端口，以该行为准），并轮询 `/api/v1/health` 直到 200。
+   地址选择规则：**包内服务地址永远优先**；默认端口（`.env` 的 `PORT`，
+   默认 5173）只在包内 node 以 "already running" 退出（同包二次启动）时才
+   探测——因此本机 5173 上若常驻其他 BioMed-QAgent 实例（如正式实验部署），
+   便携包不会附着也不会干扰它，只会用自己的随机端口；
 3. 打开 pywebview 桌面窗口（WebView2 后端）——这是**默认 UI 形态**；
 4. 桌面窗口无法启动（缺 WebView2 / .NET 等）时**自动回退**：`webbrowser`
    打开系统默认浏览器，并弹出一个对话框说明服务在后台运行，点「确定」停止

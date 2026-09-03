@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -90,16 +91,45 @@ def test_wait_ready_prefers_stdout_url(tmp_path: Path) -> None:
     assert managed.exited.wait(timeout=1)
 
 
-def test_wait_ready_falls_back_to_env_url_when_stdout_url_unhealthy(tmp_path: Path) -> None:
-    stdout = b"BIOMED_QAGENT_URL=http://127.0.0.1:9310\n"
-    managed = ManagedServer(tmp_path, [], {}, popen=spawn(FakeProcess(stdout)))
-    managed.start()
-    url = managed.wait_ready(
-        "http://127.0.0.1:5173",
-        time.monotonic() + 5,
-        probe=lambda base: base == "http://127.0.0.1:5173",
-    )
-    assert url == "http://127.0.0.1:5173"
+def test_wait_ready_never_probes_fallback_while_own_server_is_starting(
+    tmp_path: Path,
+) -> None:
+    """A slow own server must never attach the window to a foreign instance.
+
+    Regression: the old logic probed the fallback (default-port) URL while the
+    bundle's own node was still initializing, so when 5173 was occupied by a
+    permanent BioMed-QAgent deployment, the window opened against that
+    deployment instead of the bundle.
+    """
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"BIOMED_QAGENT_URL=http://127.0.0.1:9310\n")
+    fake = FakeProcess(b"")
+    fake.stdout = os.fdopen(read_fd, "rb")
+    managed = ManagedServer(tmp_path, [], {}, popen=spawn(fake))
+    try:
+        managed.start()
+        probed: list[str] = []
+        own_calls = 0
+
+        def probe(base: str) -> bool:
+            nonlocal own_calls
+            probed.append(base)
+            if base == "http://127.0.0.1:9310":
+                own_calls += 1
+                return own_calls >= 3  # own server: 503, 503, … then ready
+            return True  # the foreign instance on the default port is healthy
+
+        url = managed.wait_ready(
+            "http://127.0.0.1:5173",
+            time.monotonic() + 5,
+            probe=probe,
+            sleep=lambda _seconds: time.sleep(0.05),
+        )
+        assert url == "http://127.0.0.1:9310"
+        assert probed and all(u == "http://127.0.0.1:9310" for u in probed)
+    finally:
+        os.close(write_fd)
+        fake.stdout.close()
 
 
 def test_wait_ready_already_running_keeps_probing_fallback(tmp_path: Path) -> None:

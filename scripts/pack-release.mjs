@@ -521,7 +521,9 @@ function readmeText(version, platform, key) {
         "     http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
         "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
         "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
-        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
+        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）；端口被占用时",
+        "     服务自动改用系统分配的端口（实际地址见 launcher.log），不会干扰本机",
+        "     已有的 5173 服务。",
       ]
     : [
         "一、启动步骤",
@@ -532,7 +534,9 @@ function readmeText(version, platform, key) {
         "  2. 访问 http://127.0.0.1:5173 （API 在 /api/v1 下，WebSocket 在 /api/v1/ws）。",
         "  3. 首次打开页面后，在「设置 → 模型」添加 Provider/API key，添加并激活主模型；",
         "     图形任务还要选择具备图像能力的视觉模型。模型凭据不会从环境变量自动引导。",
-        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）。",
+        "  4. 如需修改端口，可自行创建 .env 并设置 PORT（默认 5173）；端口被占用时",
+        "     服务自动改用系统分配的端口（实际地址见 launcher.log），不会干扰本机",
+        "     已有的 5173 服务。",
       ];
   return [
     `BioMed-QAgent v${version} 独立部署包（${platform.label}）`,
