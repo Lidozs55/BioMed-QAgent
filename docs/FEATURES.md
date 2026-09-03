@@ -32,7 +32,7 @@ BioMed-QAgent 是一个**生物医学数据智能检索与整合系统**：用�
 
 | 能力域 | 核心职责 | 主要落点（代码） |
 | --- | --- | --- |
-| 自然语言任务化 | 把研究主题解析为结构化任务规格 | Pi Main Agent + `server/src/agent/pi-adapter.ts` |
+| 自然语言任务化 | 把研究主题解析为结构化任务规格 | Pi Main Agent + `server/src/agent/pi/`（入口 `pi-adapter.ts`） |
 | 多源检索与获取 | 检索文献与数据库、下载原始文件、记录来源 | `.pi/skills/` + `server/src/agent/tools/` |
 | 确定性数据处理 | 获取 → 解析 → 归一化 → 兼容性 → 整合 → 验证 → 发布 | `server/src/dataset/` |
 | 来源与审计 | checksum、下载日志、处理记录、质量门禁 | `server/src/dataset/` + 产物 CSV |
