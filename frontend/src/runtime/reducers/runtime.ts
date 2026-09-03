@@ -7,6 +7,7 @@ import type {
   StageName,
 } from "../contracts";
 import type {
+  SearchInfoItem,
   SubagentProjection,
   TaskProjection,
 } from "../types";
@@ -544,6 +545,43 @@ export function applyWarningEvent(
     createdAt: envelope.timestamp,
     code: payload.code ?? warning?.code ?? "",
     message: payload.message ?? warning?.message ?? "",
+  });
+}
+
+const MAX_SEARCH_INFO_RESULTS = 20;
+
+/**
+ * Aggregate one model call's provider-side web-search hits (Bailian 联网搜索)
+ * into a single per-run conversation item, deduped by URL. Display metadata
+ * only — the sanctioned acquisition/evidence path remains the tool-call flow.
+ */
+export function applyProviderSearchInfoEvent(
+  task: TaskProjection,
+  envelope: EventEnvelope,
+  payload: Extract<EventPayload, { type: "provider_search_info" }>,
+): TaskProjection {
+  const runId = envelope.run_id;
+  if (runId === null) return task;
+  const itemId = `search_info:${runId}`;
+  const existing = task.items.find(
+    (item): item is SearchInfoItem => item.kind === "search_info" && item.itemId === itemId,
+  );
+  const merged = [...(existing?.results ?? [])];
+  const seen = new Set(merged.map((result) => result.url));
+  for (const result of payload.results) {
+    if (merged.length >= MAX_SEARCH_INFO_RESULTS) break;
+    if (seen.has(result.url)) continue;
+    seen.add(result.url);
+    merged.push(result);
+  }
+  return upsertItem(task, {
+    kind: "search_info",
+    itemId,
+    runId,
+    // Keep the item anchored at its first appearance in the timeline.
+    sequence: existing?.sequence ?? envelope.sequence,
+    createdAt: existing?.createdAt ?? envelope.timestamp,
+    results: merged,
   });
 }
 

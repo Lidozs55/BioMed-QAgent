@@ -61,6 +61,7 @@ const EVENT_TYPES = new Set([
   "operation_failed",
   "assistant_delta",
   "assistant_reasoning_delta",
+  "provider_search_info",
   "tool_started",
   "context_usage",
   "conversation_compacted",
@@ -186,6 +187,7 @@ function isEventEnvelope(value: unknown): value is EventEnvelope {
     value.type === "assistant_reasoning_delta" ||
     value.type === "tool_started" ||
     value.type === "context_usage" ||
+    value.type === "provider_search_info" ||
     value.type === "conversation_compacted" ||
     value.type.startsWith("subagent_") ||
     (value.type === "tool_completed" &&
@@ -412,6 +414,24 @@ function payloadShapeMatches(
         contextWindow > 0 &&
         (percent === null || (typeof percent === "number" && Number.isFinite(percent) && percent >= 0)) &&
         payload.source === "runtime"
+      );
+    }
+    case "provider_search_info": {
+      const results = payload.results;
+      return (
+        Array.isArray(results) &&
+        results.length > 0 &&
+        results.length <= 20 &&
+        results.every((entry) => {
+          if (entry === null || typeof entry !== "object") return false;
+          const record = entry as Record<string, unknown>;
+          return (
+            isNonEmptyString(record.site_name) &&
+            isNonEmptyString(record.url) &&
+            (record.title === undefined || typeof record.title === "string") &&
+            (record.icon === undefined || typeof record.icon === "string")
+          );
+        })
       );
     }
     case "permission_requested":

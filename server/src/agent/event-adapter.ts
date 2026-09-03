@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import type { EventEnvelope, EventPayload, JsonValue } from "@biomed/contracts";
+import type {
+  EventEnvelope,
+  EventPayload,
+  JsonValue,
+  ProviderSearchResult,
+} from "@biomed/contracts";
 
 import { BioMedAgentError, type BioMedAgentEvent } from "./contracts.js";
 
@@ -11,6 +16,7 @@ const MAX_OUTPUT_LENGTH = 4_096;
 const MAX_TERMINAL_RUNS = 4_096;
 const MAX_DEPTH = 3;
 const MAX_ITEMS = 20;
+const MAX_SEARCH_RESULTS = 20;
 const SENSITIVE_KEY = /api[-_]?key|authorization|bearer|credential|password|secret|token/i;
 const BEARER_VALUE = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 
@@ -85,6 +91,30 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+/**
+ * Defense-in-depth bounding for captured search results: the capture layer
+ * already bounds them, but the durable log must stay safe even if a future
+ * capture path regresses.
+ */
+function boundedSearchResults(results: ProviderSearchResult[]): ProviderSearchResult[] {
+  const bounded: ProviderSearchResult[] = [];
+  for (const result of results.slice(0, MAX_SEARCH_RESULTS)) {
+    if (result === null || typeof result !== "object") continue;
+    const url = sanitizeText(String(result.url ?? ""), MAX_ARGUMENT_STRING_LENGTH).trim();
+    if (url === "") continue;
+    const entry: ProviderSearchResult = {
+      site_name: sanitizeText(String(result.site_name ?? ""), MAX_ARGUMENT_STRING_LENGTH).trim(),
+      url,
+    };
+    const title = sanitizeText(String(result.title ?? ""), MAX_ARGUMENT_STRING_LENGTH).trim();
+    if (title !== "") entry.title = title;
+    const icon = sanitizeText(String(result.icon ?? ""), MAX_ARGUMENT_STRING_LENGTH).trim();
+    if (icon !== "") entry.icon = icon;
+    bounded.push(entry);
+  }
+  return bounded;
+}
+
 function usageCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
@@ -121,6 +151,7 @@ export class PiEventAdapter {
         "tool_completed",
         "context_compacted",
         "context_usage",
+        "provider_search_info",
         "turn_cancelled",
         "turn_completed",
       ].includes(type)
@@ -226,6 +257,13 @@ export class PiEventAdapter {
                       : { reasoning_tokens: usageCount(event.usage.reasoning) }),
                   },
                 }),
+          }),
+        ];
+      case "provider_search_info":
+        return [
+          this.envelope(runId, {
+            type: "provider_search_info",
+            results: boundedSearchResults(event.results),
           }),
         ];
       case "turn_cancelled":

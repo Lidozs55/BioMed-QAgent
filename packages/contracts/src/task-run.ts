@@ -1,4 +1,5 @@
 import type { JsonValue } from "./json.js";
+import type { ProviderSearchResult } from "./events.js";
 import type { TaskExecutionContext } from "./task-execution-context.js";
 
 export type TaskMode = "agent" | "fixture" | "import";
@@ -234,6 +235,12 @@ export interface MessageRecord {
   created_at: string;
   /** Task event sequence that created this message; absent on legacy records. */
   sequence?: number;
+  /**
+   * Aggregated provider-side web-search hits (Bailian 联网搜索) attached by
+   * ``provider_search_info`` events; display metadata only, never evidence.
+   * Absent when the provider reports no search or the feature is off.
+   */
+  search_results?: ProviderSearchResult[];
 }
 
 export interface SubagentRequest {

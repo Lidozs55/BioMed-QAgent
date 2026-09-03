@@ -14,6 +14,7 @@ import {
   applyConversationCompactionFailedEvent,
   applyConversationCompactionStartedEvent,
   applyFixtureEvent,
+  applyProviderSearchInfoEvent,
   applyPublicationCreatedEvent,
   applyRunQueuedEvent,
   applyRunSteeredEvent,
@@ -164,6 +165,10 @@ export function reduceRuntimeEvent(
     }
     case "warning": {
       task = applyWarningEvent(task, envelope, payload);
+      break;
+    }
+    case "provider_search_info": {
+      task = applyProviderSearchInfoEvent(task, envelope, payload);
       break;
     }
     case "conversation_compacted": {

@@ -170,6 +170,44 @@ describe("PiEventAdapter", () => {
     });
   });
 
+  test("maps provider_search_info with defense-in-depth bounding", () => {
+    const { adapter } = createAdapter();
+
+    const events = adapter.adapt(runId, {
+      type: "provider_search_info",
+      results: [
+        { site_name: "Nature", url: "https://nature.example/a", icon: "https://nature.example/i.ico" },
+        { site_name: "  PubMed  ", url: "https://pubmed.example/b", title: "A study" },
+        { site_name: "NoUrl" },
+        { site_name: "Blank", url: "   " },
+        "garbage",
+      ],
+    } as never);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toEqual({
+      type: "provider_search_info",
+      results: [
+        { site_name: "Nature", url: "https://nature.example/a", icon: "https://nature.example/i.ico" },
+        { site_name: "PubMed", url: "https://pubmed.example/b", title: "A study" },
+      ],
+    });
+  });
+
+  test("caps provider_search_info results at twenty entries", () => {
+    const { adapter } = createAdapter();
+    const results = Array.from({ length: 40 }, (_, index) => ({
+      site_name: `Site ${index}`,
+      url: `https://site-${index}.example`,
+    }));
+
+    const events = adapter.adapt(runId, { type: "provider_search_info", results });
+
+    const payload = events[0]?.payload as { results: Array<{ url: string }> };
+    expect(payload.results).toHaveLength(20);
+    expect(payload.results.at(-1)?.url).toBe("https://site-19.example");
+  });
+
   test("a turn that ended after compaction is not terminal until completeRun", () => {
     const { adapter } = createAdapter();
     const events = [
