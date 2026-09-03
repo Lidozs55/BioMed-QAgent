@@ -204,11 +204,10 @@ that a check-in happened.
 
 - **Pod ID**: `6a520e34f4baa9b280bba195`, via `COMMONLY_POD_ID` in the project
   `.env` when present; both `scripts/commonly-up.{sh,bat}` fall back to this same
-  default value (shared by all members; not secret).
+  default value.
 - **Agent name**: first positional arg of `scripts/commonly-up.sh` >
   `COMMONLY_AGENT_NAME` > `<hostname>-agent`, sanitized to the registry charset
-  `[a-z0-9-]` (lowercased, other chars dropped, edge dashes trimmed). On this
-  machine → `lidozs55-agent`.
+  `[a-z0-9-]` (lowercased, other chars dropped, edge dashes trimmed).
 - **Runtime token** lives in `scripts/commonly-agent/.commonly-env`
   (git-ignored); never print or commit it.
 - **Check-in integrity**: do **not** use a human or operator `commonly pod send`
@@ -300,39 +299,18 @@ Commonly board is the execution-status view. To avoid circular updates:
 - **Branch model**: `dev` is the development integration branch — all feature
   work merges here. `main` is the public release branch: protected, receives
   changes only via release pull requests from `dev`, and carries only public
-  content. Internal content is dev-only and must be pruned by every release PR —
-  at minimum `docs/`, `AGENTS.md`, `PROBLEM.md`, plus agent tooling and internal
-  evaluation material (`.agents/`, `.superpowers/`, `.playwright-mcp/`, `.husky/`
-  with the `husky` prepare script/devDep, internal gold/eval test suites,
-  `skills-lock.json`); commit `a3b820e9` on `main` is the canonical example.
-  `main` commits are release-side actions and never merge back into `dev`; `dev`
-  must remain a content superset of `main`.
-- **PR cadence**: a PR to `main` is a release event, not a sync point — batch
+  content. `main` commits are release-side actions and never merge back into
+  `dev`; `dev` must remain a content superset of `main`.
+- **Release PRs**: a PR to `main` is a release event, not a sync point — batch
   several completed `dev` merges into one release PR; never open one per merge.
-  Before opening it, re-check the dev-only capability exclusions and the
-  internal-content prune list above.
-- **Dev-only capabilities must never reach `main`**: the agent self-code access
-  design is visible and usable on `dev` only. Identify it by capability and
-  path, not by commit hash (hashes rot on amend/rebase):
-  - the `read_dataset_core_source` tool: `server/src/agent/tools/core-source.ts`
-    plus its registrations in `business-tools.ts` / `tools/index.ts` /
-    `skill-tool-map.ts` / dataset-construction `SKILL.md`;
-  - the execution-prompt authorizations to author FamilySpec topology and to
-    fix rejections by reading Core source (`server/src/agent/phase1-prompt.ts`).
-  Release PRs from `dev` must exclude or revert exactly these capabilities
-  (introduced by branch `feat/relax-publication-gates`, commits `cef17009`,
-  `b1fd4e4b`); a `main`-side guard test (pattern:
-  `server/tests/phase8-architecture-guard.test.ts`) should fail any PR that
-  re-introduces them.
-- **Agent self-modification charter**: any future code-write capability for
-  the agent is governed by
-  [docs/AGENT_SELF_MODIFICATION_CHARTER.md](docs/AGENT_SELF_MODIFICATION_CHARTER.md)
-  (scope whitelist, governance surfaces, human-run verification); the charter
-  and the capability are dev-only and land together.
-- **Releasable from the same branch**: the Dataset Core gate relaxations
-  (`d7f7e8ec`: empty-table partial publish, report-only gene coverage,
-  authored-topology requirement derivation) are a legitimate product fix that
-  MUST ship to `main` — do not revert them together with the dev-only set.
+  Every release PR must apply
+  [docs/RELEASE_PRUNE_CHECKLIST.md](docs/RELEASE_PRUNE_CHECKLIST.md) — the
+  single authority for internal-content pruning, dev-only capability
+  exclusion, and must-ship items. The checklist is used only when cutting a
+  release PR and is never injected into agent prompts.
+- **Where to work**: small changes (docs, single-file fixes) edit directly on
+  the task branch or on `dev`; worktrees are only for developing multiple
+  branches in parallel (see Optional worktrees).
 - Prefer a dedicated branch per task, named like `feat/TASK-XXX-summary` or
   `fix/summary`.
 - **Single-file small changes** (typos, config tweaks) may be committed directly
@@ -416,8 +394,10 @@ reason.
 
 ### Optional worktrees
 
-Worktrees are optional. For parallel branches without disturbing the shared
-working directory:
+Worktrees exist for parallel development only — running several branches at
+once without disturbing the shared working directory. Small or docs-only
+changes edit on the task branch or directly on `dev`; do not create a
+worktree for them:
 
 ```bash
 git worktree add ../BioMed-QAgent-<branch-name> <branch-name>
