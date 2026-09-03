@@ -11,7 +11,7 @@
  * resolution fails closed with an actionable message — there is no hidden
  * default visual model and no cross-provider credential reuse.
  */
-import { modelRetryPolicyFromRuntimeLimits } from "@biomed/contracts";
+import { modelRetryPolicyFromRuntimeLimits, DEFAULT_CONTEXT_WINDOW } from "@biomed/contracts";
 import type { BioMedModelConfig } from "../../agent/contracts.js";
 import type { AuthState, ModelRecord, ProviderRecord, RegistryState } from "./store.js";
 
@@ -154,7 +154,23 @@ export function effectiveContextWindow(
   settings: RegistryState["settings"],
   model: ModelRecord | undefined,
 ): number {
-  return settings.context_window ?? model?.context_window ?? 131_072;
+  return settings.context_window ?? model?.context_window ?? DEFAULT_CONTEXT_WINDOW;
+}
+
+/**
+ * 思考模式由思考强度推导（思考强度是唯一入口，UI 无独立思考开关）：
+ * effort 配置为非关闭值 ⇒ 开启思考；off/none ⇒ 关闭；模型未配置 effort 时
+ * 回退旧思维链开关（legacy 模型兼容）。必须与 agent/pi/model-profile.ts 的
+ * 请求层推导保持同一规则——那一层是上游 wire 格式的最终防线。
+ */
+export function resolveThinkingMode(
+  params: { reasoning_effort?: unknown } | undefined,
+  fallback: boolean | undefined,
+): boolean | undefined {
+  const effort = params?.reasoning_effort;
+  if (typeof effort !== "string" || effort === "") return fallback;
+  if (effort === "off" || effort === "none") return false;
+  return true;
 }
 
 export function resolveActiveConfig(
@@ -184,7 +200,7 @@ export function resolveActiveConfig(
     topP: settings.advanced.top_p,
     repetitionPenalty: settings.advanced.repetition_penalty,
     enableSearch: settings.advanced.enable_search,
-    thinkingMode: settings.advanced.thinking_mode,
+    thinkingMode: resolveThinkingMode(model?.params, settings.advanced.thinking_mode),
     retryPolicy: modelRetryPolicyFromRuntimeLimits(settings.runtime_limits),
     params: model?.params ?? {},
   };

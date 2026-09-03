@@ -48,18 +48,20 @@ pywebview + pyobjc 全家，**linux 不装**（PyGObject 无法 pip 安装，直
 前端已具备 PWA 安装能力（`manifest.json` + 直通 service worker + 192/512 图标）：
 在 Chrome/Edge 中可"安装应用"获得独立窗口与任务栏图标，与桌面入口互补。
 
-### Windows exe（协作者接入点）
+### Windows exe（打包器内建）
 
-`BioMed-QAgent.exe` 不由本打包器产出：它是一个极薄的启动器，只需
+`BioMed-QAgent.exe` 由本打包器在第 9 步直接产出（`buildWindowsExeWrapper`）：
+从 `scripts/packaging/win-exe-wrapper.py` 构建的 PyInstaller onefile GUI 薄启动器，
 
 - 使用包根 `assets/icon.ico`（256×256 PNG-in-ICO，派生自
   `assets/logo/biomed-qagent-icon.png` 方形透明 logo）作为 exe 图标；
 - 在 exe 自身目录启动 `runtime\python\python.exe desktop-app.py` 并等待其退出
-  （GUI 子系统、无控制台窗口；进程管理与回退逻辑全部在 desktop-app.py 内）。
+  （GUI 子系统、无控制台窗口；进程管理与回退逻辑全部在 desktop-app.py 内），
+  子进程输出重定向到包根 `launcher.log`（每次经 exe 启动时重写）。
 
-可选实现（任选其一）：Node SEA + postject 注入 + rcedit 贴图标/改 GUI 子系统；
-PyInstaller onefile；或任何等价的原生启动器。完成后放入包根即可，README.txt
-的启动说明已为 exe 预留位置。
+构建工具链来自 `packaging/windows` 的 uv 环境（PyInstaller 版本由其
+`uv.lock` 钉死）；不收集任何 launcher 代码，desktop-app.py 始终是唯一的
+启动逻辑代码路径。
 
 ## 产物布局
 
@@ -168,8 +170,8 @@ Agent 的源码读取是正式产品能力，不是 dev-only 能力。运行时�
   （health/SPA/manifest/sw/icon 全 200）→ SIGTERM 有界停止 host 无孤儿进程；
   `desktop-app.py --self-test` 全绿。**未验证**：win/macos 的 `DESKTOP_EXTRAS` pip
   解析（构建时网络隔离未能交叉打包；版本钉死基于发布记录，解析失败会在打包步
-  显式报错）、pywebview 真机开窗（Windows WebView2/pythonnet、macOS WKWebView）、
-  Windows exe 启动器（协作者产出）。首次真机使用前先跑
+  显式报错）、pywebview 真机开窗（Windows WebView2/pythonnet、macOS WKWebView）。
+  首次真机使用前先跑
   `runtime/python/<bin> desktop-app.py --self-test`。
 - Playwright 浏览器不随包（体积原因）；目标机用到浏览器工具时按 `README.txt` 中的命令安装 chromium。
 - Linux/macOS 目标机首次运行需按 README 执行一次 `chmod +x`（从 Windows 打 zip 会丢失执行位；跨平台分发建议打 tar.gz）。

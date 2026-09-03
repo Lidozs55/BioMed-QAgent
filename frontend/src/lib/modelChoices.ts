@@ -3,6 +3,7 @@ import type {
   ModelInfo,
   ModelSettings,
 } from "@/hooks/useAPI";
+import { DEFAULT_CONTEXT_WINDOW } from "@biomed/contracts";
 
 /**
  * Map the configured managed-model list (``GET /api/v1/model-registry/models``)
@@ -15,7 +16,7 @@ export function managedModelsToChoices(models: ManagedModelInfo[]): ModelInfo[] 
     id: model.id,
     name: model.name || model.model_id,
     description: `${model.provider_name} · ${model.model_id}`,
-    context_window: model.context_window ?? 131072,
+    context_window: model.context_window ?? DEFAULT_CONTEXT_WINDOW,
     suggested_max_tokens: model.suggested_max_tokens ?? model.max_output_tokens ?? 8192,
     capabilities: model.capabilities,
     recommended: model.active,

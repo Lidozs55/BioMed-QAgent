@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { DEFAULT_CONTEXT_WINDOW } from "@biomed/contracts";
 import { BioMedAgentError, type BioMedSessionConfig } from "../src/agent/contracts.js";
 import { SKILL_TOOL_NAMES } from "../src/agent/skills/skill-tool-map.js";
 import {
@@ -127,7 +128,7 @@ describe("Pi system prompt", () => {
       /if a listed static family exactly matches the product, use the static route/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
-      /author the FamilySpec topology yourself/i,
+      /never hand-write topology or pass a dynamic FamilySpec to the static validator/i,
     );
     expect(PHASE1_SYSTEM_PROMPT).toMatch(
       /never infer provider availability from static enums/i,
@@ -458,6 +459,48 @@ describe("Pi model profile mapping", () => {
       tool_choice: "auto",
     });
   });
+
+  test("derives enable_thinking from reasoning_effort, healing stale thinking_mode=false", () => {
+    // Regression: a saved model with 超高 effort plus a stale thinking_mode:false
+    // (no separate toggle exists any more) used to reach DashScope as
+    // "reasoning_effort=xhigh + enable_thinking=false" and got every request
+    // rejected with 400 invalid_parameter ('reasoning_effort' must be 'none'
+    // when 'enable_thinking' is false) until the run failed.
+    expect(applyModelProfileToPayload(
+      { model: "qwen3.8-flash", messages: [] },
+      {
+        provider: "dashscope",
+        modelId: "qwen3.8-flash",
+        apiKey: "secret",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        thinkingMode: false,
+        params: { reasoning_effort: "xhigh", thinking_mode: false },
+      },
+    )).toEqual({
+      model: "qwen3.8-flash",
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "xhigh",
+    });
+  });
+
+  test("treats reasoning_effort 'none' like 关闭: thinking off, value dropped", () => {
+    expect(applyModelProfileToPayload(
+      { model: "qwen-plus", messages: [] },
+      {
+        provider: "dashscope",
+        modelId: "qwen-plus",
+        apiKey: "secret",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        thinkingMode: true,
+        params: { reasoning_effort: "none" },
+      },
+    )).toEqual({
+      model: "qwen-plus",
+      messages: [],
+      enable_thinking: false,
+    });
+  });
 });
 describe("PiAgentAdapter", () => {
   test("recovers only interrupted provider streams outside Pi's normal retry classifier", () => {
@@ -686,9 +729,9 @@ describe("PiAgentAdapter", () => {
 
   test("resolveSessionBudget defaults and explicit reserve", () => {
     expect(resolveSessionBudget({ provider: "p", modelId: "m", apiKey: "k" })).toEqual({
-      contextWindow: 131_072,
+      contextWindow: DEFAULT_CONTEXT_WINDOW,
       maxTokens: 8_192,
-      reserveTokens: Math.round(131_072 * 0.05),
+      reserveTokens: Math.round(DEFAULT_CONTEXT_WINDOW * 0.05),
     });
     expect(resolveSessionBudget({
       provider: "p",
