@@ -15,6 +15,7 @@ Run with --self-test to exercise the pure helpers without spawning anything.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -30,6 +31,12 @@ HEALTH_POLL_INTERVAL_SECONDS = 0.5
 HOST_STOP_TIMEOUT_SECONDS = 10.0
 WINDOW_TITLE = "BioMed QAgent"
 URL_BANNER_PREFIX = "BIOMED_QAGENT_URL="
+
+
+def log(message: str) -> None:
+    """Print with flush: stdout may be block-buffered when redirected."""
+
+    print(message, flush=True)
 
 
 def package_root() -> Path:
@@ -161,34 +168,43 @@ def stop_host(process: subprocess.Popen[bytes]) -> None:
 
 
 def run() -> int:
+    # Service managers (and `timeout`) send SIGTERM, not SIGINT; without this
+    # handler the host child would be orphaned with its port and instance
+    # lock still held. Raising KeyboardInterrupt routes TERM into the same
+    # bounded shutdown as Ctrl+C below.
+    def handle_sigterm(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
     root = package_root()
     node_bin = embedded_node_bin(root)
     host_entry = root / "server" / "dist" / "index.js"
     if not node_bin.is_file() or not host_entry.is_file():
-        print("[desktop] bundle layout error: embedded node or server/dist missing")
+        log("[desktop] bundle layout error: embedded node or server/dist missing")
         return 1
 
-    print("[desktop] starting BioMed-QAgent host...")
+    log("[desktop] starting BioMed-QAgent host...")
     process = spawn_host(root)
     try:
         base_url = resolve_base_url(process, HOST_START_TIMEOUT_SECONDS)
         if base_url is None:
-            print("[desktop] host did not report its URL; see host output above")
+            log("[desktop] host did not report its URL; see host output above")
             return 1
-        print(f"[desktop] host at {base_url}")
+        log(f"[desktop] host at {base_url}")
         if not wait_for_health(base_url, HEALTH_TIMEOUT_SECONDS):
-            print("[desktop] host did not become healthy in time; see host output above")
+            log("[desktop] host did not become healthy in time; see host output above")
             return 1
         if open_native_window(base_url):
             return 0
-        print("[desktop] native window unavailable; opening the system browser")
+        log("[desktop] native window unavailable; opening the system browser")
         if not webbrowser.open(base_url):
-            print(f"[desktop] no browser found; open {base_url} manually (Ctrl+C to stop)")
+            log(f"[desktop] no browser found; open {base_url} manually (Ctrl+C to stop)")
         # Foreground service mode: serve until the host exits or Ctrl+C.
         process.wait()
         return process.returncode if process.returncode is not None else 0
     except KeyboardInterrupt:
-        print("[desktop] interrupted; stopping host")
+        log("[desktop] interrupted; stopping host")
         return 0
     finally:
         stop_host(process)
@@ -199,7 +215,7 @@ def self_test() -> int:
 
     def check(name: str, condition: bool) -> None:
         status = "ok" if condition else "FAIL"
-        print(f"{status} - {name}")
+        print(f"{status} - {name}", flush=True)
         if not condition:
             failures.append(name)
 
@@ -227,7 +243,7 @@ def self_test() -> int:
     )
 
     verdict = "PASS" if not failures else "FAIL"
-    print(f"{verdict}: desktop-app self-test ({len(failures)} failures)")
+    print(f"{verdict}: desktop-app self-test ({len(failures)} failures)", flush=True)
     return 0 if not failures else 1
 
 
