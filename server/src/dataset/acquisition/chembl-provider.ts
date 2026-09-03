@@ -9,7 +9,7 @@ import type {
 
 export const CHEMBL_FILES_PROVIDER_ID = "chembl.files.v1";
 export const CHEMBL_FILES_IMPLEMENTATION_DIGEST =
-  "fe925a074f1375fb29bd629eb62a2afb5c6fd51948666df85200668fbcc83ab2";
+  "f6347cf2389f5ff4c83c01cd1fe84a9729c9f04b1f13f9045d242981b5d730b7";
 export const CHEMBL_FILES_SOURCE_ID_PREFIX = "source_chembl_bioactivity";
 
 const CHEMBL_HOST = "www.ebi.ac.uk";
@@ -78,7 +78,10 @@ function parseTarget(input: ChemblParameters): string {
     ...valuesFor(input.entities, TARGET_KEYS),
   ]).filter((value) => CHEMBL_ID.test(value));
   if (candidates.length !== 1) {
-    throw new TypeError("chembl.files.v1 requires exactly one valid ChEMBL target ID");
+    throw new TypeError(
+      "chembl.files.v1 requires exactly one valid ChEMBL target ID in the " +
+        `binding accession or entities under keys: ${TARGET_KEYS.join(", ")}`,
+    );
   }
   return candidates[0]!;
 }
@@ -87,7 +90,10 @@ function parseCompounds(input: ChemblParameters): string[] {
   const candidates = valuesFor(input.entities, COMPOUND_KEYS);
   if (candidates.length === 0 || candidates.length > MAX_COMPOUNDS ||
       candidates.some((value) => !CHEMBL_ID.test(value))) {
-    throw new TypeError(`chembl.files.v1 requires 1-${MAX_COMPOUNDS} valid ChEMBL compound IDs`);
+    throw new TypeError(
+      `chembl.files.v1 requires 1-${MAX_COMPOUNDS} valid ChEMBL compound IDs ` +
+        `in entities under keys: ${COMPOUND_KEYS.join(", ")}`,
+    );
   }
   return candidates.sort();
 }

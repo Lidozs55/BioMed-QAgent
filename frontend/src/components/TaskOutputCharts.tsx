@@ -1,8 +1,7 @@
 /**
- * 侧边栏「数据可视化」区块：当前会话产出图表数据（extract_chart_data_vlm
- * 工具结果进入会话流）后自动渲染图表预览。图表 CSV 经只读的
- * ``GET /api/v1/tasks/:id/file`` 从任务工作区读取并做本地缓存；无图表时
- * 整个区块不渲染，保持侧边栏只显示会话列表。
+ * 任务输出栏的图表预览：当前任务的 extract_chart_data_vlm 工具结果
+ * 经只读任务文件接口加载，并从 chart metadata / points CSV 渲染。
+ * 该视图只展示工具产出的候选图表，不改变正式 Publication 信任状态。
  */
 import {
   CaretDownIcon,
@@ -40,7 +39,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 
 const SERIES_PALETTE = [
   "var(--chart-1)",
@@ -79,12 +77,12 @@ function logAxisProps(log: boolean): { scale?: "log"; domain?: ["auto", "auto"];
   return log ? { scale: "log", domain: ["auto", "auto"], type: "number" } : {};
 }
 
-function SidebarChartCard({ chart }: { chart: SidebarChart }) {
+function TaskOutputChartCard({ chart }: { chart: SidebarChart }) {
   const multi = chart.series.length > 1;
   const caption = [chart.xLabel, chart.yLabel].filter((label) => label !== "").join(" / ");
   return (
-    <div className="rounded-md border border-sidebar-border bg-sidebar-accent/30 p-2">
-      <p className="truncate text-xs font-medium text-sidebar-foreground" title={chart.title}>
+    <div className="rounded-md border border-border bg-muted/30 p-2">
+      <p className="truncate text-xs font-medium text-foreground" title={chart.title}>
         {chart.title}
       </p>
       <ResponsiveContainer width="100%" height={150}>
@@ -151,7 +149,7 @@ function SidebarChartCard({ chart }: { chart: SidebarChart }) {
   );
 }
 
-export function SidebarChartPanel() {
+export function TaskOutputCharts() {
   const activeTaskId = useAgentStore((state) => state.activeTaskId);
   const items = useAgentStore((state) =>
     state.activeTaskId === null ? null : state.tasksById[state.activeTaskId]?.items ?? null,
@@ -230,39 +228,31 @@ export function SidebarChartPanel() {
   if (charts === null || charts.length === 0) {
     if (!loadError) return null;
     return (
-      <SidebarGroup className="py-2">
-        <SidebarGroupContent className="px-2">
-          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-            <ChartBarIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            图表数据加载失败
-          </p>
-        </SidebarGroupContent>
-      </SidebarGroup>
+      <p className="flex items-center gap-1.5 truncate px-1 text-xs text-muted-foreground">
+        <ChartBarIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        图表数据加载失败
+      </p>
     );
   }
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <SidebarGroup className="py-2">
-        <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground">
-          <ChartBarIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="truncate">数据可视化</span>
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-            {charts.length}
-            {open ? (
-              <CaretUpIcon aria-hidden="true" className="size-3" />
-            ) : (
-              <CaretDownIcon aria-hidden="true" className="size-3" />
-            )}
-          </span>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <SidebarGroupContent className="space-y-2 px-2 pt-2">
-            {charts.map((chart) => (
-              <SidebarChartCard key={chart.chartId} chart={chart} />
-            ))}
-          </SidebarGroupContent>
-        </CollapsibleContent>
-      </SidebarGroup>
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground">
+        <ChartBarIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="truncate">工具图表预览</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+          {charts.length}
+          {open ? (
+            <CaretUpIcon aria-hidden="true" className="size-3" />
+          ) : (
+            <CaretDownIcon aria-hidden="true" className="size-3" />
+          )}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 px-2 pt-2">
+        {charts.map((chart) => (
+          <TaskOutputChartCard key={chart.chartId} chart={chart} />
+        ))}
+      </CollapsibleContent>
     </Collapsible>
   );
 }

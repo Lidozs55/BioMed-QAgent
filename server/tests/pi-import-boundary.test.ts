@@ -15,10 +15,14 @@ async function sourceFiles(directory: string): Promise<string[]> {
   return nested.flat();
 }
 
-test("only pi-adapter.ts imports Pi-owned packages", async () => {
+test("only the pi adapter package imports Pi-owned packages", async () => {
   const sourceRoot = path.resolve(process.cwd(), "src");
+  // The adapter package lives in src/agent/pi/ with the stable public entry
+  // src/agent/pi-adapter.ts (pure re-export barrel).
+  const piPackageRoot = path.join(sourceRoot, "agent", "pi");
   const violations: string[] = [];
   for (const file of await sourceFiles(sourceRoot)) {
+    if (file.startsWith(piPackageRoot + path.sep)) continue;
     if (file === path.join(sourceRoot, "agent", "pi-adapter.ts")) continue;
     const contents = await readFile(file, "utf8");
     if (/[@]earendil-works\/pi-(?:coding-agent|agent-core|ai|tui)/.test(contents)) {

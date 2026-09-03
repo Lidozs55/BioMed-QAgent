@@ -91,6 +91,21 @@ const MAX_COMPACTION_CONTINUATIONS = 3;
 const CONTINUE_AFTER_COMPACTION_PROMPT =
   "Continue the task. Your previous turn was compacted; resume from where you left off.";
 
+/**
+ * Dataset Core tools active from the first model turn (route inspection, the
+ * static validate/execute pair, and the dynamic publication pair). Kept in
+ * sync with SKILL_TOOL_MAP's dataset-construction entry by
+ * initial-active-tools.test.ts; every other curated tool activates on demand
+ * through activate_agent_tools.
+ */
+export const INITIAL_ACTIVE_TOOL_NAMES: readonly string[] = [
+  "inspect_dataset_execution_routes",
+  "validate_dataset_execution",
+  "execute_dataset_execution",
+  "prepare_dynamic_family_publication",
+  "submit_dynamic_family_publication",
+];
+
 export interface DurableAgentWorkspace {
   root: string;
   tools: readonly BioMedAgentTool[];
@@ -652,13 +667,7 @@ export async function createDurableAgentRuntime(
         cwd: workspace.root,
         sessionDir,
         tools: workspace.tools,
-        initialToolNames: [
-          "inspect_dataset_execution_routes",
-          "validate_dataset_execution",
-          "execute_dataset_execution",
-          "prepare_dynamic_family_publication",
-          "submit_dynamic_family_publication",
-        ],
+        initialToolNames: INITIAL_ACTIVE_TOOL_NAMES,
         getCurrentPublicationId: () => workspace.getCurrentPublicationId?.() ?? null,
         ...(executionContext === null
           ? {}

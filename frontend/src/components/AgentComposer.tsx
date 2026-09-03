@@ -14,7 +14,6 @@ import {
   XIcon,
 } from "@phosphor-icons/react";
 
-import { AssetsEntry } from "@/components/AssetsSheet";
 import { ContextUsageInline } from "@/components/ContextUsageInline";
 import { DatabaseSelector } from "@/components/DatabaseSelector";
 import { Badge } from "@/components/ui/badge";
@@ -336,7 +335,6 @@ export function AgentComposer({
         </AttachmentGroup>
       )}
       <div className="flex min-w-0 items-center gap-1.5 px-2 py-2">
-        <AssetsEntry />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={

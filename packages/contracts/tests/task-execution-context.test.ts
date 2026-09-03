@@ -131,6 +131,29 @@ describe("frozen evaluation execution context", () => {
     expect(() => parseTaskExecutionContext(pathSelectionKey)).toThrow(/URL or path syntax/u);
   });
 
+  it("accepts conjoined source labels but rejects path-shaped ones in allowed_sources", () => {
+    const conjoined = gold6Context();
+    conjoined.allowed_sources = ["UniProt", "NCBI Gene/ClinVar", "COSMIC when publicly accessible"];
+    const parsed = parseTaskExecutionContext(conjoined);
+    expect(parsed.allowed_sources).toContain("NCBI Gene/ClinVar");
+
+    const drivePath = gold6Context();
+    drivePath.allowed_sources = ["C:/data/pubmed"];
+    expect(() => parseTaskExecutionContext(drivePath)).toThrow(/URL or path syntax.*allowed_sources/u);
+
+    const absolutePath = gold6Context();
+    absolutePath.allowed_sources = ["/etc/pubmed"];
+    expect(() => parseTaskExecutionContext(absolutePath)).toThrow(/URL or path syntax.*allowed_sources/u);
+
+    const parentTraversal = gold6Context();
+    parentTraversal.allowed_sources = ["pubmed/../secrets"];
+    expect(() => parseTaskExecutionContext(parentTraversal)).toThrow(/URL or path syntax.*allowed_sources/u);
+
+    const backslashPath = gold6Context();
+    backslashPath.allowed_sources = ["C:\\data\\pubmed"];
+    expect(() => parseTaskExecutionContext(backslashPath)).toThrow(/URL or path syntax.*allowed_sources/u);
+  });
+
   it("rejects a context whose prompt_sha256 or case_id differs from the frozen case", () => {
     const mutatedPrompt = gold6Context();
     mutatedPrompt.prompt_sha256 = "b".repeat(64);

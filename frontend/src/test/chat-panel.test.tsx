@@ -194,43 +194,12 @@ describe("ChatPanel", () => {
     expect(compactTask).toHaveBeenCalledWith("task_terminal");
   });
 
-  it("shows the unified assets entry before the attachment control", () => {
+  it("keeps attachment controls without a composer Resources entry", () => {
     seedTerminalTask();
-    const state = useAgentStore.getState();
-    const task = state.tasksById.task_terminal;
-    useAgentStore.setState({
-      tasksById: {
-        ...state.tasksById,
-        task_terminal: {
-          ...task,
-          artifactsById: {
-            artifact_main: {
-              artifact_id: "artifact_main",
-              name: "main_data.csv",
-              size: 128,
-              sha256: "a".repeat(64),
-              media_type: "text/csv",
-              taskId: "task_terminal",
-              generatedByStepId: null,
-            },
-          },
-          artifactOrder: ["artifact_main"],
-        },
-      },
-    });
+    render(<ChatPanel startTask={vi.fn()} />);
 
-    const { container } = render(<ChatPanel startTask={vi.fn()} />);
-    const composer = container.querySelector('[data-slot="agent-composer"]');
-    // 统一“资源”入口取代了原产物 FAB；有活动任务即出现，不依赖产物数量。
-    const assetsButton = screen.getByRole("button", { name: "资源" });
-    const attachmentButton = screen.getByRole("button", { name: "添加附件" });
-
-    expect(assetsButton).toBeVisible();
-    expect(
-      assetsButton.compareDocumentPosition(attachmentButton) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(composer).toContainElement(assetsButton);
+    expect(screen.getByRole("button", { name: "添加附件" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "资源" })).not.toBeInTheDocument();
   });
 
   it("renders attachments, removes one, and submits the remaining file with its note", async () => {
@@ -1607,12 +1576,7 @@ describe("ChatPanel", () => {
 
     const { container } = render(<ChatPanel startTask={vi.fn()} />);
 
-    const button = screen.getByRole("button", { name: "查看 1 个子任务" });
-    expect(button).toBeVisible();
-    expect(button).toHaveTextContent("1 个运行中");
-    expect(
-      button.querySelector('[data-slot="spinner"]'),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /子任务/ })).not.toBeInTheDocument();
     expect(
       container.querySelector('[data-slot="resizable-panel-group"]'),
     ).not.toBeInTheDocument();
