@@ -232,7 +232,11 @@ def self_test() -> int:
     command = host_command(root)
     check(
         "host entry is server/dist/index.js",
-        any(part.endswith("server/dist/index.js") for part in command),
+        any(
+            # Windows paths use backslashes; normalize before matching.
+            part.replace("\\", "/").endswith("server/dist/index.js")
+            for part in command
+        ),
     )
     check("host runs in static mode", "--static" in command)
     check("host honors optional .env", "--env-file-if-exists=.env" in command)
