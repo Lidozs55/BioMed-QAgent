@@ -1250,6 +1250,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
   readonly runId: string;
   private activeTurn?: ActiveTurn;
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeSearchInfo: () => void;
   private disposePromise?: Promise<void>;
   private readonly cleanup?: () => Promise<void>;
   private readonly getCurrentPublicationId?: () => string | null;
@@ -1264,10 +1265,26 @@ class PiBioMedAgentSession implements BioMedAgentSession {
     this.cleanup = config.cleanup;
     this.getCurrentPublicationId = config.getCurrentPublicationId;
     this.unsubscribe = upstream.subscribe((event) => this.handleEvent(event));
+    this.unsubscribeSearchInfo = upstream.onSearchInfo?.((results) => {
+      this.pushSearchInfo(results);
+    }) ?? (() => {});
   }
 
   getBudget(): BioMedSessionBudget | null {
     return this.upstream.getBudget?.() ?? null;
+  }
+
+  /**
+   * Forward one model call's captured web-search hits into the active turn.
+   * The capture resolves asynchronously from the response mirror, so on a
+   * turn that already finished the (rare) trailing batch is dropped.
+   */
+  private pushSearchInfo(results: ProviderSearchResult[]): void {
+    const active = this.activeTurn;
+    if (active === undefined || active.terminal || results.length === 0) return;
+    this.pushBoundary(active, {
+      event: { type: "provider_search_info", results },
+    });
   }
 
   private handleEvent(event: PiUpstreamEvent): void {
@@ -1609,6 +1626,7 @@ class PiBioMedAgentSession implements BioMedAgentSession {
       } finally {
         try {
           this.unsubscribe();
+          this.unsubscribeSearchInfo();
           this.upstream.dispose();
         } finally {
           await this.cleanup?.();
