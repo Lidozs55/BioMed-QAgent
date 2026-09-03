@@ -86,8 +86,7 @@ Before starting any task, consult:
   historical records (retired Python runtime, Phase 0-8 migration, past reviews and
   plans). **Nothing was deleted** - files were moved or archived, and can be restored
   from git history. For why/history questions, consult them explicitly; never treat
-  them as current behavior. Moved paths are documented in `docs/README.md`
-  (文档地图, "本轮归档说明").
+  them as current behavior. Moved paths are documented in `docs/README.md`.
 - `PROBLEM.md` is static background (competition problem statement and evaluation
   criteria), not per-task reading — load it when evaluation-relevant decisions
   are involved, not on every task.
@@ -104,7 +103,7 @@ Before starting any task, consult:
 ```bash
 pnpm install --frozen-lockfile    # single workspace lockfile
 pnpm dev                          # TS Host + Pi + TS Core + Vite (only normal entry)
-pnpm test                         # full workspace tests (= pnpm test:full; cross-cutting changes / CI parity)
+pnpm test                         # full workspace tests. ONLY use for cross-cutting changes. Prefer targeted filters (see Quality Gates).
 pnpm --filter @biomed/server test     # targeted: server/ changes only
 pnpm --filter @biomed/frontend test   # targeted: frontend/ changes only
 pnpm --filter @biomed/contracts test  # targeted: packages/contracts/ quick feedback
@@ -315,14 +314,13 @@ Commonly board is the execution-status view. To avoid circular updates:
 - **Direct-to-`dev` changes**: single-file small changes (typos, config
   tweaks, docs) may be committed directly — first `git pull` to sync, and
   confirm no other agent is editing the same file (see Commonly Workflow
-  coordination). Commit incrementally at logical checkpoints; each commit is
-  a meaningful, self-contained change.
-- **Worktrees** are only for developing multiple branches in parallel
-  (see Optional worktrees).
+  coordination). If unsure, use a branch.
+- **Commit** incrementally at logical checkpoints; each commit is
+  a **meaningful**, self-contained change.
 
 ### Self-serve merge
 
-Each agent is responsible for merging its own branch. Before merging, **all** must
+Each agent is responsible for merging its own branch to `dev`. Before merging, **all** must
 hold:
 
 1. The branch is functionally stable and the target changes are achieved.
@@ -334,7 +332,7 @@ Merge steps:
 - Sync with `dev` first: if the branch is ≤5 commits behind `dev`, `git pull
   --rebase origin dev`; if it is further behind or a conflict is likely (both
   sides touched the same files), `git fetch origin dev && git merge origin/dev`.
-- After resolving conflicts, **re-run all Quality Gates**.
+- After resolving conflicts, **re-run targeted tests for the affected areas**.
 - Check out local `dev`, ensure it is clean and up to date, then merge with
   `git merge --no-ff <branch>`; push `dev`.
 - After merging, post a `[DONE]` message summarizing the result.
@@ -349,7 +347,6 @@ Merge constraints:
   unsure).
 - One merge to `dev` = one complete functional unit; bundle related
   `feat`/`fix`/test/doc changes into the same branch and merge together.
-  (`main`-side rules live in Branch policy.)
 - One feature, one merge: don't chain multiple merges for sub-steps; if not
   complete, keep committing on the branch.
 
@@ -371,8 +368,9 @@ pushing a branch and before merging to `dev`**:
 **Failing-test loop**: while tests fail, re-run only the failing tests —
 `pnpm --filter <pkg> test -- <test-file>` or
 `uv run pytest database/tests/<file>::<case>` — until every failure passes;
-then re-run the targeted suite for the changed area once to confirm no
-regressions. Avoid full-suite runs inside this loop.
+If a fix breaks a previously passing test, stop and fix the regression 
+before proceeding. Then re-run the targeted suite for the changed area 
+once to confirm no regressions. Avoid full-suite runs inside this loop.
 
 CI runs the full suite plus lint/typecheck/build on every pull request (pushes
 to `dev` do not trigger CI; the PR is the gate). Run the full suite locally only
