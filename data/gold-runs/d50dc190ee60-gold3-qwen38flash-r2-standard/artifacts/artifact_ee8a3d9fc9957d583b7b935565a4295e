@@ -1,2 +1,0 @@
-source_id,source_database,source_asset_id,source_locator,retrieved_at,carrier_type
-source_pdb_2ity,pdb,asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d,"{""locator_version"":""2.0"",""locator_type"":""json_pointer"",""asset_id"":""asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d"",""logical_file"":""source_assets/asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d/2ITY.pdb"",""raw_value"":""2ITY"",""json_pointer"":""/pdb_lines/1""}",2026-08-31T08:25:05.147Z,pdb_text

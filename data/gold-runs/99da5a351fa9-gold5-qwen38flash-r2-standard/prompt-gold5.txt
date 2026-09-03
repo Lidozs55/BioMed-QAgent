@@ -1,3 +1,0 @@
-EGFR 抑制剂的 ChEMBL 生物活性与 PubChem 化合物结构数据整合
-
-针对 EGFR、EGFR L858R 和 EGFR T790M，检索公开 EGFR 抑制剂及其生物活性测量，整合 ChEMBL 的 assay/activity 数据与 PubChem 的化合物结构数据。保留 assay 条件、活性类型、单位和原始值。

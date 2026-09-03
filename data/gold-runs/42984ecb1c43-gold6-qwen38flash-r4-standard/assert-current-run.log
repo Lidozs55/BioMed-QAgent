@@ -1,6 +1,0 @@
-[gold-v1] REJECT: expected exactly one publication_created event, found 0
-[gold-v1] REJECT: expected exactly one publication_acceptance review request, found 0
-[gold-v1] REJECT: Artifact API lists no dataset_manifest.json
-[gold-v1] REJECT: published tables are missing paper_records.csv
-[gold-v1] REJECT: published tables are missing chart_points.csv
-[gold-v1] run task_ts_b41c545e-2375-4244-9305-103dc06f991a rejected with 5 problem(s)
