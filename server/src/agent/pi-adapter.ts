@@ -43,6 +43,8 @@ import {
   type ProviderSearchResult,
 } from "./search-info-capture.js";
 import { PHASE1_SYSTEM_PROMPT, SYSTEM_BRIEFING, phase1ResourceRoots } from "./phase1-prompt.js";
+import { errorResult } from "./tools/result.js";
+import { validateToolArgumentsOrThrow } from "./tools/schema-validation.js";
 import { requireSafeId as validateSafeId } from "./ids.js";
 import {
   RunProgressContextTracker,
@@ -1368,6 +1370,11 @@ export function toPiCustomTools(
     description: tool.description,
     parameters: tool.parameters,
     async execute(_toolCallId, parameters, signal) {
+      try {
+        validateToolArgumentsOrThrow(parameters, tool.parameters);
+      } catch (error) {
+        throw new Error(errorResult(error).content, { cause: error });
+      }
       const result = await tool.execute(parameters, signal, { toolCallId: _toolCallId });
       if (result.isError === true) throw new Error(result.content);
       return {

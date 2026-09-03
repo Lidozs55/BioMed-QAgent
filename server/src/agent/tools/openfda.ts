@@ -1,6 +1,7 @@
 import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
+import { ToolHttpError } from "../../external/network/errors.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
 import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
@@ -54,12 +55,6 @@ export interface OpenFdaDiliCountResult {
     status_code: number | null;
     error: string;
   }>;
-}
-
-class OpenFdaHttpError extends Error {
-  constructor(readonly statusCode: number, message: string) {
-    super(message);
-  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -129,7 +124,7 @@ async function requestOpenFdaJson(
         configuredMaxBytes: deps.maxResponseBytes,
       });
       if (isNoMatchesPayload(payload)) return null;
-      throw new OpenFdaHttpError(404, "openFDA returned HTTP 404 without a no-match response");
+      throw new ToolHttpError(url, 404, "openFDA returned HTTP 404 without a no-match response");
     }
     const retryable = response.status === 429 || response.status >= 500;
     const retryAfter = parseRetryAfter(
@@ -144,7 +139,7 @@ async function requestOpenFdaJson(
       );
       continue;
     }
-    throw new OpenFdaHttpError(status, `openFDA returned HTTP ${status}`);
+    throw new ToolHttpError(url, status);
   }
   throw new Error("openFDA retry loop ended without a response");
 }
@@ -244,7 +239,7 @@ export async function lookupOpenFdaDiliCounts(
         drug_name: drugName,
         source_url: sourceUrl,
         status: "failed",
-        status_code: error instanceof OpenFdaHttpError ? error.statusCode : null,
+        status_code: error instanceof ToolHttpError ? error.statusCode : null,
         error: error instanceof Error ? error.message : String(error),
       });
     }

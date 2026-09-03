@@ -11,7 +11,7 @@
  */
 
 import type { AddressResolver } from "../network/dns.js";
-import { UnsafeUrlError } from "../network/errors.js";
+import { ToolHttpError, UnsafeUrlError } from "../network/errors.js";
 import {
   PublicHttpClient,
   validateCuratedSourceUrl,
@@ -106,7 +106,7 @@ export async function fetchGdcJson(
   });
   if (response.status < 200 || response.status >= 300) {
     await response.discard();
-    throw new Error(`GDC API returned HTTP ${response.status}`);
+    throw new ToolHttpError(url, response.status);
   }
   const chunks: Buffer[] = [];
   for await (const chunk of response.body) chunks.push(chunk);

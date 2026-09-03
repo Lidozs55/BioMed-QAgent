@@ -1,6 +1,7 @@
 import type { BioMedAgentTool } from "../contracts.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
 import { PublicHttpClient as DefaultPublicHttpClient } from "../../external/network/http-client.js";
+import { ToolHttpError } from "../../external/network/errors.js";
 import { HostRateLimiter, parseRetryAfter } from "../../external/ncbi/retry.js";
 import { readBoundedJson } from "./response-limit.js";
 import { errorResult } from "./result.js";
@@ -46,12 +47,6 @@ export interface ClinvarCountResult {
     status_code: number | null;
     error: string;
   }>;
-}
-
-class ClinvarHttpError extends Error {
-  constructor(readonly statusCode: number, message: string) {
-    super(message);
-  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -101,7 +96,7 @@ async function fetchCount(
       await deps.sleep(Math.min(30, Math.max(0.5 * 2 ** attempt + deps.jitter(), retryAfter)) * 1000);
       continue;
     }
-    throw new ClinvarHttpError(status, `ClinVar returned HTTP ${status}`);
+    throw new ToolHttpError(url, status);
   }
   throw new Error("ClinVar retry loop ended without a response");
 }
@@ -156,7 +151,7 @@ export async function lookupClinvarCounts(
       result.failures.push({
         gene_symbol: symbol,
         status: "failed",
-        status_code: error instanceof ClinvarHttpError ? error.statusCode : null,
+        status_code: error instanceof ToolHttpError ? error.statusCode : null,
         error: error instanceof Error ? error.message : String(error),
       });
     }
