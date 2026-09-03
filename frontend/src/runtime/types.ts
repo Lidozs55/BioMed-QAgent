@@ -3,6 +3,7 @@ import type {
   AttemptStatus,
   DatabaseRecord,
   MessageRole,
+  ProviderSearchResult,
   TaskPublicationSummary,
   RunStatus,
   RunSummary,
@@ -79,6 +80,8 @@ export interface ProjectedMessage {
   content: string;
   createdAt: string;
   sequence: number | null;
+  /** Provider-side web-search hits (Bailian 联网搜索); absent when none. */
+  searchResults?: ProviderSearchResult[];
 }
 
 export type ActivityKind =
@@ -346,6 +349,12 @@ export interface CompactionItem extends ConversationItemBase {
   message: string | null;
 }
 
+/** Provider-side web-search hits (Bailian 联网搜索) for one run, deduped by URL. */
+export interface SearchInfoItem extends ConversationItemBase {
+  kind: "search_info";
+  results: ProviderSearchResult[];
+}
+
 export type ConversationItem =
   | UserMessageItem
   | AssistantSegmentItem
@@ -358,7 +367,8 @@ export type ConversationItem =
   | PermissionItem
   | ArtifactItem
   | PublicationReportItem
-  | CompactionItem;
+  | CompactionItem
+  | SearchInfoItem;
 
 export interface SequenceGapMarker {
   expected: number;

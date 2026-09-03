@@ -226,6 +226,7 @@ function projectMessage(record: MessageRecord): ProjectedMessage {
     content: record.content,
     createdAt: record.created_at,
     sequence: record.sequence ?? null,
+    ...(record.search_results === undefined ? {} : { searchResults: record.search_results }),
   };
 }
 
@@ -769,6 +770,22 @@ function mergeMessagesIntoItems(
     );
     if (item === null) continue;
     next = upsertItem(next, item);
+    // Hydrated assistant messages may carry aggregated provider-side web
+    // search hits (Bailian 联网搜索); render them like the live event item.
+    if (
+      item.kind === "assistant_segment" &&
+      message.searchResults !== undefined &&
+      message.searchResults.length > 0
+    ) {
+      next = upsertItem(next, {
+        kind: "search_info",
+        itemId: `search_info:${message.runId ?? message.messageId}`,
+        runId: message.runId ?? "",
+        sequence: item.sequence,
+        createdAt: item.createdAt,
+        results: message.searchResults,
+      });
+    }
   }
   return next;
 }
