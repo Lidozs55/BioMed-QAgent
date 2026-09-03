@@ -59,9 +59,15 @@ def test_server_command_layout(tmp_path: Path) -> None:
 
 
 def test_python_bin_matches_runtime_layout(tmp_path: Path) -> None:
-    parts = python_bin_for(tmp_path).parts
-    assert parts[-3:-1] == ("runtime", "python")
-    assert parts[-1].startswith("python")
+    path = python_bin_for(tmp_path)
+    parts = path.parts
+    if os.name == "nt":
+        assert parts[-3:-1] == ("runtime", "python")
+        assert parts[-1] == "python.exe"
+    else:
+        assert parts[-4:-2] == ("runtime", "python")
+        assert parts[-2] == "bin"
+        assert parts[-1].startswith("python")
 
 
 def test_build_child_env_promotes_env_file_and_sets_python_bin(

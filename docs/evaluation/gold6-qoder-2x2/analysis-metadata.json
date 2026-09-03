@@ -1,0 +1,101 @@
+{
+ "analysis": "qoder-gold6-2x2",
+ "description": "read-only 2x2 comparison of two offline Qoder export zips (Gold6); no Host/task control, no runs, no tracked-source changes, no worktree, no secrets output",
+ "generated_utc": "2026-09-03T20:04:48Z",
+ "tooling": {
+  "python": "Python 3.12.3",
+  "hash": "sha256sum / hashlib sha256"
+ },
+ "inputs": {
+  "flash_zip": {
+   "path": "../qoder_flash_gold6_output.zip",
+   "sha256": "74317e075e2f702a9a5d24cb85d59e881356fedfe9d721af26f33d07e12c3990",
+   "extracted_dir": "input/flash/output"
+  },
+  "max_zip": {
+   "path": "../qoder_max_gold6_output.zip",
+   "sha256": "10faf91f8994b473f1b47eee91981886a616076ff694b301d3ede007941073bb",
+   "extracted_dir": "input/max/output"
+  },
+  "extracted_file_sha256": {
+   "input/flash/output/chat.md": "abcbb63927459eabb768512e431a9c90ec068c18fe10499e737c89d98ed04196",
+   "input/flash/output/chembl_assay_catalog.csv": "88ccdcc21cfe4fcb04c10d2047433f132861ea2ab74a8deec82abd39ff547a56",
+   "input/flash/output/chembl_molecule_dimension.csv": "338cf41d4116a621407e58a9ada98d12321ef292739c6497ab49acde64ff28e6",
+   "input/flash/output/confidence_rubric.csv": "b70f61637ed412fc29bc51c19e93ac41180db1974f83b15a113e869f15918e70",
+   "input/flash/output/dataset_manifest.csv": "14c1499119c783fe58342b55f458488a54e944da375a511a2a017de35661b1da",
+   "input/flash/output/dose_response_curve_points.csv": "5fbafcec7e3844362d5f8cd5ec7223d2f5c0382f2a20579f9f4aca9aef1a81a4",
+   "input/flash/output/dose_response_curve_series.csv": "8c584a8064589b1f7e3b9088da9ea67296070f58c15a40bfe9abf8d9a08ac3a6",
+   "input/flash/output/egfr_mutant_inhibition_activities.csv": "95f255da8e19c117e49799da321d23f24695917b6841116733e5c818a28a8f9b",
+   "input/flash/output/egfr_mutant_single_dose_screening.csv": "11ed3c75be320f87678fb6e7989910f242afc71b1f812cf69848c5c3266d89a8",
+   "input/flash/output/egfr_other_metric_records.csv": "d1ae6024905d985766084822862b232166210ae929b26a432df4f14bfb639dd6",
+   "input/flash/output/excluded_records.csv": "b95248237921a76c7b256315c93ce91e564417c3b648fa6f627fe75106edce23",
+   "input/flash/output/extraction_rejected_candidates.csv": "352ddf3f6729bef135146624130370ef0ed8b83f0b25eb7cc6e4428cedb3e574",
+   "input/flash/output/field_alignment_crosswalk.csv": "a6dd32372053bafa6fdd9d4ff04131511b74abc7370fd20bbd70e46e5515d940",
+   "input/flash/output/figure_inventory.csv": "d0a61225976a854d74313dde0adda89fb4ed6080f213d6c6742975748db824b8",
+   "input/flash/output/methods_qc_log.csv": "0b4dac2b547f0e1552cd00038c9e53ad10597f062441ad532f5e69cb3b9e66c8",
+   "input/flash/output/pubchem_assay_inventory.csv": "ee7df7cdfb85c328d99ee6579062bdbf3561a1b2e8d7a8219a7d4a3f39606abd",
+   "input/flash/output/qc_checks.csv": "b9835dce555ea03fd209a24f22ece46a3f0e88673f7095a4b905242acf4dba73",
+   "input/flash/output/reference_cellline_egfr_genotype.csv": "3a403a8ffd378666142d441123f30468972e90ce410aeaa3c2b4758347ff7fb3",
+   "input/flash/output/reference_compound_name_resolution.csv": "7ba20a1a4bf9408c3b8d6d85d45807deb5f7f11dc388f8dca776b60dd09a6156",
+   "input/flash/output/reference_variant_classification.csv": "aedd0e0d7a31b102c992bf9f13c341094741eec550a4695af6d14c02ac22aa27",
+   "input/flash/output/source_papers.csv": "a001aa80c4ab6352bbeb248f5384ce65d2aa5d59217e17a5670e10d2a90d6aa2",
+   "input/flash/output/supplementary_access_log.csv": "a76f83a090cd366e54204466a4ca1622e9b8a16eb724442ad21aa4aeb6bf598b",
+   "input/flash/output/supplementary_unparsed_files.csv": "747ab23d3f090fa2bf4cad62bffbd963ed7888ec9d7991826d942199fded2444",
+   "input/max/output/chat.md": "f051944dd4b4013958912564d0fc1c744a6a432cbda69fcebfe1867a4a8a3cb2",
+   "input/max/output/egfr_dose_response_inventory.csv": "f93c883a05f241459c5b8c3d018cbe5d99a6f7bd4928fcede32c772685ba5e24",
+   "input/max/output/egfr_figure_table_verification.csv": "a406d364226ef33e4435c4109e44fb3e6828dde9944dbbddc01afc4cc8437371",
+   "input/max/output/egfr_inhibition_data.csv": "5226371302cadd0fc70df65d91ca97ef5dd1e9bad0f898f588569a78b0473831",
+   "input/max/output/egfr_manifest.csv": "b2313f8c5115a927f174a191837be2c97d9b85c85525c45fcba3371f8b41a6a4",
+   "input/max/output/egfr_methods_qc_log.csv": "652f22e66de0337efad0bf479f62f78f91550c7191710f54763c21dc18730fe9",
+   "input/max/output/egfr_sources.csv": "24064a0cff7a30d0989d4c60f78ca043b96f0acf05bb1b0b2bdb14d39885ee94"
+  }
+ },
+ "outputs": [
+  "report.md",
+  "report.json",
+  "matrix-2x2.csv",
+  "analysis-metadata.json",
+  "verification.sha256"
+ ],
+ "workdir_artifacts": [
+  "work/analyze_csvs.py",
+  "work/verify_manifests.py",
+  "work/deep_stats.py",
+  "work/generate_outputs.py",
+  "work/write_meta_verify.py",
+  "work/stats/all-stats.json",
+  "work/manifest-verification.json",
+  "work/fact-table-deep-stats.json",
+  "work/input-files.sha256"
+ ],
+ "method_notes": [
+  "per-CSV streaming statistics (rows/cols/nulls/duplicate rows/key-field uniques) via csv module, utf-8-sig",
+  "manifest verification recomputes rows/bytes/columns and hashes independently (sha1 for flash, md5 for max)",
+  "QC claims recomputed independently from the published tables; unavailable metrics marked unavailable",
+  "chat.md analyzed for strategy/tools/failures/self-corrections only; length not scored; no large verbatim quotes"
+ ],
+ "verification": {
+  "credential_scan": {
+   "patterns_checked": 10,
+   "targets": {
+    "report.md": [
+     "no-hit",
+     0
+    ],
+    "report.json": [
+     "no-hit",
+     0
+    ],
+    "matrix-2x2.csv": [
+     "no-hit",
+     0
+    ],
+    "analysis-metadata.json": [
+     "no-hit",
+     0
+    ]
+   },
+   "note": "only hit/no-hit reported; matches never printed"
+  }
+ }
+}
