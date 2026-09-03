@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SidebarChartPanel } from "@/components/SidebarChartPanel";
+import { TaskOutputCharts } from "@/components/TaskOutputCharts";
 import type {
   ConversationItem,
   TaskProjection,
@@ -121,7 +121,7 @@ function seedTask(items: ConversationItem[]): void {
   });
 }
 
-describe("SidebarChartPanel", () => {
+describe("TaskOutputCharts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAgentStore.setState(createInitialRuntimeState());
@@ -134,14 +134,14 @@ describe("SidebarChartPanel", () => {
 
   it("renders nothing without chart tool outputs", () => {
     seedTask([]);
-    const { container } = render(<SidebarChartPanel />);
+    const { container } = render(<TaskOutputCharts />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("renders extracted charts after the tool output lands", async () => {
     seedTask([toolCallItem()]);
-    render(<SidebarChartPanel />);
-    expect(await screen.findByText("数据可视化")).toBeInTheDocument();
+    render(<TaskOutputCharts />);
+    expect(await screen.findByText("工具图表预览")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("活性对比")).toBeInTheDocument();
     });
@@ -153,7 +153,7 @@ describe("SidebarChartPanel", () => {
   it("keeps the panel hidden while CSV loading fails", async () => {
     fetchTaskFileText.mockRejectedValue(new Error("backend down"));
     seedTask([toolCallItem()]);
-    const { container } = render(<SidebarChartPanel />);
+    const { container } = render(<TaskOutputCharts />);
     await waitFor(() => {
       expect(screen.getByText("图表数据加载失败")).toBeInTheDocument();
     });

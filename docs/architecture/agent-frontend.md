@@ -397,9 +397,14 @@ wire parser 同时校验 nested request/task/run identity 与外层 event envelo
 `(created_at DESC, task_id DESC)` 排序去重。
 
 `tasksById` 中每个 Task 都有独立的 Run、message、activity、artifact、fixture
-stage、`subagentsById`、`subagentOrder` 和 `lastSequence` 投影。桌面端右侧
-`ResizablePanel` 展示子 Agent 工作区，移动端复用 Sheet；产物入口位于聊天输入区
-FAB。
+stage、`subagentsById`、`subagentOrder` 和 `lastSequence` 投影。子 Agent 的执行、
+取消、失败状态和 durable 事件仍保留在 runtime 投影中，但不再提供独立 UI 工作区。
+桌面端右侧 `TaskOutputWorkspace` 使用可调宽 `ResizablePanel`，移动端复用 Sheet，
+统一展示正式 Publication/产物、结构拓扑、来源证据、未准入产物和工具图表预览；
+聊天输入区只保留附件控制，不再放置资源 FAB。当前任务仅在实时活动态转为
+`completed` 的边沿自动打开一次；选择或重放历史完成任务不得触发自动打开，用户
+手动关闭后，完成态 snapshot 重水合也不得重新打开。会话内的 Publication 报告卡
+通过同一输出栏下钻，不再创建重复的详情 Dialog。
 
 Assistant 文本采用 realtime / durable 双投影：实时 chunk 按
 `(run_id, stream_id, chunk_index)` 进入 pending，durable `assistant_delta` 的

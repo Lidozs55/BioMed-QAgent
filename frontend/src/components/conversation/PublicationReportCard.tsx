@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ArrowsOutIcon, DownloadIcon } from "@phosphor-icons/react";
 
-import PublicationResultsViewer from "@/components/PublicationResultsViewer";
+import { OUTPUT_FORMAL_TAB } from "@/components/TaskOutputPanel";
+import { openTaskOutputPanel } from "@/components/taskOutputPanelControl";
 import { CsvPreview } from "@/components/artifacts/CsvPreview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,13 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Empty,
   EmptyDescription,
@@ -75,7 +69,6 @@ export function PublicationReportCard({ item, download = triggerArtifactDownload
   const api = useAPI();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
-  const [dialogOpen, setDialogOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,7 +139,6 @@ export function PublicationReportCard({ item, download = triggerArtifactDownload
   };
 
   return (
-    <>
       <Card size="sm" className="w-full min-w-0">
         <CardHeader>
           <div className="flex min-w-0 items-start justify-between gap-3">
@@ -166,7 +158,7 @@ export function PublicationReportCard({ item, download = triggerArtifactDownload
               variant="ghost"
               size="icon-sm"
               aria-label="展开详情"
-              onClick={() => setDialogOpen(true)}
+              onClick={() => openTaskOutputPanel(OUTPUT_FORMAL_TAB)}
             >
               <ArrowsOutIcon aria-hidden="true" />
             </Button>
@@ -240,19 +232,5 @@ export function PublicationReportCard({ item, download = triggerArtifactDownload
           </Button>
         </CardFooter>
       </Card>
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="flex max-h-[85vh] max-w-[min(1120px,calc(100vw-2rem))] flex-col sm:max-w-[min(1120px,calc(100vw-2rem))]">
-          <DialogHeader>
-            <DialogTitle>发布详情</DialogTitle>
-            <DialogDescription>
-              {manifest.dataset_family} · {detail.requirement_id}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <PublicationResultsViewer publicationId={detail.publication_id} taskId={item.taskId} />
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
