@@ -25,6 +25,8 @@ import webbrowser
 from pathlib import Path
 from queue import Empty, Queue
 
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 HOST_START_TIMEOUT_SECONDS = 60.0
 HEALTH_TIMEOUT_SECONDS = 180.0
 HEALTH_POLL_INTERVAL_SECONDS = 0.5
@@ -107,6 +109,9 @@ def spawn_host(root: Path) -> subprocess.Popen[bytes]:
         env=env,
         stdout=subprocess.PIPE,
         stderr=None,
+        # Under the windowed BioMed-QAgent.exe there is no console to inherit;
+        # without this flag node would allocate its own empty console window.
+        creationflags=CREATE_NO_WINDOW,
     )
 
 
@@ -139,6 +144,39 @@ def resolve_base_url(process: subprocess.Popen[bytes], timeout_seconds: float) -
     return None
 
 
+def attach_window_icon(window: object) -> None:
+    """Best-effort Windows taskbar/window icon (exe icon is set at build time).
+
+    The WebView2 window belongs to the python.exe process, so without this the
+    taskbar shows the interpreter's default icon. Mirrors the old
+    biomed_launcher approach: pythonnet + System.Drawing on the window's
+    loaded/shown events, silently skipped on other platforms.
+    """
+    if os.name != "nt":
+        return
+    icon = package_root() / "assets" / "icon.ico"
+    if not icon.is_file():
+        return
+
+    def apply() -> None:
+        try:
+            import clr  # pythonnet ships with pywebview on Windows
+
+            clr.AddReference("System.Drawing")
+            from System.Drawing import Icon
+
+            native = getattr(window, "native", None)
+            if native is not None:
+                native.Icon = Icon(str(icon))
+        except Exception:
+            log("[desktop] window icon not applied")
+
+    for event_name in ("loaded", "shown"):
+        events = getattr(getattr(window, "events", None), event_name, None)
+        if events is not None:
+            events += apply
+
+
 def open_native_window(url: str) -> bool:
     """Open a pywebview window; False when the backend is unavailable."""
 
@@ -147,7 +185,8 @@ def open_native_window(url: str) -> bool:
     except Exception:
         return False
     try:
-        webview.create_window(WINDOW_TITLE, url, width=1440, height=900, min_size=(1024, 640))
+        window = webview.create_window(WINDOW_TITLE, url, width=1440, height=900, min_size=(1024, 640))
+        attach_window_icon(window)
         webview.start()
         return True
     except Exception:
