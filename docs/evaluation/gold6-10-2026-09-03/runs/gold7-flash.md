@@ -34,6 +34,12 @@ This file is a derived, redacted report. It contains no prompt text, assistant d
 
 Completed with two independent run-bound publications; the risk-loci publication is current.
 
+## Paper-Use Boundary
+
+- Treat the risk-loci and variant-gene-map outputs as two independent Publications (five artifacts each), not as one three-table Publication and not as a v1-to-v2 superseding chain; both publication events have supersedes_publication_id=null.
+- This corrected run contains two profile-scaffold calls, zero business HIL requests, and no evidence for the older '11 rejection-revision rounds' narrative. Keep that narrative historical unless its separate run is cited explicitly.
+- The prompt is reconstructed historical TOPIC text, so the observed outcome is not an exact replay of an original Gold7 prompt.
+
 ## Model and Context Usage
 
 | Metric | Value |

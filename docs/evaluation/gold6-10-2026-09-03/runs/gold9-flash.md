@@ -34,6 +34,12 @@ This file is a derived, redacted report. It contains no prompt text, assistant d
 
 Completed after a static-route attempt was reclassified to a dynamic-family publication path; publication v2 is current.
 
+## Paper-Use Boundary
+
+- The durable evidence proves a static-to-dynamic_family route change after successful dynamic preparation. It does not prove a model-level causal explanation for that choice.
+- The v1 and v2 publication events are independent records with supersedes_publication_id=null; v2 became current, but this run does not evidence a formal supersedes chain.
+- Supervisor adoption after permission stops is not, by itself, evidence of Dataset Core checkpoint replay. Do not summarize this corrected run as an interrupted computation resumed from a deterministic checkpoint unless separate checkpoint records are cited.
+
 ## Model and Context Usage
 
 | Metric | Value |

@@ -2,44 +2,50 @@
 
 > Purpose: give the next agent a short, evidence-oriented route to the final paper/report for the Gold evaluation work. This is a navigation and usage document, not a replacement for the dated evidence reports.
 >
-> Current branch: `dev`  
-> Last verified report merge: `9ca5b53b`  
+> Current integration branch: `dev`
+>
 > Main campaign product commit: `e5aadfe0c46dacddda9464656c551bea0e203ba3`
+>
+> The evidence reports are generated artifacts; trust their embedded identities and manifests rather than this handoff's historical Git commit.
 
 ## 1. Start Here
 
 Read these files in this order:
 
-1. [`docs/evaluation/gold6-10-2026-09-03/report.md`](gold6-10-2026-09-03/report.md)
+1. [`docs/evaluation/PAPER_EVIDENCE_AUDIT.md`](PAPER_EVIDENCE_AUDIT.md)
+   - The current defect register for claims that previously exceeded the evidence.
+   - Treat its P0 list as a submission gate; do not restore the old “uniform ten-case protocol,” “controlled 2×2×2,” four-table Gold6, or supersedes/checkpoint narratives without new evidence.
+
+2. [`docs/evaluation/gold6-10-2026-09-03/report.md`](gold6-10-2026-09-03/report.md)
    - The primary six-run result.
    - Use it for the main table, terminal outcomes, event-derived wall times, token totals, tool counts, HIL counts, Publication IDs, and the Gold9 route discussion.
    - It links to six run-level reports with more detailed counters and evidence references.
 
-2. [`docs/evaluation/gold6-10-2026-09-03/results.json`](gold6-10-2026-09-03/results.json)
+3. [`docs/evaluation/gold6-10-2026-09-03/results.json`](gold6-10-2026-09-03/results.json)
    - The machine-readable source for numbers in the primary report.
    - Use fields under `primary_cohort`, `runs`, `gold9_cross_route`, `diagnostics_excluded_from_primary`, and `qoder_gold6_offline_2x2`.
    - Do not hand-copy numbers from raw logs when the same value is present here.
 
-3. [`docs/evaluation/gold6-qoder-2x2/report.md`](gold6-qoder-2x2/report.md)
+4. [`docs/evaluation/gold6-qoder-2x2/report.md`](gold6-qoder-2x2/report.md)
    - The independent Gold6 Qoder Flash/Max offline 2x2 analysis.
    - It is a separate evidence product, not a BioMed-QAgent Publication and not part of the six-run publication success rate.
    - Use it for the X/Y definitions, threshold policy, field crosswalk, measured limitations, and the Flash/Max placement.
 
-4. [`docs/evaluation/gold6-qoder-2x2/report.json`](gold6-qoder-2x2/report.json)
+5. [`docs/evaluation/gold6-qoder-2x2/report.json`](gold6-qoder-2x2/report.json)
    - The complete structured 2x2 analysis, including per-axis scores and supporting counts.
    - Use this instead of inventing scores from file counts or narrative impressions.
 
-5. `docs/ARCHITECTURE.md` and the linked topic chapters
+6. `docs/ARCHITECTURE.md` and the linked topic chapters
    - Use these to explain why Agent work is proposal/discovery while Dataset Core owns deterministic validation, B3, ProductAssessment, and Publication.
    - The architecture is the authority for current system behavior; dated evaluation reports are snapshots of observed runs.
 
-6. `docs/FEATURES.md`
+7. `docs/FEATURES.md`
    - Use for product capability language and the current feature surface.
    - Do not use it as evidence for a particular Gold run unless it links to a dated evidence artifact.
 
 ## 2. What the Final Report Should Say
 
-The final report should separate four layers:
+The final report should separate four layers. In particular, do **not** merge the early Gold1--5 summaries, the corrected six-run cohort, and the Qoder offline exports into a single controlled protocol or factorial experiment:
 
 1. **System contribution**
    - Natural-language request to Agent proposal, then to a deterministic Dataset Core pipeline.
@@ -62,6 +68,7 @@ The final report should separate four layers:
 3. **Independent offline 2x2**
    - Qoder Flash: X=0.950, Y=0.808, Q1 high-coverage/high-auditability.
    - Qoder Max: X=0.500, Y=0.758, borderline on X and high on Y; do not force it into a quadrant.
+   - The committed offline package does not contain independently verifiable Qoder wall-time or provider-token exports. Do not reuse the old 175/46-minute or 67.912M/5.160M-token values as evidence-backed results unless those platform records are separately frozen and checked.
    - Coverage must not be equated with credibility. The report's major caveats are missing raw payloads/scripts, Flash manifest weaknesses, and Max's coarse provenance granularity.
 
 4. **Limitations and diagnostic evidence**
@@ -145,7 +152,7 @@ node scripts/generate-gold6-10-session-report.mjs \
   --output-dir docs/evaluation/gold6-10-2026-09-03
 ```
 
-The generator is standard-library-only and writes:
+The generator is standard-library-only. By default it reads the committed Qoder audit from `docs/evaluation/gold6-qoder-2x2/`; `--qoder-analysis-root` and `--diagnostic-root` can override the two auxiliary roots. It writes:
 
 - `report.md`: campaign-level narrative and tables.
 - `results.json`: structured results and diagnostics.
@@ -239,6 +246,8 @@ Use this order to keep claims aligned with evidence:
 8. Add diagnostic appendices for invalid profile, Max v1, proxy, and dynamic-first.
 9. End with limitations, open TODO items, and the distinction between observed outcome, reproducible evidence, and causal interpretation.
 
+Use the `Paper-Use Boundary` section in each run report before reusing a case in the paper. These sections record the known narrative traps: Gold6 has six CSV tables rather than a “four-table” product; Gold7 has two independent Publications rather than one three-table/superseding product; Gold8 formally publishes only the FAERS dimension; Gold9's v1/v2 events do not carry a supersedes relation and permission resume is not checkpoint proof; Gold10 is a task-level block and a fail-closed safety observation.
+
 Do not create a single model ranking from the six-run table. The runs differ in task, prompt provenance, route availability, host conditions, HIL exposure, and (for Max v2) corrected context metadata.
 
 ## 8. Final Integrity Checklist
@@ -251,7 +260,10 @@ Before merging the final paper/report:
 - [ ] Gold9's missing publication field in the final `run_completed` payload is not misread as no publication; closure/publication evidence confirms success.
 - [ ] Gold6 Max v2 is used; Gold6 Max v1 is appendix-only.
 - [ ] The Qoder 2x2 is labeled offline and non-Publication.
+- [ ] Qoder Gold6 wall-time/token values are omitted unless a separate platform evidence record is frozen and verified.
 - [ ] Max's X=0.500 is labeled borderline, not forced into a quadrant.
+- [ ] SHA-256/MD5 agreement is described as byte integrity, not as proof of scientific truth.
+- [ ] Gold7 and Gold9 are not described as supersedes chains when their publication events have `supersedes_publication_id=null`.
 - [ ] Exact-only chart policy is described as current; estimated-point compatibility paths are historical/superseded.
 - [ ] No raw event log, assistant delta, tool argument, tool output, credential, or original campaign is committed.
 - [ ] All report links resolve and all included SHA-256 manifests pass.

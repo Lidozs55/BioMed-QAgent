@@ -22,6 +22,11 @@ const RUN_SPECS = [
     publicationRoute: "dynamic_family",
     promptProvenance: "exact-data R3/R4/R7c3 lineage; frozen execution context, not the public gold-v1 fixture",
     terminalSummary: "Completed with a current publication after a superseded earlier publication.",
+    paperUseNotes: [
+      "Describe the current formal product as six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts total); the phrase 'four-table chart product' is not supported by the manifest.",
+      "The five HIL requests were three exact-only credential grants and two publication-acceptance decisions. No low-confidence point-correction or generic data-review HIL occurred in this run.",
+      "Artifact SHA-256 verification proves byte integrity and receipt binding, not scientific correctness or complete coverage of all potentially relevant EGFR literature.",
+    ],
   },
   {
     key: "gold7-flash",
@@ -34,6 +39,11 @@ const RUN_SPECS = [
     publicationRoute: "dynamic_family",
     promptProvenance: "reconstructed historical TOPIC prompt",
     terminalSummary: "Completed with two independent run-bound publications; the risk-loci publication is current.",
+    paperUseNotes: [
+      "Treat the risk-loci and variant-gene-map outputs as two independent Publications (five artifacts each), not as one three-table Publication and not as a v1-to-v2 superseding chain; both publication events have supersedes_publication_id=null.",
+      "This corrected run contains two profile-scaffold calls, zero business HIL requests, and no evidence for the older '11 rejection-revision rounds' narrative. Keep that narrative historical unless its separate run is cited explicitly.",
+      "The prompt is reconstructed historical TOPIC text, so the observed outcome is not an exact replay of an original Gold7 prompt.",
+    ],
   },
   {
     key: "gold8-flash",
@@ -46,6 +56,11 @@ const RUN_SPECS = [
     publicationRoute: "dynamic_family",
     promptProvenance: "reconstructed historical TOPIC prompt",
     terminalSummary: "Completed with one byte-verified publication. Event-derived duration is authoritative because a monitor arithmetic field is inconsistent.",
+    paperUseNotes: [
+      "The formal Publication covers the openFDA FAERS assertion and study tables (five artifacts including schema/provenance/assessment). Other requested integration dimensions remained workspace staging; the run report records this as one of three evidence dimensions formally published.",
+      "Use 2754.172 seconds from run_started to run_completed. The 2174.166-second monitor arithmetic value is inconsistent and must not appear in primary tables.",
+      "The prompt is reconstructed historical TOPIC text; do not describe this as an exact original-prompt replay or as complete DILI multi-source coverage.",
+    ],
   },
   {
     key: "gold9-flash",
@@ -62,6 +77,11 @@ const RUN_SPECS = [
     objectCompareRuntime: true,
     promptProvenance: "exact original run_queued.input recovered from historical durable events",
     terminalSummary: "Completed after a static-route attempt was reclassified to a dynamic-family publication path; publication v2 is current.",
+    paperUseNotes: [
+      "The durable evidence proves a static-to-dynamic_family route change after successful dynamic preparation. It does not prove a model-level causal explanation for that choice.",
+      "The v1 and v2 publication events are independent records with supersedes_publication_id=null; v2 became current, but this run does not evidence a formal supersedes chain.",
+      "Supervisor adoption after permission stops is not, by itself, evidence of Dataset Core checkpoint replay. Do not summarize this corrected run as an interrupted computation resumed from a deterministic checkpoint unless separate checkpoint records are cited.",
+    ],
   },
   {
     key: "gold10-flash",
@@ -74,6 +94,11 @@ const RUN_SPECS = [
     publicationRoute: "not_reached",
     promptProvenance: "reconstructed historical TOPIC prompt",
     terminalSummary: "Valid blocked_no_publication terminal: the static four-table all-or-nothing path did not admit a non-empty differential-abundance table. Staging files are not formal artifacts.",
+    paperUseNotes: [
+      "Retain this run in the six-run outcome denominator as a negative/fail-closed case, but exclude it from Publication-level artifact-quality comparisons because no formal artifact exists.",
+      "Do not say acquisition broadly succeeded: some source-traceable candidates were staged, but the required cohort-bound differential-abundance supplement could not be formally acquired and parsed, and two executions were rejected for empty required tables.",
+      "Fail-closed behavior is a verified safety property of this outcome; task completion still failed. Avoid relabeling the blocked scientific request as an overall success.",
+    ],
   },
   {
     key: "gold6-max-v2",
@@ -90,6 +115,11 @@ const RUN_SPECS = [
     objectCompareRuntime: true,
     promptProvenance: "same exact Gold6 prompt and frozen execution-context lineage as Gold6 Flash; v2 corrects the model metadata to 1,000,000 context / 32,768 maximum output",
     terminalSummary: "Completed after the context-metadata correction; all sampled contexts use 1,000,000 tokens and no compaction occurred.",
+    paperUseNotes: [
+      "Use v2 as the corrected Max result; v1 had incorrect 100,000-token context metadata and belongs only in the diagnostic appendix.",
+      "The formal product is six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts); B3 checked 94 items with zero failures.",
+      "This is not a pure model-only comparison with Gold6 Flash: v2 used the isolated proxy host as well as corrected context/output metadata.",
+    ],
   },
 ];
 
@@ -951,6 +981,7 @@ function deriveRun({ campaignRoot, repoRoot, campaign, spec }) {
       artifact_produced_event_count: event.artifact_produced_events,
       b3: getPath(detail, ["publications", "b3"]) || null,
     },
+    paper_use_notes: spec.paperUseNotes,
     source_evidence: {
       ...sourceManifest,
       input_paths: {
@@ -983,8 +1014,10 @@ function sourceManifestForDiagnostic(campaignRoot, runDir) {
   return parseEvidenceManifest(path.join(campaignRoot, runDir, "evidence", "evidence-manifest.sha256"), campaignRoot);
 }
 
-function loadDiagnostics(campaignRoot, repoRoot) {
-  const diagnosticRoot = path.resolve(campaignRoot, "..", "2026-09-03-main-e5aadfe0-qwen38-six-run");
+function loadDiagnostics(campaignRoot, repoRoot, diagnosticRootOverride) {
+  const diagnosticRoot = diagnosticRootOverride
+    ? path.resolve(diagnosticRootOverride)
+    : path.resolve(campaignRoot, "..", "2026-09-03-main-e5aadfe0-qwen38-six-run");
   const invalidProfilePath = path.join(diagnosticRoot, "invalid-profile-independent-audit.json");
   const maxV1Path = path.join(campaignRoot, "runs", "gold6-max", "independent-audit.json");
   const proxyDetailPath = path.join(campaignRoot, "proxy-rerun", "runs", "gold9-flash-proxy", "evidence", "detailed-metrics.json");
@@ -1080,9 +1113,11 @@ function loadDiagnostics(campaignRoot, repoRoot) {
   };
 }
 
-function loadQoderAnalysis(campaignRoot) {
+function loadQoderAnalysis(campaignRoot, repoRoot, analysisRootOverride) {
   const dataRoot = path.resolve(campaignRoot, "..", "..");
-  const analysisRoot = path.join(dataRoot, "qoder-gold6-2x2-analysis");
+  const analysisRoot = analysisRootOverride
+    ? path.resolve(analysisRootOverride)
+    : path.join(repoRoot, "docs", "evaluation", "gold6-qoder-2x2");
   const reportPath = path.join(analysisRoot, "report.json");
   const metadataPath = path.join(analysisRoot, "analysis-metadata.json");
   const verificationPath = path.join(analysisRoot, "verification.sha256");
@@ -1101,7 +1136,7 @@ function loadQoderAnalysis(campaignRoot) {
     throw new Error("Qoder analysis verification.sha256 does not verify all entries");
   }
   return {
-    source_root: relativeTo(dataRoot, analysisRoot),
+    source_root: relativeTo(repoRoot, analysisRoot),
     source_outputs: {
       report_json_sha256: sha256File(reportPath),
       analysis_metadata_sha256: sha256File(metadataPath),
@@ -1281,6 +1316,13 @@ function buildRunMarkdown(run, campaign) {
   }
   output.push("");
   output.push(run.lifecycle.terminal_summary);
+
+  output.push("");
+  output.push("## Paper-Use Boundary");
+  output.push("");
+  for (const note of run.paper_use_notes) {
+    output.push(`- ${note}`);
+  }
 
   output.push("");
   output.push("## Model and Context Usage");
@@ -1559,6 +1601,8 @@ function buildReportMarkdown({ campaign, runs, diagnostics, crossRoute, qoder })
   ])));
   output.push("");
   output.push(`Formal publication success rate: ${publicationRuns.length}/${runs.length} (${formatPercent(publicationRuns.length / runs.length)}). This is an outcome rate over heterogeneous Gold requirements, not a controlled benchmark of model quality.`);
+  output.push("");
+  output.push("Publication success is not synonymous with full scientific-task completion: Gold8 formally published the FAERS assertion/study dimension while other requested integration dimensions remained staging. Conversely, Gold10 is a task-level non-completion whose zero-Publication outcome is useful evidence that the formal boundary failed closed. Publication-level artifact-quality comparisons therefore cover only the five runs with formal outputs and must retain each run's Paper-Use Boundary.");
 
   output.push("");
   output.push("## Measurement Method");
@@ -1773,8 +1817,8 @@ function main() {
   const campaign = readJson(path.join(campaignRoot, "campaign.json"));
 
   const runs = RUN_SPECS.map((spec) => deriveRun({ campaignRoot, repoRoot, campaign, spec }));
-  const diagnostics = loadDiagnostics(campaignRoot, repoRoot);
-  const qoder = loadQoderAnalysis(campaignRoot);
+  const diagnostics = loadDiagnostics(campaignRoot, repoRoot, args["diagnostic-root"]);
+  const qoder = loadQoderAnalysis(campaignRoot, repoRoot, args["qoder-analysis-root"]);
   const originalGold9 = runs.find((run) => run.label === "gold9-flash");
   const crossRoute = g9CrossRoute(originalGold9, diagnostics);
 

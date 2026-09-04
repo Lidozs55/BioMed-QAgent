@@ -36,6 +36,12 @@ Context metadata correction before start: 1,000,000 context tokens and 32,768 ma
 
 Completed after the context-metadata correction; all sampled contexts use 1,000,000 tokens and no compaction occurred.
 
+## Paper-Use Boundary
+
+- Use v2 as the corrected Max result; v1 had incorrect 100,000-token context metadata and belongs only in the diagnostic appendix.
+- The formal product is six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts); B3 checked 94 items with zero failures.
+- This is not a pure model-only comparison with Gold6 Flash: v2 used the isolated proxy host as well as corrected context/output metadata.
+
 ## Model and Context Usage
 
 | Metric | Value |

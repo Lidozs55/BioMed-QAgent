@@ -34,6 +34,12 @@ This file is a derived, redacted report. It contains no prompt text, assistant d
 
 Valid blocked_no_publication terminal: the static four-table all-or-nothing path did not admit a non-empty differential-abundance table. Staging files are not formal artifacts.
 
+## Paper-Use Boundary
+
+- Retain this run in the six-run outcome denominator as a negative/fail-closed case, but exclude it from Publication-level artifact-quality comparisons because no formal artifact exists.
+- Do not say acquisition broadly succeeded: some source-traceable candidates were staged, but the required cohort-bound differential-abundance supplement could not be formally acquired and parsed, and two executions were rejected for empty required tables.
+- Fail-closed behavior is a verified safety property of this outcome; task completion still failed. Avoid relabeling the blocked scientific request as an overall success.
+
 ## Model and Context Usage
 
 | Metric | Value |
