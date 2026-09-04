@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "api_endpoint": "/api/v1/tasks/task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "current_publication_id": null,
+  "publications": [],
+  "publication_count": 0,
+  "interpretation": "This is the final formal publication projection. It is intentionally empty; task-level untrusted quarantine receipts are not Publications."
+}

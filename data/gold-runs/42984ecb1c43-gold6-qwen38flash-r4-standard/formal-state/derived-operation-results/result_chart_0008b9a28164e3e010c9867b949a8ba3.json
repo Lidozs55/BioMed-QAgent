@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "result_manifest_id": "result_chart_0008b9a28164e3e010c9867b949a8ba3",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "run_id": "core",
+  "requirement_id": "registered_paper_chart_candidate",
+  "operation_id": "result_chart_0008b9a28164e3e010c9867b949a8ba3",
+  "operation_kind": "derive",
+  "operation_attempt_id": "attempt_result_chart_0008b9a28164e3e010c9867b949a8ba3",
+  "attempt": 1,
+  "status": "succeeded",
+  "input_digest": "eab970e2a292eb622e91c7168ef69038ccd04250c1aaa4548c1d052213f39b74",
+  "parameter_digest": "86a08abdb642c0ab391ba08abe77d7dcf07fecee3aa46e47fa87b11cdd97532d",
+  "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744",
+  "output_digest": "4de01481fae795ab2bed0c0d4dd7c1c870c79cf63198c5f9eea47da344cb90d4",
+  "output_kind": "derived_evidence",
+  "output_summary": {
+    "stage": "candidate",
+    "asset_id": "asset_4de01481fae795ab2bed0c0d4dd7c1c870c79cf63198c5f9eea47da344cb90d4",
+    "sha256": "4de01481fae795ab2bed0c0d4dd7c1c870c79cf63198c5f9eea47da344cb90d4"
+  },
+  "output_files": [
+    {
+      "relative_path": "source_assets/paper_chart_evidence/evidence_4de01481fae7.json",
+      "size_bytes": 293498,
+      "sha256": "4de01481fae795ab2bed0c0d4dd7c1c870c79cf63198c5f9eea47da344cb90d4"
+    }
+  ],
+  "dependency_closure": {
+    "input_asset_ids": [
+      "asset_69d4a8740aabcecb920a122cad0ad501462a5e292a91b15e98da5618759b05f7",
+      "asset_3bf34506ada3dbf3f271f1cc832a9d512c083ea2873cc4a62acb51e4605f0bde",
+      "asset_63d8e571455c72dfa3045aa4b1ce05cdd2b9ec87e3e9bbb0d705f81bac74ea48",
+      "asset_38428f9b7c2dbefb063ba78bd33a754c4862c3add8a983faa6682dfd06a8e9c4"
+    ],
+    "upstream_result_manifest_ids": [
+      "result_archive_eef24411e114aecbdf07ddf29e559983"
+    ],
+    "parameter_digest": "86a08abdb642c0ab391ba08abe77d7dcf07fecee3aa46e47fa87b11cdd97532d",
+    "implementation_digest": "6fbea13a947a33d7e69323b0a18b2a3d460e06e187177b0d8a1fc5d771aff744"
+  },
+  "commit": {
+    "state": "committed",
+    "commit_id": "commit_result_chart_0008b9a28164e3e010c9867b949a8ba3",
+    "committed_at": "2026-09-01T00:02:16.763Z"
+  }
+}
