@@ -1,0 +1,244 @@
+{
+  "dataset_family": "gene_expression",
+  "fields": [
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Stable unique row identifier derived from dataset_id, pathway_id and participant_id",
+      "name": "record_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "row_identifier",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Foreign key to dataset_catalog.csv identifying the dataset this row belongs to",
+      "name": "dataset_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "foreign_key",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Foreign key to source_list.csv identifying the originating database",
+      "name": "source_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "foreign_key",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Foreign key to source_assets.csv identifying the downloaded source file",
+      "name": "asset_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "foreign_key",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Probe identifier as it appears in the source file (e.g., GEO ID_REF)",
+      "name": "probe_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "entity_identifier",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "GEO platform accession (GPL...) the probe belongs to",
+      "name": "platform_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Foreign key to sample_metadata.csv identifying the sample (GEO GSM accession)",
+      "name": "sample_id",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "foreign_key",
+      "unit_policy": null
+    },
+    {
+      "data_type": "float",
+      "derivation_policy": null,
+      "description": "Numeric expression measurement value parsed from the source file (probe-level)",
+      "name": "value",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "measurement",
+      "unit_policy": "declared_per_record"
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Namespace of the row identifier: geo_probe for unmapped probes, or the target gene namespace for successfully mapped rows",
+      "name": "gene_id_namespace",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "entity_identifier",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Semantic interpretation of the value (e.g., estimated_count, metadata_only)",
+      "name": "value_semantics",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Scale of the value (e.g., linear, log2, na for not-applicable)",
+      "name": "value_scale",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Unit of the expression value (e.g., estimated_count, tpm, fpkm)",
+      "name": "expression_unit",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "unit",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Whether the value has been normalized (true/false)",
+      "name": "is_normalized",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Whether the value is expected to be an integer (true/false)",
+      "name": "is_integer_expected",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Original sample alias used in the source file's column header",
+      "name": "source_sample_alias",
+      "ontology": null,
+      "required": false,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Type of measurement (e.g., tximport_estimated_count, sample_metadata)",
+      "name": "measurement_type",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "attribute",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Logical name of the source file within the asset (e.g., GSE178352_tximportCounts.txt)",
+      "name": "source_logical_file",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    },
+    {
+      "data_type": "integer",
+      "derivation_policy": null,
+      "description": "1-based line number in the source file where this value appears",
+      "name": "source_line_number",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    },
+    {
+      "data_type": "integer",
+      "derivation_policy": null,
+      "description": "0-based column index in the source file where this value appears",
+      "name": "source_column_index",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Column header name in the source file",
+      "name": "source_column_name",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    },
+    {
+      "data_type": "string",
+      "derivation_policy": null,
+      "description": "Original string value as it appears in the source file before parsing",
+      "name": "source_raw_value",
+      "ontology": null,
+      "required": true,
+      "schema_version": "1.0",
+      "semantic_role": "provenance",
+      "unit_policy": null
+    }
+  ],
+  "primary_key": [
+    "probe_id",
+    "platform_id",
+    "sample_id"
+  ],
+  "row_granularity": "probe_sample_measurement",
+  "schema_id": "gene_expression.probe_long.v1",
+  "schema_version": "1.0"
+}

@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BioMed-QAgent 项目汇报</title>
+<style>
+  :root{
+    --ink:#1c2430; --muted:#5b6472; --bg:#f4f6f8; --surface:#ffffff; --line:#e2e8f0;
+    --primary:#0f766e; --primary-deep:#115e59; --primary-soft:#e8f4f2;
+    --warn-border:#e2bd77; --warn-bg:#fdf7e9; --warn-ink:#8a5a12;
+    --danger:#b3402f; --danger-bg:#fbf1ef; --danger-line:#efc9c2;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.8; font-size:15px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:980px;margin:0 auto;padding:28px 20px 48px}
+
+  .chip{display:inline-block;border-radius:999px;padding:0 9px;font-size:11.5px;line-height:19px;vertical-align:1px;font-weight:600;letter-spacing:.5px}
+  .chip-warn{background:var(--warn-bg);color:var(--warn-ink);border:1px solid var(--warn-border)}
+  .chip-light{background:rgba(255,255,255,.92);color:#8a5a12;border:1px solid rgba(0,0,0,.08)}
+
+  .hero{
+    background:linear-gradient(135deg,#0d6e66 0%,#14627a 55%,#1d4e89 100%);
+    color:#fff;border-radius:18px;padding:38px 36px 30px;margin-top:14px;
+    box-shadow:0 10px 30px rgba(15,80,88,.18);
+  }
+  .hero .kicker{font-size:12px;letter-spacing:4px;opacity:.85}
+  .hero h1{font-size:30px;margin:8px 0 6px;letter-spacing:1px;font-weight:700}
+  .hero .sub{opacity:.93;font-size:14.5px}
+  .meta{
+    display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin-top:22px;
+    background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.28);
+    border-radius:12px;padding:16px 20px;
+  }
+  .meta div{display:flex;gap:10px;font-size:13px;align-items:baseline;flex-wrap:wrap}
+  .meta dt{opacity:.75;white-space:nowrap;min-width:72px}
+  .meta dd{font-weight:600}
+
+  .toc{
+    background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:16px 22px;margin-top:18px;
+  }
+  .toc-title{font-size:13px;font-weight:700;color:var(--primary-deep);letter-spacing:2px;margin-bottom:8px}
+  .toc ol{list-style:none;display:grid;grid-template-columns:repeat(4,1fr);gap:4px 18px}
+  .toc a{color:var(--ink);text-decoration:none;font-size:13px;display:block;padding:3px 0;border-radius:6px}
+  .toc a:hover{color:var(--primary);background:var(--primary-soft)}
+  .toc a .no{color:var(--primary);font-weight:700;margin-right:6px}
+
+  section{
+    background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    padding:30px 34px;margin-top:20px;scroll-margin-top:16px;
+  }
+  h2{font-size:21px;display:flex;align-items:baseline;gap:10px;margin-bottom:16px}
+  h2 .no{color:var(--primary);font-family:Georgia,"Times New Roman",serif;font-size:16px;letter-spacing:1px;white-space:nowrap}
+  h2 .rule{flex:1;height:1px;background:var(--line);margin-left:4px}
+  h3{font-size:16.5px;margin:24px 0 10px;color:var(--primary-deep)}
+  h3:first-of-type{margin-top:4px}
+  p{margin:10px 0}
+  ul{margin:10px 0 10px 22px}
+  li{margin:6px 0}
+  b,strong{font-weight:650}
+
+  .callout{
+    background:var(--primary-soft);border-left:4px solid var(--primary);
+    border-radius:0 10px 10px 0;padding:14px 18px;margin:16px 0;font-size:14px;
+  }
+  .note{
+    background:#f6f8fa;border:1px dashed var(--line);border-radius:10px;
+    padding:10px 16px;margin:14px 0;font-size:13.5px;color:var(--muted);
+  }
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:16px 0}
+  th{background:#f1f5f8;text-align:left;padding:9px 12px;border-bottom:2px solid var(--line);font-weight:650;white-space:nowrap}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr:nth-child(even){background:#fafcfd}
+  td .ref{color:var(--muted);white-space:nowrap;font-size:12.5px}
+
+  figure{margin:20px 0}
+  .figcap{text-align:center;font-size:12.5px;color:var(--muted);margin-top:10px}
+
+  .ph-box{
+    border:2px dashed var(--warn-border);background:var(--warn-bg);border-radius:12px;
+    min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:8px;padding:24px;text-align:center;
+  }
+  .ph-text{font-size:14px;color:var(--warn-ink);font-weight:600}
+  .ph-hint{font-size:12.5px;color:#a5762a;max-width:560px}
+
+  .arch{display:flex;flex-direction:column;align-items:stretch;max-width:760px;margin:0 auto}
+  .arch-node{
+    border-radius:12px;padding:12px 18px;border:1px solid var(--line);
+    background:#fff;border-left-width:5px;
+  }
+  .arch-name{font-weight:700;font-size:14.5px}
+  .arch-tag{font-weight:400;font-size:12.5px;color:var(--muted);margin-left:8px}
+  .arch-sub{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.7}
+  .n-user{border-left-color:#64748b;background:#f7f9fb}
+  .n-fe{border-left-color:#64748b;background:#f7f9fb}
+  .n-host{border-left-color:#475569;background:#f4f7fa}
+  .n-agent{border-left-color:#2563eb;background:#eef4fe}
+  .n-family{border-left-color:#7c3aed;background:#f4effe}
+  .n-transform{border-left-color:#d97706;background:#fdf6ea}
+  .n-core{border-left-color:#0f766e;background:#e9f6f3}
+  .n-out{border-left-color:#16a34a;background:#ecf8ef}
+  .arch-arrow{width:2px;height:16px;background:#c6d2de;margin:2px auto;position:relative;flex:none}
+  .arch-arrow::after{
+    content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
+    border:5px solid transparent;border-top-color:#c6d2de;
+  }
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:center;margin-top:14px;font-size:12px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  .pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin:18px 0 6px}
+  .pipe-step{
+    background:#f7fafb;border:1px solid var(--line);border-radius:10px;padding:12px 10px 12px;
+    position:relative;
+  }
+  .pipe-step:last-child{background:var(--primary-soft);border-color:#bfe0da}
+  .pipe-num{
+    width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;
+    font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:8px;
+  }
+  .pipe-step:last-child .pipe-num{background:var(--primary-deep)}
+  .pipe-name{font-weight:700;font-size:13.5px;margin-bottom:4px}
+  .pipe-desc{font-size:11.5px;color:var(--muted);line-height:1.65}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
+  .card{
+    border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:#fff;
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .card:hover{border-color:#b9d8d3;box-shadow:0 4px 14px rgba(15,118,110,.08)}
+  .card-head{display:flex;align-items:center;gap:10px}
+  .card-num{
+    flex:none;width:30px;height:30px;border-radius:9px;background:var(--primary-soft);
+    color:var(--primary-deep);font-weight:700;font-size:13px;font-family:Georgia,serif;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .card-head h3{margin:0;font-size:15px;color:var(--ink);line-height:1.5}
+  .card p{font-size:13.5px;margin:0}
+  .card .value{
+    background:#f6f9f9;border-left:3px solid #bfe0da;border-radius:0 8px 8px 0;
+    padding:8px 12px;font-size:13px;color:#33474d;margin-top:auto;
+  }
+  .card .value b.tag{color:var(--primary-deep);margin-right:4px}
+
+  .mini{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+  .mini-item{border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:13px;background:#fbfcfd}
+  .mini-item b{display:block;font-size:13.5px;margin-bottom:4px}
+
+  .redline{
+    background:var(--danger-bg);border:1px solid var(--danger-line);border-left:5px solid var(--danger);
+    border-radius:0 12px 12px 0;padding:16px 20px;margin:16px 0;
+  }
+  .redline .rl-title{font-weight:700;color:var(--danger);font-size:14px;margin-bottom:6px}
+  .redline ul{margin:6px 0 0 20px;font-size:13.5px}
+  .redline li{margin:5px 0}
+
+  footer{
+    text-align:center;color:var(--muted);font-size:12px;margin-top:28px;letter-spacing:1px;
+  }
+
+  @media (max-width:860px){
+    .pipe{grid-template-columns:repeat(4,1fr)}
+    .toc ol{grid-template-columns:repeat(2,1fr)}
+  }
+  @media (max-width:680px){
+    section{padding:22px 20px}
+    .hero{padding:28px 22px}
+    .meta{grid-template-columns:1fr}
+    .cards,.mini{grid-template-columns:1fr}
+    .pipe{grid-template-columns:repeat(2,1fr)}
+    table{font-size:12.5px}
+    th,td{padding:8px 8px}
+  }
+  @media print{
+    body{background:#fff;font-size:12px}
+    .page{padding:0;max-width:none}
+    .toc{display:none}
+    .hero{border-radius:0;box-shadow:none}
+    section{border:none;border-bottom:1px solid var(--line);border-radius:0;padding:18px 0}
+    .card,.mini-item,.redline,.arch-node,.ph-box{break-inside:avoid}
+    figure{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <div class="kicker">项目汇报</div>
+    <h1>BioMed-QAgent 项目汇报</h1>
+    <p class="sub">生物医学数据智能检索与整合系统 · 从科学问题到可用数据</p>
+    <dl class="meta">
+      <div><dt>项目名称</dt><dd>BioMed-QAgent（生物医学数据智能检索与整合系统）</dd></div>
+      <div><dt>赛事</dt><dd>赛题编号 XH-202619</dd></div>
+      <div><dt>赛道 / 方向 / 选题</dt><dd>数据场景 ／ 科学数据整合与影响力分析应用 ／ 科学数据查找、解析与整合</dd></div>
+    </dl>
+  </header>
+
+  <nav class="toc">
+    <div class="toc-title">目录</div>
+    <ol>
+      <li><a href="#s1"><span class="no">1</span>项目概述</a></li>
+      <li><a href="#s2"><span class="no">2</span>需求分析与痛点</a></li>
+      <li><a href="#s3"><span class="no">3</span>系统总体架构</a></li>
+      <li><a href="#s4"><span class="no">4</span>核心能力设计</a></li>
+      <li><a href="#s5"><span class="no">5</span>创新点与设计亮点</a></li>
+      <li><a href="#s6"><span class="no">6</span>数据质量与人在回路</a></li>
+      <li><a href="#s7"><span class="no">7</span>工程能力与运行支撑</a></li>
+      <li><a href="#s8"><span class="no">8</span>小结</a></li>
+    </ol>
+  </nav>
+
+  <section id="s1">
+    <h2><span class="no">01</span>项目概述<span class="rule"></span></h2>
+    <p><b>BioMed-QAgent</b> 是一个面向生物医学开放数据的智能检索与整合系统。用户只需<b>用自然语言描述研究主题</b>（例如“乳腺癌正常组织与肿瘤组织 GEO 转录组数据集整合”），系统即可自动完成<b>查找来源 → 获取原始数据 → 解析、清洗与字段对齐 → 整合 → 产出带完整来源与审计信息的标准化表格</b>的全流程，把“<b>从科学问题到可直接分析的数据</b>”这一研究场景自动化。</p>
+    <p>系统有一条贯穿始终的设计底线：<b>让 AI 只做“数据统合引擎的操作者”，而不做“数据的编写者”</b>：不靠模型“猜”出一张表格，也不在缺少数据证据时编造科研或临床结论。真正修改与组织数据的，是一系列<b>确定性、可信、可审计</b>的机制；每一份正式产物都必须经过<b>确定性的验证门禁</b>才会发布，每一条数据都能回答“<b>它来自哪里、被怎样处理过、用的是哪个版本</b>”。</p>
+    <figure>
+      <div class="ph-box">
+        <span class="chip chip-warn">待补充</span>
+        <span class="ph-text">图 1 · 系统主界面 / 端到端演示截图</span>
+      </div>
+    </figure>
+  </section>
+
+  <section id="s2">
+    <h2><span class="no">02</span>需求分析与痛点<span class="rule"></span></h2>
+    <p>本系统对应赛题“<b>从科学问题到可用数据</b>”的真实研究场景：系统的首要任务是<b>构建标准化、可直接用于后续分析的可用数据集</b>（以合并后的多源表格为核心产物），而非完成一项完整的研究。围绕这一目标，我们识别出以下核心痛点，并逐一对应到系统的设计方案。</p>
+    <table>
+      <thead>
+        <tr><th>#</th><th>场景痛点</th><th>对应的设计方案</th><th>详见</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>P1</b></td>
+          <td><b>数据源分散、格式与标准不一</b>：科学数据散落 PubMed、GEO、GDC 等数十个库与文献，无统一入口</td>
+          <td>多来源适配器 + 内容寻址“源资产” + 模式（Schema）驱动解析，统一汇入确定性内核</td>
+          <td class="ref">§3.1 / §4.1</td>
+        </tr>
+        <tr>
+          <td><b>P2</b></td>
+          <td><b>模型易“幻觉”字段与结论</b>：大模型会“猜”字段含义、临时合并，缺证据时甚至编造结果，难以复现</td>
+          <td>确定性数据内核七步流水线；字段对齐靠规则 + 可信元数据，<b>字符串相似度只产生“候选提议”</b>；无证据不产出正式产物</td>
+          <td class="ref">§4.2 / §5.1 / §5.3</td>
+        </tr>
+        <tr>
+          <td><b>P3</b></td>
+          <td><b>多源数据不可直接合并</b>：行粒度、主键、计量单位、表达体系各不相同，直接合并产生“假整合”</td>
+          <td><b>兼容性门禁</b>：仅当数据族、行粒度、主键、测量兼容才允许合并；单位与表达规范化</td>
+          <td class="ref">§4.2</td>
+        </tr>
+        <tr>
+          <td><b>P4</b></td>
+          <td><b>来源难追溯、难验证</b>：学术场景下每条数据须能回答“来自哪、如何处理、何版本”，否则无法复现引用</td>
+          <td>全链路溯源：内容寻址 + 摘要，清单文件为产物唯一权威，可回溯到原始来源与处理版本</td>
+          <td class="ref">§4.4</td>
+        </tr>
+        <tr>
+          <td><b>P5</b></td>
+          <td><b>数据质量问题缺乏系统处理</b>：缺失、重复、单位不一致零散难处理</td>
+          <td>自动异常识别 + <b>失败行进入审计而非静默丢弃</b> + 人在回路“寻求人工建议后修正”</td>
+          <td class="ref">§4.3 / §6</td>
+        </tr>
+        <tr>
+          <td><b>P6</b></td>
+          <td><b>需执行任意转换逻辑，又不能破坏信任边界</b>：不可信代码直接执行会带来任意文件/网络/资源风险</td>
+          <td><b>三层职责分离</b>：控制平面准入、隔离执行平面沙箱执行、内核重新哈希准入；“执行成功 ≠ 可信”</td>
+          <td class="ref">§3 / §5.5</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">说明：系统的能力<b>以代码为准</b>，只描述已落地、可被测试或运行验证的功能；每一项能力都能映射到上述某个痛点，避免“为做而做”。</p>
+  </section>
+
+  <section id="s3">
+    <h2><span class="no">03</span>系统总体架构（完整全景）<span class="rule"></span></h2>
+
+    <h3>3.1 设计理念：智能、执行与信任三者分离</h3>
+    <p>系统最核心的架构决策，是把三件在传统方案里常常混在一起的事<b>彻底拆开</b>：</p>
+    <ul>
+      <li><b>“写转换逻辑”</b>：由智能层负责，产出声明式的“数据产品契约”与受控的转换逻辑；</li>
+      <li><b>“隔离执行”</b>：由独立执行平面负责，在受控沙箱里安全地运行代码；</li>
+      <li><b>“判定可信”</b>：由数据内核负责，对执行产物重新校验、验证并决定能否发布。</li>
+    </ul>
+    <div class="callout">三者统一的是<b>转换逻辑的接口约定与受控执行路径</b>，而不是取消信任门。这使得系统既能<b>扩展</b>（新的数据类型经同一条受控路径接入），又能保持“<b>可信只来自内核门禁</b>”的可靠性底线。</div>
+
+    <h3>3.2 架构全景</h3>
+    <figure>
+      <div class="arch">
+        <div class="arch-node n-user">
+          <div class="arch-name">用户<span class="arch-tag">自然语言研究主题</span></div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-fe">
+          <div class="arch-name">前端界面</div>
+          <div class="arch-sub">自然语言输入 / 步骤流 / 产物预览与下载</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-host">
+          <div class="arch-name">应用宿主<span class="arch-tag">统一入口 · 单一对外端口</span></div>
+          <div class="arch-sub">智能层 / 数据内核 / 接口 / 设置 / 前端托管</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-agent">
+          <div class="arch-name">智能层（Agent）</div>
+          <div class="arch-sub">发现来源 / 检索示例 · 编写「数据产品契约」（声明式，不含代码）· 编写「转换逻辑」（受控转换）· 提议语义决策</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-family">
+          <div class="arch-name">数据族管理平面<span class="arch-tag">Family Host · 控制平面 / 准入</span></div>
+          <div class="arch-sub">严格解析 / 计算摘要 / 作用域解析 · 解析投影、模式、转换引用与策略 · 准入 或 拒绝</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-transform">
+          <div class="arch-name">变换执行平面<span class="arch-tag">Transform Host · 隔离沙箱</span></div>
+          <div class="arch-sub">编译并准入内容寻址代码包 · 仅登记输入、有界读写、无网络 · 资源配额 / 取消 / 超时 / 进程围栏 · 产出：隔离区输出 + 执行回执</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-core">
+          <div class="arch-name">数据内核<span class="arch-tag">Dataset Core · 产品信任平面</span></div>
+          <div class="arch-sub">对执行平面输出重新哈希并准入 · 兼容性分区 / 确定性整合 · 大规模数据磁盘处理 + 科学验证 + 溯源闭环 · 产品级评估 · 原子发布（仅内核可发布）</div>
+        </div>
+        <div class="arch-arrow"></div>
+        <div class="arch-node n-out">
+          <div class="arch-name">标准化产物</div>
+          <div class="arch-sub">清单文件驱动的 CSV 主表 / 辅助表 / 模式 / 溯源与审计材料</div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#64748b"></i>交互</span>
+        <span><i style="background:#2563eb"></i>智能层</span>
+        <span><i style="background:#7c3aed"></i>控制平面</span>
+        <span><i style="background:#d97706"></i>执行平面</span>
+        <span><i style="background:#0f766e"></i>信任平面</span>
+        <span><i style="background:#16a34a"></i>产物</span>
+      </div>
+      <figcaption class="figcap">图 2 · 系统总体架构全景：从自然语言研究主题到标准化产物</figcaption>
+    </figure>
+
+    <h3>3.3 信任模型与安全边界</h3>
+    <p>系统设定了几条<b>不可逾越的安全红线</b>，从机制上保证“不可信代码”无法破坏整体可信性：</p>
+    <div class="redline">
+      <div class="rl-title">安全红线</div>
+      <ul>
+        <li>代码级隔离手段（线程沙箱、脚本虚拟环境、同账户子进程）<b>均不能</b>单独充当不可信代码的安全边界；生产环境仅允许<b>独立低权限操作系统 / 容器沙箱</b>。</li>
+        <li>转换逻辑<b>不能</b>决定合并胜者、验证阈值、产品评估或发布动作。</li>
+        <li><b>只有数据内核</b>可以提交操作结果、构造发布候选并调用发布器。</li>
+        <li>变换执行平面执行成功<b>只产生隔离区输出与执行回执</b>，不代表结果可信或可发布；必须经内核重新哈希准入后才进入可信链路。</li>
+      </ul>
+    </div>
+    <div class="callout">换言之：即使执行平面内出现缺陷或被滥用，也<b>不会直接污染</b>最终的可信产物。这是整个系统在“可扩展”与“可信”之间取得平衡的关键。</div>
+  </section>
+
+  <section id="s4">
+    <h2><span class="no">04</span>核心能力设计<span class="rule"></span></h2>
+    <p class="note">本节按能力组织，每项均映射到 §2 的对应痛点；4.5 多模态图表抽取为数据载体扩展能力。</p>
+
+    <h3>4.1 多源数据查找与获取（P1）</h3>
+    <p>系统通过<b>可插拔的技能（Skill）+ 业务工具</b>访问多类生物医学数据源，并把“来源”与“来源关系”记录进任务。内置来源目录分两类：<b>数据管线</b>（数据进入受信任的内核摄取路径）：PubMed 文献检索、GEO 表达与探针映射、GDC 癌症基因组、Xena 镜像、本地缓存与本地文件导入（CSV / TSV / JSON）；<b>研究辅助</b>（作为智能体检索 / 研究能力使用，产物停在工作区 / 缓存）：Reactome 通路成员、ChEMBL 生物活性、UniProt 蛋白注释、PDB 蛋白结构、PubChem 化合物信息。两类来源最终都汇入同一套可信内核。</p>
+    <p>系统覆盖 <b>6 个数据族</b>：基因表达、文献证据、靶点证据、变异证据、蛋白结构、生物活性测量。智能层另提供文献理解 / 文档抽取、网页视觉采集 + 图表数据抽取、浏览器自动化、科研数据处理通用指导等能力包。</p>
+
+    <h3>4.2 数据解析、清洗与字段对齐（P2 / P3）· 可靠性核心</h3>
+    <p>系统<b>不依赖模型“猜字段”</b>，而是由<b>确定性数据内核</b>驱动一条七步流水线：</p>
+    <figure>
+      <div class="pipe">
+        <div class="pipe-step">
+          <div class="pipe-num">1</div>
+          <div class="pipe-name">获取</div>
+          <div class="pipe-desc">来源绑定 → 下载 → 校验（协议 / 域名 / 大小 / 超时 / 校验和）</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">2</div>
+          <div class="pipe-name">解析</div>
+          <div class="pipe-desc">按来源适配器解析为数据批</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">3</div>
+          <div class="pipe-name">归一化</div>
+          <div class="pipe-desc">字段映射、实体与单位规范化（字符串相似度只产生“候选提议”）</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">4</div>
+          <div class="pipe-name">兼容性门禁</div>
+          <div class="pipe-desc">数据族 / 行粒度 / 主键 / 测量兼容，才允许合并</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">5</div>
+          <div class="pipe-name">整合</div>
+          <div class="pipe-desc">确定性合并（大表磁盘化处理，受资源上限约束）</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">6</div>
+          <div class="pipe-name">验证</div>
+          <div class="pipe-desc">由服务端版本化“验证配置”驱动（而非提示词约束）</div>
+        </div>
+        <div class="pipe-step">
+          <div class="pipe-num">7</div>
+          <div class="pipe-name">发布</div>
+          <div class="pipe-desc">通过验证才原子提升为不可变发布产物</div>
+        </div>
+      </div>
+      <figcaption class="figcap">图 3 · 确定性数据内核七步流水线</figcaption>
+    </figure>
+    <ul>
+      <li><b>多格式、多载体解析</b>：内置受信任适配器覆盖 GEO / GDC / Xena / 基因表达定量，将结构化数据解析为<b>不可变源资产</b>（带校验和 / 类型 / 大小校验）；由模式驱动支持 CSV / TSV / JSON 的严格表头、行宽与类型校验，<b>失败行进入审计拒绝记录</b>而非被静默丢弃。</li>
+      <li><b>字段对齐的反幻觉机制</b>：字符串相似度只产生“候选提议”，需适配器、模式、可信元数据或人工批准后，方可进入正式合并（见 §5.3）。</li>
+      <li><b>兼容才合并</b>：仅在数据族、行粒度、主键、测量都兼容时合并，避免“假整合”。</li>
+    </ul>
+
+    <h3>4.3 数据质量处理（P5）</h3>
+    <ul>
+      <li><b>自动识别</b>缺失、重复、单位不一致等质量问题；</li>
+      <li><b>失败行进入审计</b>而非静默丢弃，保证“少一条数据”也能被解释；</li>
+      <li>对低置信度的图表数值做<b>坐标轴 / 图例校验</b>；</li>
+      <li>需要时<b>请求人工建议后再修正</b>（人在回路，见 §6）。</li>
+    </ul>
+
+    <h3>4.4 来源标注与可追溯性（P4）</h3>
+    <ul>
+      <li>每个构建的产物由<b>清单文件（Manifest）唯一权威声明</b>（程序不硬编码任何文件名）；</li>
+      <li>每条数据可经“源资产 / 定位符 / 适配器 / 解析器 / 配置引用”回溯到<b>原始来源与处理版本</b>（内容寻址 + 摘要）；</li>
+      <li>产物包含完整审计材料：来源清单、来源关系、下载日志、字段映射、处理日志、质量报告、拒绝记录与警告；</li>
+      <li><b>置信度可解释</b>（见 §6）。</li>
+    </ul>
+
+    <h3>4.5 多模态图表数据抽取（数据载体扩展）</h3>
+    <ul>
+      <li>可选使用<b>浏览器自动化</b>对网页 / 论文页面截图；</li>
+      <li>以<b>视觉大模型 / 文档解析 / 说明文字</b>组成<b>降级链路</b>提取图表数据（任一环节失败自动降级）；</li>
+      <li>提取产物带 <code>estimated</code>（估计值）、坐标轴不清、图例不清、待人工审核等<b>质量字段</b>，可复用持久化的人在回路 / 置信度协议做人工审核。</li>
+    </ul>
+  </section>
+
+  <section id="s5">
+    <h2><span class="no">05</span>创新点与设计亮点<span class="rule"></span></h2>
+    <div class="callout">
+      本项目最核心的贡献，与其说是一项单点技术，不如说是一套<b>设计理念</b>：让 AI 只做“数据统合引擎的操作者”，而不做“数据的编写者”。通用 Agent 已不再稀缺，真正稀缺的是“<b>可信</b>”。本项目并未发明某种新机制，而是把流水线、沙箱、清单这些成熟工程手段组织成<b>“谁写、谁执行、谁判可信”职责分离的信任架构</b>，使数据链路的行为与可信性<b>不随模型更换或提示词变化而漂移</b>。
+    </div>
+    <div class="cards">
+      <article class="card">
+        <div class="card-head"><span class="card-num">01</span><h3>AI 是“引擎的操作者”，而非“数据的编写者”</h3></div>
+        <p>AI 不直接产出或改写数据，只负责理解需求、发现来源、编写声明式“数据产品契约”与受控转换、提议语义决策；真正修改与组织数据的，是一组<b>确定性机制</b>。</p>
+        <p class="value"><b class="tag">价值</b>数据链路的行为与可信性<b>不随模型 / 提示词变化而漂移</b>：换模型、改提示词，都不会动摇数据的正确性与可审计性，输出准确性因此大幅提升。</p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="card-num">02</span><h3>跨模态自动汇聚与统一建模</h3></div>
+        <p>对接分散、异构的多个平台与多种数据载体（文献<b>文本</b> / 结构化<b>表格</b> / 论文<b>图表图像</b>），跨模态自动汇聚，并归一到<b>统一的规范数据模型</b>（6 个数据族）。</p>
+        <p class="value"><b class="tag">价值</b>把“人工跨库搬运 + 手工对齐”变成“自动汇聚 + 统一建模”，直接回应“数据割裂、格式异构、人工整合低效”的痛点。</p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="card-num">03</span><h3>领域知识驱动的精准纠错与标准化</h3></div>
+        <p>不用“通用规则一刀切”（易误删或留噪），而以<b>领域知识</b>（数据模式、单位与实体规范、兼容性约束）为依据做精准纠错与标准化；字符串相似度只产生“<b>候选提议</b>”，须经领域依据 / 可信元数据 / 人工批准才生效。</p>
+        <p class="value"><b class="tag">价值</b>纠错“有依据”，从机制上避免“长得像 = 同一字段”的静默错配，兼顾准确性与安全性。</p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="card-num">04</span><h3>领域合理性校验，主动标记异常，降低伪阳性</h3></div>
+        <p>内置<b>领域（生物学）合理性校验</b>，由服务端版本化“验证配置”驱动；<b>主动标记</b>缺失、重复、单位不一致、低置信度等异常，失败行进入审计而非静默丢弃，并给出<b>可解释置信度</b>（批次级 / 记录级）。</p>
+        <p class="value"><b class="tag">价值</b>把“研究者逐条手动甄别可信度”变成“系统主动标记 + 人工复核”，大幅降低伪阳性风险。</p>
+      </article>
+      <article class="card">
+        <div class="card-head"><span class="card-num">05</span><h3>写转换、隔离执行、判可信三者分离</h3></div>
+        <p>把“写转换逻辑 / 隔离执行 / 判定可信”拆为三个独立平面，统一的是<b>转换接口与受控执行路径</b>，而非取消信任门。</p>
+        <p class="value"><b class="tag">价值</b>系统在保持“可信只来自内核门禁”的前提下实现<b>可扩展</b>：新数据类型经同一条受控路径接入，而信任边界不被削弱。</p>
+      </article>
+    </div>
+
+    <h3>5.6 设计亮点</h3>
+    <div class="mini">
+      <div class="mini-item">
+        <b>规范化摘要（内容标识对格式差异不敏感）</b>
+        同一份数据产品契约，即使字段顺序、别名、默认值、空白不同，也计算得到<b>相同摘要</b>：按“语义”而非“字面”识别同一对象，是去重、准入与复用的基础。
+      </div>
+      <div class="mini-item">
+        <b>“执行成功 ≠ 可信”</b>
+        隔离执行产物先进“隔离区”并附“执行回执”，必须经内核重新哈希准入才可能成为可信产品；即使执行平面被滥用也不直接污染可信产物。
+      </div>
+      <div class="mini-item">
+        <b>事件溯源的持久化运行时</b>
+        任务的权威事实是<b>持续追加的事件日志</b>，快照可由事件重建，中断 / 崩溃后可恢复、进度可重放；前端展示只是事件的“投影”，不是事实来源。
+      </div>
+    </div>
+  </section>
+
+  <section id="s6">
+    <h2><span class="no">06</span>数据质量与人在回路<span class="rule"></span></h2>
+    <p>系统把“人机协作”做成一等公民，而非事后补丁：</p>
+    <ul>
+      <li><b>任务可暂停 / 继续</b>：等待用户输入（计划确认、数据修正、达到轮次上限等），状态持久化、可跨会话恢复；</li>
+      <li><b>细粒度权限系统</b>：智能层的文件访问与命令执行经“允许 / 询问 / 拒绝”三级控制，其中“询问”会<b>挂起单个工具调用</b>等待用户批准，并以持久化事件记录全过程；</li>
+      <li><b>人工修正闭环</b>：对低置信度或异常数据，系统<b>主动寻求人工建议后再修正</b>，修正过程留痕；</li>
+      <li><b>置信度可解释</b>：区分批次级与记录级置信度，视觉 / 语言模型抽取的结果要求记录级标注并进入人工审核，来源清晰可查。</li>
+    </ul>
+  </section>
+
+  <section id="s7">
+    <h2><span class="no">07</span>工程能力与运行支撑<span class="rule"></span></h2>
+    <ul>
+      <li><b>统一应用宿主</b>：前端、智能层、数据内核、接口、设置与静态托管收敛在单一宿主、单一对外端口，拓扑简单、可测试、可验证；</li>
+      <li><b>实时交互</b>：前端以编码智能体风格的步骤流呈现用户输入、思维过程、工具调用、阶段、进度、警告与产物，支持断线重连并按持久化序号补齐事件；</li>
+      <li><b>技能系统自迭代</b>：执行完成后把工具流还原为<b>可复用脚本候选 + 技能说明候选 + 分析报告</b>，沉淀复用经验，固化需人工评审。</li>
+    </ul>
+  </section>
+
+  <section id="s8">
+    <h2><span class="no">08</span>小结<span class="rule"></span></h2>
+    <p>BioMed-QAgent 围绕“<b>从科学问题到可用数据</b>”这一真实研究场景，构建了一套<b>可扩展、可追溯、可验证、可恢复</b>的智能数据检索与整合系统。它区别于“让大模型直接产出表格”的根本之处，在于<b>让 AI 只做“数据统合引擎的操作者”，而不做“数据的编写者”</b>，并进一步把<b>写转换、隔离执行、判可信三者分离</b>：智能层负责“理解与提议”，受控执行平面负责“安全地做”，数据内核负责“判定能不能信”。</p>
+    <p>由此，系统在满足赛题“<b>数据查找完备性、来源可追溯性、清洗整合可靠性、输出格式可用性</b>”四项核心要求的同时，进一步回应了科研场景对<b>可信、可复现、可解释</b>的深层需求。</p>
+    <figure>
+      <div class="ph-box">
+        <span class="chip chip-warn">待补充</span>
+        <span class="ph-text">图 4 · 代表性研究主题输入 / 输出示例</span>
+        <span class="ph-hint">1–2 个端到端案例（体现端到端效果）：输入的自然语言研究主题 → 输出的标准化表格（列 / 行数 / 来源覆盖）→ 配套溯源与审计材料示例</span>
+      </div>
+    </figure>
+  </section>
+
+  <footer>BioMed-QAgent · 项目汇报 · 2026-08</footer>
+
+</div>
+</body>
+</html>

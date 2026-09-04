@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "run_id": "run_ts_7d68668d-13b0-4d20-a988-eed58f27484f",
+  "request_count": 1,
+  "denied_count": 1,
+  "decisions": [
+    {
+      "request_id":"permission_6cf2da3f-e4e2-442a-a54a-3195630b5888",
+      "capability":"fs.read",
+      "scope":"project",
+      "decision":"deny",
+      "grant_scope":null,
+      "canonical_resource":"/tmp/BioMed-QAgent-gold6-r4/source_assets/paper_chart_evidence/evidence_3f467458bcc9.json",
+      "reason":"Denied exact out-of-workspace project fs.read path traversal. Core assets must be accessed through governed Core asset tools."
+    }
+  ]
+}

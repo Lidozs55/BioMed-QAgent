@@ -1,0 +1,2 @@
+# Frozen prompts are byte-level evaluation inputs; never normalize or text-diff them.
+prompts/*.txt binary

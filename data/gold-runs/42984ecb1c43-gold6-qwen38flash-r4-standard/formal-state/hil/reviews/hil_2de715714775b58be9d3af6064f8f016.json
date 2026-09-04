@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "review_id": "review_0b409a81f5105dfb0aad97bd207f8c85",
+  "request_id": "hil_2de715714775b58be9d3af6064f8f016",
+  "decision": {
+    "action": "approve"
+  },
+  "reviewer": "user",
+  "reviewed_at": "2026-08-31T23:16:41.615Z",
+  "evidence_digest": "afdc51b161fba535b698cf8a17f51c0accc5d71ff65b99a8e87597bfd44eed37",
+  "reason": "Approved once for the exact PMC5355725 extract_registered_paper_chart_evidence credential request after matching task/run/request identity and byte-verifying the XML, PDF, and supplementary ZIP against this run's Core acquisition receipts; no VLM/data review or Publication acceptance is implied."
+}

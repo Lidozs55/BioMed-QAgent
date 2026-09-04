@@ -1,0 +1,91 @@
+<mxfile host="app.diagrams.net" agent="ZCode">
+  <diagram id="bioactivity-multitable-fk" name="Bioactivity Multitable FK">
+    <mxGraphModel dx="1002" dy="622" grid="1" gridSize="5" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="920" pageHeight="630" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="subtitle" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=13;fontColor=#666666;" value="activities 按清单声明的外键多对一关联 assays 与 compounds · 组装阶段检查主键 / 外键 / 基数 / 表角色" vertex="1">
+          <mxGeometry height="24" width="800" x="40" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="compounds" parent="1" style="swimlane;startSize=42;horizontal=1;rounded=1;arcSize=8;whiteSpace=wrap;html=1;container=1;pointerEvents=0;collapsible=0;fontSize=15;fontColor=#333333;fillColor=#D5E8D4;swimlaneFillColor=#FFFFFF;strokeColor=#82B366;strokeWidth=2;spacingLeft=10;align=left;" value="&lt;b&gt;compounds · 化合物规范身份表&lt;/b&gt;&#xa;&lt;font color=&quot;#666666&quot; style=&quot;font-size:11px;&quot;&gt;supporting · 一行 = 一个化合物身份&lt;/font&gt;" vertex="1">
+          <mxGeometry height="155" width="330" x="70" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="compounds-pk" parent="compounds" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#82B366;strokeWidth=1;spacingLeft=8;spacing=2;" value="compound_id · compound_id_namespace&lt;font color=&quot;#666666&quot;&gt;　【PK】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="compounds-name" parent="compounds" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#82B366;strokeWidth=1;spacingLeft=8;spacing=2;" value="preferred_name（规范名）" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="compounds-structure" parent="compounds" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#82B366;strokeWidth=1;spacingLeft=8;spacing=2;" value="inchi_key · canonical_smiles" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="compounds-props" parent="compounds" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#82B366;strokeWidth=1;spacingLeft=8;spacing=2;" value="molecular_formula · molecular_weight" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="126" as="geometry" />
+        </mxCell>
+        <mxCell id="assays" parent="1" style="swimlane;startSize=42;horizontal=1;rounded=1;arcSize=8;whiteSpace=wrap;html=1;container=1;pointerEvents=0;collapsible=0;fontSize=15;fontColor=#333333;fillColor=#FFE6CC;swimlaneFillColor=#FFFFFF;strokeColor=#D79B00;strokeWidth=2;spacingLeft=10;align=left;" value="&lt;b&gt;assays · 实验条件表&lt;/b&gt;&#xa;&lt;font color=&quot;#666666&quot; style=&quot;font-size:11px;&quot;&gt;supporting · 一行 = 一个实验定义&lt;/font&gt;" vertex="1">
+          <mxGeometry height="155" width="330" x="520" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="assays-pk" parent="assays" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#D79B00;strokeWidth=1;spacingLeft=8;spacing=2;" value="assay_id · assay_id_namespace&lt;font color=&quot;#666666&quot;&gt;　【PK】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="assays-type" parent="assays" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#D79B00;strokeWidth=1;spacingLeft=8;spacing=2;" value="assay_type · description" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="assays-context" parent="assays" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#D79B00;strokeWidth=1;spacingLeft=8;spacing=2;" value="organism · cell_line" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="assays-target" parent="assays" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#D79B00;strokeWidth=1;spacingLeft=8;spacing=2;" value="target_entity_id&lt;font color=&quot;#666666&quot;&gt;　【FK → targets（图略）】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="126" as="geometry" />
+        </mxCell>
+        <mxCell id="activities" parent="1" style="swimlane;startSize=42;horizontal=1;rounded=1;arcSize=8;whiteSpace=wrap;html=1;container=1;pointerEvents=0;collapsible=0;fontSize=15;fontColor=#333333;fillColor=#DAE8FC;swimlaneFillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=2;spacingLeft=10;align=left;" value="&lt;b&gt;activities · 测量值表&lt;/b&gt;&#xa;&lt;font color=&quot;#666666&quot; style=&quot;font-size:11px;&quot;&gt;primary · 一行 = 一条活性测量&lt;/font&gt;" vertex="1">
+          <mxGeometry height="205" width="330" x="295" y="302" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-pk" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="activity_id&lt;font color=&quot;#666666&quot;&gt;　【PK】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-fk-compound" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="compound_id · compound_id_namespace&lt;font color=&quot;#666666&quot;&gt;　【FK】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="74" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-fk-assay" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="assay_id · assay_id_namespace&lt;font color=&quot;#666666&quot;&gt;　【FK】&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-raw" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="activity_type · raw_value · raw_unit" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="126" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-std" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="standardized_value · standardized_unit" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="152" as="geometry" />
+        </mxCell>
+        <mxCell id="activities-prov" parent="activities" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#333333;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;spacingLeft=8;spacing=2;" value="source_id · source_locator（溯源定位）" vertex="1">
+          <mxGeometry height="22" width="310" x="10" y="178" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-compound" edge="1" parent="1" source="activities" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;exitX=0;exitY=0.2;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;endArrow=block;endFill=1;" target="compounds" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="235.06" y="343.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-compound-label" connectable="0" parent="edge-compound" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#333333;labelBackgroundColor=#FFFFFF;" value="N : 1 · compound_id" vertex="1">
+          <mxGeometry relative="1" x="0.64" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-assay" edge="1" parent="1" source="activities" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;exitX=1;exitY=0.2;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;endArrow=block;endFill=1;" target="assays" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="685.06" y="343.06" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-assay-label" connectable="0" parent="edge-assay" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=12;fontColor=#333333;labelBackgroundColor=#FFFFFF;" value="N : 1 · assay_id" vertex="1">
+          <mxGeometry relative="1" x="0.64" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="note" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontColor=#666666;" value="关系由数据家族清单显式声明：cardinality = many_to_one · missing_policy = reject（引用缺失即拒绝组装）" vertex="1">
+          <mxGeometry height="24" width="780" x="70" y="520" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

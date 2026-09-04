@@ -1,0 +1,7 @@
+{
+  "case_id":"gold3",
+  "admissible_as_current_evidence":false,
+  "reason":"Historical workspace outputs and summaries predate multi-table trusted publication; no complete publication/artifact evidence bundle exists.",
+  "runs":[{"task_id":"task_ts_baf0fa78-fb57-4d75-bb96-7d299ea95e69","run_id":"run_ts_52eb5783-3d6a-4838-9b7f-9b9ed434a163","request_id":"e2e-gold3-001","status":"workspace_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null}],
+  "known_gaps":["COSMIC inaccessible in historical run","some provider requests failed","source values were not closed by registered SourceAsset receipts"]
+}

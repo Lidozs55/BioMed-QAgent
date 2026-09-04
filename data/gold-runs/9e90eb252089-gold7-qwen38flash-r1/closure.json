@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "case_label": "gold7",
+  "observed_commit": "9e90eb252089",
+  "task_id": "task_ts_ce0f3f8e-f864-4501-8b13-9382f5b3f2a1",
+  "run_id": "run_ts_7e30efc1-ef1b-4872-b5fe-35c25369d25c",
+  "model_verified": "pi-session model_change asserted pre-launch (qwen3.8-flash)",
+  "terminal": {
+    "status": "completed",
+    "classification": "succeeded_publication"
+  },
+  "wall": {
+    "started_at": "2026-08-30T10:20:25.584Z",
+    "finished_at": "2026-08-30T10:44:30.173Z",
+    "seconds": 1445
+  },
+  "events_total": 1084,
+  "context_peak_tokens": 200214,
+  "compactions": 0,
+  "permission_stops": 0,
+  "hil": 0,
+  "publication": {
+    "publication_id": "pub_ad_gwas_risk_map_e76103f1b9751ace",
+    "manifest_sha256": "7789b72619cbcad7a38cd339a97068981070d52ce73bfe9eb1f703f35adef7a2",
+    "supersedes_publication_id": null,
+    "published_at": "2026-08-30T10:41:16.586000Z"
+  },
+  "publication_artifacts": [
+    "artifact_c8d0240f4b72f6e77047a997f9ceca48",
+    "artifact_b8a95fc2e97abe4dbc32547f391a2a02",
+    "artifact_91e08fe9e7cb46d4d5e74741d614abdf",
+    "artifact_28ea48f9b33531afe7a7ff3609a4e316"
+  ],
+  "phase_split": {
+    "pre_publication": {
+      "calls": 56,
+      "input": 425951,
+      "output": 90496,
+      "cache": 6031360,
+      "total": 6547807,
+      "seconds": 1247
+    },
+    "post_publication": {
+      "calls": 7,
+      "input": 7865,
+      "output": 1535,
+      "cache": 1383424,
+      "total": 1392824,
+      "seconds": 151
+    }
+  },
+  "tool_counts": {
+    "inspect_dataset_execution_routes": 1,
+    "activate_agent_tools": 3,
+    "get_research_data_guidance": 2,
+    "lookup_gwas_catalog": 2,
+    "navigate_page": 3,
+    "download_from_page": 2,
+    "workspace_read": 4,
+    "lookup_dbsnp": 1,
+    "prepare_dynamic_family_publication": 16,
+    "submit_dynamic_family_publication": 18,
+    "workspace_list": 4,
+    "download_supplementary": 1,
+    "preview_core_asset": 2,
+    "workspace_search": 3
+  },
+  "tool_errors": [
+    "navigate_page@80",
+    "navigate_page@94",
+    "download_from_page@134",
+    "prepare_dynamic_family_publication@198",
+    "prepare_dynamic_family_publication@214",
+    "prepare_dynamic_family_publication@225",
+    "prepare_dynamic_family_publication@238",
+    "prepare_dynamic_family_publication@249",
+    "submit_dynamic_family_publication@280",
+    "submit_dynamic_family_publication@294",
+    "submit_dynamic_family_publication@314",
+    "submit_dynamic_family_publication@333",
+    "submit_dynamic_family_publication@353",
+    "submit_dynamic_family_publication@388",
+    "submit_dynamic_family_publication@406",
+    "submit_dynamic_family_publication@430",
+    "submit_dynamic_family_publication@444",
+    "submit_dynamic_family_publication@476",
+    "submit_dynamic_family_publication@501",
+    "submit_dynamic_family_publication@527",
+    "submit_dynamic_family_publication@541",
+    "prepare_dynamic_family_publication@552",
+    "submit_dynamic_family_publication@576",
+    "submit_dynamic_family_publication@609",
+    "submit_dynamic_family_publication@652",
+    "prepare_dynamic_family_publication@673",
+    "submit_dynamic_family_publication@697",
+    "preview_core_asset@772",
+    "workspace_read@892",
+    "preview_core_asset@911",
+    "workspace_list@935"
+  ],
+  "run_usage": {
+    "model_calls": 63,
+    "input_tokens": 433816,
+    "output_tokens": 92031,
+    "cache_read_tokens": 7414784,
+    "cache_write_tokens": 0,
+    "total_tokens": 7940631,
+    "reasoning_tokens": 0
+  }
+}

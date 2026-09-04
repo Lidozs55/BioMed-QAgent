@@ -1,0 +1,7 @@
+{
+  "case_id":"gold2",
+  "admissible_as_current_evidence":false,
+  "reason":"The early run used a lossy corrupted prompt and later history lacks a versioned complete event/build/publication/artifact bundle.",
+  "known_corruption":{"request_id":"e2e-gold2-001","failure":"Chinese prompt was replaced by question marks; it is not the frozen input."},
+  "runs":[{"task_id":"task_ts_f2d4b9d8-6af3-4b28-9590-cb66a2718bf0","run_id":"run_ts_b78fb9ba-175a-45ae-8ae8-b4299d46b608","status":"inadmissible_corrupted_input","prompt_hash":"missing","publication_id":null,"artifact_count":null}]
+}

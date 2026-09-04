@@ -1,0 +1,40 @@
+{
+  "manifest_id": "gold-v1",
+  "manifest_version": 1,
+  "frozen_at": "2026-08-18",
+  "frozen_from_commit": "5b51ac9c030150cbb95d2939e9082f74de09fe54",
+  "prompt_encoding": "UTF-8",
+  "runtime_profile": "runtime-defaults.json",
+  "strict_result": {
+    "passed": 0,
+    "total": 6,
+    "reason": "No case has yet passed a same-commit G1 rerun with a verified immutable publication artifact."
+  },
+  "universal_success_requirements": [
+    "frozen prompt bytes are submitted without modification",
+    "task and run reach successful terminal states",
+    "Dataset Core build reaches a successful terminal state",
+    "the expected registered family and table relations are published",
+    "all source values close provenance and confidence requirements",
+    "an immutable DatasetPublication is returned",
+    "every declared artifact is downloaded through the Artifact API and its SHA-256 is reverified",
+    "the final answer references the resulting publication",
+    "workspace-only files do not count as artifacts"
+  ],
+  "same_baseline_requirements": {
+    "same_product_commit": true,
+    "same_runtime_profile": true,
+    "network_sources_must_be_registered": true,
+    "prompt_changes_allowed": false,
+    "node_heap_override_allowed": false,
+    "reduced_input_allowed": false
+  },
+  "cases": [
+    { "case_id": "gold1", "spec": "cases/gold1.json" },
+    { "case_id": "gold2", "spec": "cases/gold2.json" },
+    { "case_id": "gold3", "spec": "cases/gold3.json" },
+    { "case_id": "gold4", "spec": "cases/gold4.json" },
+    { "case_id": "gold5", "spec": "cases/gold5.json" },
+    { "case_id": "gold6", "spec": "cases/gold6.json" }
+  ]
+}

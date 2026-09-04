@@ -1,0 +1,15 @@
+{
+  "case_id": "gold4",
+  "title": "SARS-CoV-2 Spike and human ACE2 structure, sequence and variant evidence",
+  "prompt_file": "prompts/gold4.txt",
+  "prompt_sha256": "7f29f95f7059d5aaadeb3e4e2f25e1df7155651d3b2683f54e3141b02134525f",
+  "expected_family": "protein_structure",
+  "expected_granularity": "viral protein and variant primary records, structure/paper supporting tables, and registered deterministic interface-derived records",
+  "schema_ref": "schemas/gold4-reference.json",
+  "source_inventory": "sources/gold4.sources.json",
+  "historical_evidence": "historical/gold4.runs.json",
+  "allowed_sources": ["NCBI", "UniProt", "RCSB PDB", "PubMed", "Europe PMC"],
+  "required_tables": ["viral_protein_records", "spike_variant_records", "structure_records", "interface_records", "paper_records"],
+  "success_definition": "A registered protein_structure publication keeps source records distinct from deterministic interface derivation, records algorithm/reference/input digests, closes locator/provenance/validation and passes Artifact API hash rechecks.",
+  "forbidden_shortcuts": ["derived interface rows presented as source rows", "workspace CSV as publication", "agent code execution", "prompt modification"]
+}

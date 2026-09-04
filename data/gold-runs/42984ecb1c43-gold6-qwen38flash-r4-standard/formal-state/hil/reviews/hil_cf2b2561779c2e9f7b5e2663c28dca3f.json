@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "review_id": "review_f0873715bcfdd92f80634d322b4b56bb",
+  "request_id": "hil_cf2b2561779c2e9f7b5e2663c28dca3f",
+  "decision": {
+    "action": "approve"
+  },
+  "reviewer": "user",
+  "reviewed_at": "2026-08-31T23:32:58.390Z",
+  "evidence_digest": "afdc51b161fba535b698cf8a17f51c0accc5d71ff65b99a8e87597bfd44eed37",
+  "reason": "Approved once for the exact PMC5355725 correction retry after the prior semantic validator rejection, matching task/run/request identity and byte-verifying the same Core-acquired XML and PDF. This authorizes only credential use for these two inputs; it does not claim supplementary provenance or accept VLM/data/publication evidence."
+}

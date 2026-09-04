@@ -1,0 +1,4 @@
+{"request_id":"permission_78bd8162-8596-4127-914a-bb95a08214f9","decision":{"action":"stop","reason":"process.exec is not a fixed parser command"}}
+{"request_id":"permission_78bd8162-8596-4127-914a-bb95a08214f9","decision":{"action":"deny","reason":"operator: bash zcat on series_matrix.gz; legitimate gunzip preview now exists (chain-1 fixed r4-verified) - behavior-side impulse re-occurs despite capability fix"}}
+{"request_id":"permission_03de5d0d-164d-43f1-81e3-d09b7452b0c6","decision":{"action":"stop","reason":"process.exec is not a fixed parser command"}}
+{"decision":"deny","reason":"operator: zcat direct; 2nd exec impulse this run despite working preview path"}
