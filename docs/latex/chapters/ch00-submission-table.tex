@@ -4,8 +4,8 @@
 \begin{tabular}{|>{\centering\arraybackslash}m{0.18\textwidth}|m{0.76\textwidth}|}
 \hline
 \textbf{参赛作品名称} & BioMed QAgent：面向生物医学研究的多源数据智能采集与分析系统 \\ \hline
-\textbf{参赛选题} & 赛道2-方向1A \\ \hline
+\textbf{参赛选题} & 赛道二·方向1A \\ \hline
 \textbf{参赛作品简介} & 系统将开放式推理与确定性数据处理分开：Qwen 等 LLM 驱动的智能体（Agent） 先理解研究目标、发现候选来源，并提交声明式数据需求；TypeScript Dataset Core 再负责来源登记、解析、规范化、多源整合、质量门禁和正式发布。Agent 工作区中的临时 CSV 不代表任务完成。正式结果是包含数据本身、表结构（Schema）、溯源信息（Provenance）、审计记录（Audit）、验证结果（Validation）、文件清单（含SHA-256）的不可变发布件（Publication）；多表结构则通过动态 Family 规定表达。来源通过 SourceAsset、SHA-256 和 SourceLocator 纳入证据链。不确定映射、未知单位和低置信度抽取可以触发人在回路请求；任务中断后，系统依据事件和 检查点（checkpoint） 恢复，无需模型重新解释已经确认的变换。 \\ \hline
-\textbf{参赛作品使用Qwen大模型及AI技术说明} & 本作品未将 Qwen 写死在配置中，而是提供 API key 配置方法，允许自选含 Qwen key 在内的 LLM 作主 Agent。实验（第五章）中，全部案例运行与图表理解均由 Qwen 系列模型承担（qwen3.8-flash / qwen3.8-max）；系统也允许用户自行配置可用视觉模型，用于理解页面图像进行数据提取。 \\ \hline
+\textbf{参赛作品使用Qwen大模型及AI技术说明} & 本作品提供统一的模型接入配置（API key 与模型名可配置），可灵活接入不同模型。实验（第五章）中，全部案例运行与图表理解均由 Qwen 系列模型承担（qwen3.8-flash / qwen3.8-max）；视觉理解模型同样支持单独配置，用于理解页面图像进行数据提取。 \\ \hline
 \textbf{作品相关文件链接} & \url{https://github.com/Lidozs55/BioMed-QAgent} \\ \hline
 \end{tabular}}
