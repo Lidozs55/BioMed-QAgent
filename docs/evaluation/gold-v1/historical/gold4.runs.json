@@ -1,0 +1,7 @@
+{
+  "case_id":"gold4",
+  "admissible_as_current_evidence":false,
+  "reason":"Historical custom CSV/intermediate outputs lack trusted publication, deterministic derive receipt, and Artifact API evidence.",
+  "runs":[{"task_id":"task_ts_ba836e38-3960-4f96-b6f7-9bd9a1302888","run_id":"run_ts_11b60e01-dcb4-4dea-912b-e8965df0ca2","status":"workspace_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null}],
+  "known_gaps":["CSV row-width defects","one PDB query failed","interface output was not a registered deterministic derive result"]
+}

@@ -1,0 +1,11 @@
+{
+  "case_id":"gold1",
+  "admissible_as_current_evidence":false,
+  "reason":"Historical task/run summaries lack a versioned complete event/build/publication/artifact bundle and were produced before gold-v1.",
+  "runs":[
+    {"task_id":"task_ts_1b3f8be3-b931-4847-a826-2c3410b0c61e","run_id":"run_ts_fdd4a654-c8d5-4896-a456-ea424ce5a2ab","status":"historical_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null},
+    {"task_id":"task_ts_e4f6c013-a39c-4b30-9f77-4701baa161d5","run_id":"run_ts_374767ee-7356-4f2e-8d39-59976158377e","status":"historical_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null},
+    {"task_id":"task_ts_96f305d2-67ca-4a79-b650-a3ca65eb5d01","run_id":"run_ts_0984d581-75f6-4ece-abd0-27b9146b3002","status":"historical_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null},
+    {"task_id":"task_ts_476e2eef-6280-4e31-8b3a-f362a3a20e5f","run_id":"run_ts_2dd536cc-3eab-41db-8700-cb739c4da447","status":"resource_regression_summary_only","prompt_hash":"missing","publication_id":null,"artifact_count":null}
+  ]
+}

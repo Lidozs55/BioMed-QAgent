@@ -1,0 +1,22 @@
+{
+  "profile_id": "gold-v1-default-runtime-limits",
+  "source": "packages/contracts/src/settings.ts#DEFAULT_RUNTIME_LIMITS",
+  "frozen_from_commit": "5b51ac9c030150cbb95d2939e9082f74de09fe54",
+  "node_heap_override": null,
+  "limits": {
+    "command_timeout_seconds": 600,
+    "command_output_kib": 256,
+    "workspace_read_kib": 256,
+    "workspace_write_kib": 1024,
+    "workspace_search_file_mib": 16,
+    "workspace_search_max_files": 2000,
+    "http_timeout_seconds": 300,
+    "download_timeout_seconds": 3600,
+    "browser_timeout_seconds": 300,
+    "dataset_operation_timeout_seconds": 3600,
+    "database_timeout_seconds": 600,
+    "max_download_mib": 8192,
+    "gdc_max_files": 50,
+    "request_interval_ms": 500
+  }
+}
