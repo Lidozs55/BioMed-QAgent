@@ -1,27 +1,27 @@
 \chapter{确定性数据核心：八阶段流水线（Dataset Core）}\label{ch:dataset-core}
 
-Dataset Core 是系统唯一的数据信任边界。它将数据处理固定为八个阶段：采集 → 解析 → 规范化 → 兼容性检查 → 整合 → 派生 → 校验 → 发布（acquire → parse → normalize → compat → integrate → derive → validate → publish）。每个阶段都有明确的输入、执行完成的凭证（记录该阶段做了什么、产生了哪些文件及其摘要）、输出摘要和失败含义。
-
-Agent 的自主决策面见 \ref{sec:agent-autonomy} 节。决策进入 Core 后，执行路线固定，正式数据值由注册操作产出。动态数据家族（Family）允许 Agent 提供的变换代码在一个受限执行区内产生候选字节；这些候选要成为正式数据，必须依次通过准入检查（核对输入、输出与摘要是否精确闭合）、完整性校验（Validation）、多表产品评估（ProductAssessment）与发布器（Publisher）的逐级检查，任何一级不通过即整体拒绝。动态家族扩展的是“能读什么”，不扩大“能写什么”。
-
-\begin{figure}[htbp]
+\begin{wrapfigure}{l}{0.55\textwidth}
   \centering
-  \includegraphics[width=0.75\textwidth]{figures/biomed-qagent-core-deterministic-flow.pdf}
+  \includegraphics[width=\linewidth]{figures/biomed-qagent-core-deterministic-flow.pdf}
   \caption{Dataset Core 确定性数据流详图}
   \label{fig:core-deterministic-flow}
-\end{figure}
+\end{wrapfigure}%
 
-详图展开 Core 内部的两条路线。A 路线使用已注册数据家族的固定操作骨架；B 路线处理动态规格：变换方只交付候选字节，隔离区和 Core 再通过重新计算摘要、检查闭合条件等方式统一校验。变换方不能选择校验、评估或发布模块，这构成贡献二的机制基础。
+Dataset Core 是系统唯一的数据信任边界。它将数据处理固定为八个阶段，从采集、解析、规范化、兼容性检查、整合、多表组装、校验到发布（acquire、parse、normalize、compat、integrate、derive、validate、publish）。每个阶段都有明确的输入、输出摘要和失败含义，也有执行完成的凭证，说明该阶段做了什么、产生了哪些文件及各文件的摘要。
 
-表头与声明差一字段的变换被隔离区（quarantine）以 \code{OUTPUT\_\allowbreak{}HEADER\_\allowbreak{}MISMATCH} 拒绝；占位符空壳是内容筛查上线前唯一一次穿透到发布的案例，上线后未再发生。
+Agent 的自主决策面见 \ref{sec:agent-autonomy} 节。决策进入 Core 后，执行路线固定，正式数据值由注册操作产出。动态数据家族（Family）允许 Agent 提供的变换代码在一个受限执行区内产生候选字节；这些候选要成为正式数据，必须依次通过准入检查、完整性校验（Validation）、多表产品评估（ProductAssessment）与发布器（Publisher）的逐级检查。准入检查核对输入、输出与摘要是否精确闭合，任何一级不通过即整体拒绝。动态家族扩展的是“能读什么”，不扩大“能写什么”。
 
-八个阶段运行在共同的可靠性基座上（\ref{sec:reliability-base} 节）。此外，系统使用明确的结束状态区分“运行完成”和“正式发布”：拿不准就拒绝，终态包括 Rejected /\allowbreak{} NO\_\allowbreak{}DATA /\allowbreak{} Failed /\allowbreak{} Cancelled。以下按八个阶段依次说明。
+详图展开 Core 内部的两条路线。A 路线使用已注册数据家族的固定操作骨架；B 路线处理动态规格：变换方只交付候选字节，隔离区和 Core 再通过重新计算摘要、检查闭合条件等方式统一校验。变换方不能选择校验、评估或发布模块，这构成 \ref{sec:contributions} 节所述运行时表结构准入控制的机制基础。
+
+变换产出的表头哪怕只与声明相差一个字段，隔离区（quarantine）也会以 \code{OUTPUT\_\allowbreak{}HEADER\_\allowbreak{}MISMATCH} 拒绝该候选。占位符空壳是内容筛查上线前唯一一次穿透到发布的案例，上线后未再发生。
+
+八个阶段运行在共同的可靠性基座上（\ref{sec:reliability-base} 节）。此外，系统用明确的结束状态区分“运行完成”和“正式发布”，拿不准就拒绝。终态分为 Rejected、NO\_\allowbreak{}DATA、Failed 与 Cancelled 四类。以下按八个阶段依次说明。
 
 \section{阶段 1：正式采集与来源资产登记（acquire）}
 
 Agent 的来源发现（第三章）拿到 URL 后，正式路线不会直接信任 Agent 工作区中的任意文件。Core 的采集提供者先确定请求的 URL、方法、请求头、媒体类型和允许参数，再由统一下载设施执行网络访问。该设施实施 URL/\allowbreak{}DNS 策略、大小与超时限制、重试、断点续传和内容缓存，以降低服务端请求伪造（SSRF）、无限下载和重复获取等风险。
 
-文件写入任务专属的来源资产目录后，来源资产注册表流式计算 SHA-256 并生成内容身份。它同时绑定任务与资产角色、文件字节数/\allowbreak{}媒体类型/\allowbreak{}SHA-256、来源 ID 与规范编号、提供者与采集实现的身份摘要，并在支持时记录快照身份或修订号等版本证据。目录逃逸、符号链接和跨任务资产复用一律拒绝。
+文件写入任务专属的来源资产目录后，来源资产注册表流式计算 SHA-256 并生成内容身份。它同时绑定任务与资产角色、文件字节数、媒体类型与 SHA-256、来源 ID 与规范编号、提供者与采集实现的身份摘要，并在支持时记录快照身份或修订号等版本证据。目录逃逸、符号链接和跨任务资产复用一律拒绝。
 
 因此，“来源资产”不是一个本地路径，而是任务、来源、内容与采集实现共同绑定的输入证据。
 
@@ -37,18 +37,16 @@ Agent 的来源发现（第三章）拿到 URL 后，正式路线不会直接信
 
 \subsection{PDF 表格}
 
-PDF 解析保留页面和位置证据。对于可提取文本的表格，可依据文本块位置聚类形成行列，并记录 page、bbox、caption 或降级警告。无框线表格、合并单元格、旋转页面和跨页表头仍是启发式解析的难点，应在 Gold 案例中单独标注复杂度并人工核对。
+PDF 解析保留页面和位置证据。对于可提取文本的表格，可依据文本块位置聚类形成行列，并记录 page、bbox、caption 或降级警告。无框线表格、合并单元格、旋转页面和跨页表头仍是启发式解析的难点，这类复杂度应在 gold 案例设计中单独标注，解析结果也要人工核对。
 
 \subsection{图表与视觉模型}\label{subsec:chart-vlm}
 
-图表工具采用多层降级策略。系统优先通过 \code{qwen3.8-flash} 理解页面图像或嵌入图像；失败后尝试解析 PDF 表格；再次失败时，只提取标题（caption）作为有限信息。模型抽取结果必须携带模型名，点级结果必须包含置信度及其原因。其可信级受 4.7 节的确定性上限约束，不会因为模型自报 high 就自动成为正式真值。
+图表工具采用多层降级策略。系统优先通过 \code{qwen3.8-flash} 理解页面图像或嵌入图像；失败后尝试解析 PDF 表格；再次失败时，只提取标题（caption）作为有限信息。模型抽取结果必须携带模型名；图表中每个数据点的抽取结果还必须包含置信度及其判定原因。其可信级受 \ref{sec:stage7-validate} 节所述确定性上限的约束，不会因为模型自报 high 就自动成为正式真值。
 
-规范侧已实现的是：结构化图表证据（chart-evidence）数据（含点级图表证据与来源绑定）经摘要绑定的证据资产进入生产 bioactivity\_\allowbreak{}measurement 数据家族的图表四表（活性值、实验、论文、图系列/图点四张表）；点级溯源与复核门在组装前“拿不准就拒绝”，
-未通过时写入结构化 \code{chart\_\allowbreak{}evidence\_\allowbreak{}gate} 检查并阻断发布，不会让任意工作区 CSV 直接获得正式发布权；人工修正（HIL correction）保留原始值并记录 human\_\allowbreak{}correction 步骤。VLM/\allowbreak{}PDF/\allowbreak{}caption 抽取经由注册的图表证据提取通道进入正式发布的链路已在 gold6 案例落地（图表四表随发布清单交付）；未接入该通道的自然语言端到端抽取仍是待办。
+就规范侧而言，已落地的链路是：VLM（视觉语言模型）、PDF 表格或标题抽取的结果先作为结构化图表证据（chart-evidence）进入系统，形成带点级取值与来源绑定的证据资产，再进入生产环境的 bioactivity\_\allowbreak{}measurement 数据家族，落在活性值、实验、论文、图系列与图点四张表上。组装前，系统逐点核对来源并复核证据，无法确认的图表数据不纳入正式数据。复核未通过时，系统写入结构化 \code{chart\_\allowbreak{}evidence\_\allowbreak{}gate} 检查结果并阻止发布，不会让任意工作区 CSV 直接获得正式发布权。人工修正保留原始值，并记录 human\_\allowbreak{}correction 处理步骤。这条经注册通道进入正式发布的抽取链路已在 gold6 案例落地，图表四表随发布清单交付；未接入该通道的自然语言端到端抽取仍是待办。
 
-轴与图例的正确性由确定性门禁而非模型自报约束：\code{chart\_\allowbreak{}series} 表记录轴名、轴单位与刻度和图例文本，并须声明轴/\allowbreak{}图例校验状态（clear /\allowbreak{} unclear /\allowbreak{}
-human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴或图例含义 unclear 即直接判失败；系列允许省略点数据的唯一条件是轴或图例状态明确标为 unclear。该链路已有点级 Gold 完成测试：采纳（accepted）与人工修正（corrected）
-两条路径均产出正式发布物并逐件重算 SHA-256，未复核或缺表则不产生任何发布物。
+系统用确定性规则检查轴与图例，不以模型自报为准。\code{chart\_\allowbreak{}series} 表记录轴名、轴单位与刻度和图例文本，并须声明轴/\allowbreak{}图例校验状态（clear /\allowbreak{} unclear /\allowbreak{}
+human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴或图例含义 unclear 即直接判失败；系列允许省略点数据的唯一条件是轴或图例状态明确标为 unclear。这条链路已有点级的 gold 案例完成测试。无论采纳（accepted）还是人工修正（corrected），两条路径都产出正式发布物并逐件重算 SHA-256；未经复核或缺表的运行不产生任何发布物。
 
 \section{阶段 3：含义规范化与缺失、重复处理（normalize）}
 
@@ -56,56 +54,52 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 字段对齐包括来源列名到规范字段的映射、类型转换、缺失标记统一、实体 ID 与命名空间表达、单位与测量含义检查，以及 probe-to-gene 等外部映射资产转换。规范化过程保留原始写法与规范值之间的血缘（lineage）。
 
-缺失与重复按类型分层处理：必填字段缺失时拒绝或阻断，可选字段缺失则保留为空并计入完整性统计；完全重复按确定性键去重；主键重复且值一致时合并血缘、保留多来源。每类处理都保留对应证据（定位信息、来源集合等），以便后续复核。
+缺失与重复按类型分层处理：必填字段缺失时拒绝或阻断，可选字段缺失则保留为空并计入完整性统计；完全重复按确定性键去重；主键重复且值一致时合并血缘、保留多来源。每类处理都保留对应证据，如定位信息与来源集合，以便后续复核。
 
-这些规则在案例中的形态：缺失分层在 gold8 表现为 4 行官方聚合确无词条的记录不产生行、不零填充并逐条列出，在 gold9 表现为可选证据列留空并计入完整性统计。
+这些规则在案例中这样体现。gold8 有 4 个药物在官方聚合数据中确认没有任何报告词条，系统不为它们制造数据行，也不做零填充，而是把这类缺失逐条列出。gold9 的可选证据列留空，并计入完整性统计。
 
-原始写法保留在 gold9 发布表中直接可见——HGNC 归一后的 \code{hgnc\_\allowbreak{}symbol} 与来源原写法 \code{orphanet\_\allowbreak{}gene\_\allowbreak{}symbol} 并列成列，
-\code{gene\_\allowbreak{}records} 另保留 \code{alias\_\allowbreak{}symbols} 与 \code{previous\_\allowbreak{}symbols}，归一不抹去历史身份。gold7 的变体-基因映射表（127 行）
+原始写法的保留在 gold9 发布表中直接可见。HGNC 归一后的 \code{hgnc\_\allowbreak{}symbol} 与来源原写法 \code{orphanet\_\allowbreak{}gene\_\allowbreak{}symbol} 并列成列，\code{gene\_\allowbreak{}records} 另外保留 \code{alias\_\allowbreak{}symbols} 与 \code{previous\_\allowbreak{}symbols}。归一不抹去历史身份。gold7 的变体-基因映射表（127 行）
 则整体来自补充材料这份逐研究注释资产，而非模型推测。
 
-实体身份对齐同样采用确定性机制：化合物以 InChI Key 精确匹配建立交叉映射表（如 ChEMBL↔\allowbreak{}PubChem，匹配方法 exact\_\allowbreak{}inchi\_\allowbreak{}key，匹配不上时显式标记为冲突而不强行合并）；基因符号归一有内置确定性映射表，
-也可使用注册的外部规范资产（如 HGNC current，见 gold9）；probe→gene 依赖逐平台注释资产，未映射探针保留原命名空间、不静默丢弃。
+实体身份对齐同样采用确定性机制。化合物以 InChI Key 精确匹配建立交叉映射表，例如 ChEMBL 与 PubChem 的互查按 exact\_\allowbreak{}inchi\_\allowbreak{}key 方法匹配，匹配不上时显式标记为冲突，而不强行合并。基因符号归一有内置确定性映射表，也可使用注册的外部规范资产，如 gold9 使用的 HGNC current。探针到基因的映射依赖逐平台注释资产，未映射探针保留原命名空间，不静默丢弃。
 
 \section{阶段 4：兼容性检查（compat）}
 
-兼容性门是解析和规范化产物进入整合前的最后一道静态检查。它核查各批次在数据家族、表结构、行层级、实体层级、单位、含义和尺度上是否可以合并，并据此生成确定性的合并域键。该键同时使用可计算的测量身份（值含义、值尺度、单位）和多维语义（模式、行层级、物种、特征命名空间、测量类型、规范化状态、参考版本等）；任何一维不一致，都不能进入同一合并域。
+兼容性检查是解析和规范化产物进入整合前的最后一道静态检查。它核查各批次在数据家族、表结构、行层级、实体层级、单位、含义和尺度上是否可以合并，并据此生成确定性的合并域键。合并域键由两部分共同决定。一是可计算的测量身份，即值的含义、尺度与单位；二是多维语义，包括模式、行层级、物种、特征命名空间、测量类型、规范化状态与参考版本等。任何一维不一致，都不能进入同一合并域。
 
 未知单位、未知值含义或不受支持的数值尺度不会被自动修正；单位不一致时，只在有注册转换公式时换算，公式只接受四种线性安全形式（value、value±o、value×f(±o) 与 value/\allowbreak{}d），其中 value 为原值，o 为偏移量，f 为正倍率，d 为正除数；没有注册规则时阻断，或经人工确认请求研究者选择合法的修正。
 
-两个案例化说明：坐标基准转换不属于任何线性安全形式，系统不做 GRCh37→GRCh38 的自动换算，而是双列并存、交由外部权威核验——gold7 的 \code{position\_\allowbreak{}grch38}（dbSNP 核验）与补充材料列
-\code{position\_\allowbreak{}grch38\_\allowbreak{}supp} 并列，两个来源不一致时直接可见；gold9 中 ClinGen 的序数分类与 ClinVar 的记录计数测量身份不同，各自成列，不进入同一合并域。
+两个案例可以说明这一原则。坐标基准转换不属于任何线性安全形式，系统不做 GRCh37 到 GRCh38 的自动换算，而是双列并存，交由外部权威核验。gold7 的 \code{position\_\allowbreak{}grch38} 列取 dbSNP 核验值，与补充材料列 \code{position\_\allowbreak{}grch38\_\allowbreak{}supp} 并列，两个来源不一致时直接可见。gold9 中 ClinGen 的序数分类与 ClinVar 的记录计数测量身份不同，各自成列，不进入同一合并域。
 
 \section{阶段 5：多源整合与冲突审计（integrate）}\label{sec:stage5-integrate}
 
 对同一规范表结构的批次，整合器按注册的合并策略合并，并在最终来源权威行（source-of-record）上重新汇总血缘和置信度。合并时的冲突按注册策略处理：主键重复且值冲突时保留来源权威行并写冲突审计，必要时阻断；实体身份冲突不强制合并而保留交叉映射表；统计异常作为警告或人工核查信号，不默认自动改值。
 
 整合层优先做“可复核的记录”，而不是“替研究者定案”。gold7 是实测样本：\code{locus} 表以 rsID 为合并键，GWAS Catalog 关联与补充材料 75 位点表在主键上重叠、
-值一致时合并血缘并保留双来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}）；同一坐标的两个来源值以双列并排保留而非静默取舍——这些字段对齐与冲突记录由规范化、兼容性阶段与整合器的确定性规则共同完成，冲突审计随产物交付，
-无法自动裁决时才发起人工确认（\ref{sec:hil} 节）。
+值一致时合并血缘并保留双来源标记（\code{in\_\allowbreak{}supp\_\allowbreak{}75\_\allowbreak{}loci}）；同一坐标的两个来源值以双列并排保留，而非静默取舍。这些字段对齐与冲突记录由规范化、兼容性阶段与整合器的确定性规则共同完成，冲突审计随产物交付，无法自动裁决时才发起人工确认（\ref{sec:hil} 节）。
 
-真正需要“二选一”的少数同键冲突，表达整合采用先到优先（first source wins）作为可复现的终局裁决；裁真仍显式保留给研究者与人工确认。
+真正需要“二选一”的少数同键冲突，整合阶段采用先到优先（first source wins）作为可复现的终局裁决；最终取哪个值为真，仍显式留给研究者与人工确认判断。
 
 \section{阶段 6：多表组装（derive）}\label{sec:stage6-derive}
 
 对于需要多实体关系的数据，数据家族的组装阶段生成多表候选，并检查主键、外键、基数和表角色。\footnote{主键：表中每行的唯一标识。外键：表中指向另一张表主键的字段，如测量表中的化合物编号指向化合物表。基数：两表间一条记录与另一表几条记录的对应关系，即一对一、一对多或多对多。表角色：各表分别承担记录测量值还是提供规范身份。}
 
-单表与多表是规格层可选形态：需求本身是单一层级观察时（如 gold8 的 FAERS 计数）交付单表；需求横跨多个实体层级时（如 gold7 的研究-位点-映射、gold9 的基因-疾病-证据）才拆分多表——以生物活性数据为例，测量值表（activities）按声明的外键关联实验条件表（assays）与化合物规范身份表（compounds），并辅以靶点表、来源表与化合物交叉映射表等（图~\ref{fig:bioactivity-fk}），避免把不同层级的观测压进重复严重的宽表。例如将实验条件并入测量值表，则同一实验的上千条测量记录须逐行重复相同的实验条件字段。
+单表与多表是规格层的可选形态。需求本身是单一层级观察时交付单表，例如 gold8 的 FAERS 不良事件计数；需求横跨多个实体层级时才拆分多表，例如 gold7 拆出研究、位点与变异-基因映射多张表，gold9 拆出基因、疾病与证据结构。以生物活性数据为例，测量值表（activities）按声明的外键关联实验条件表（assays）与化合物规范身份表（compounds），并辅以靶点表、来源表与化合物交叉映射表等（图~\ref{fig:bioactivity-fk}），避免把不同层级的观测压进重复严重的宽表。如果将实验条件并入测量值表，同一实验的上千条测量记录就必须逐行重复相同的实验条件字段。
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.75\textwidth]{figures/biomed-qagent-bioactivity-multitable-fk.pdf}
+  \includegraphics[width=\textwidth]{figures/biomed-qagent-bioactivity-multitable-fk.pdf}
   \caption{生物活性数据的多表组装：activities 经外键多对一关联 assays 与 compounds}
   \label{fig:bioactivity-fk}
 \end{figure}
 
-多表发布清单记录表、关系、溯源引用和置信度引用，下游按显式关系而非列名猜测连接键（join key）——如测量表按清单声明的 \code{compound\_\allowbreak{}id} 外键关联化合物表，而非依据两表同名的 \code{name} 列自行连接。若下游统计流程要求单表输入，研究者可在目标表结构中将交付声明为单表层级（如 gold8）。
+多表发布清单记录表、关系、溯源引用和置信度引用。下游按清单声明的显式关系连接各表，而不是凭列名猜测连接键（join key），例如测量表按清单声明的 \code{compound\_\allowbreak{}id} 外键关联化合物表，而不是依据两表同名的 \code{name} 列自行连接。若下游统计流程要求单表输入，研究者可在目标表结构中将交付声明为单表层级，gold8 就是这种做法。
 
 \section{阶段 7：校验、置信度与产品评估（validate）}\label{sec:stage7-validate}
 
-校验配置（Validation Profile）会在发布前检查候选结果，范围包括：表结构与字段类型，必填字段完整性与允许缺失率，主键唯一性与外键基数，实体标识命名空间与原始写法保留（token preservation），单位/\allowbreak{}数值尺度/\allowbreak{}允许含义，溯源与来源定位覆盖，置信度记录与最终行对齐，产物摘要闭合，以及可复现所需的输入与实现身份。
+校验配置（Validation Profile）会在发布前检查候选结果，范围包括表结构与字段类型、必填字段完整性与允许缺失率、主键唯一性与外键基数、实体标识命名空间与原始写法保留（token preservation）、单位与数值尺度及允许含义、溯源与来源定位覆盖、置信度记录与最终行对齐、产物摘要闭合，以及可复现所需的输入与实现身份。
 
-多表产品评估（ProductAssessment）从结构、关系、标识、溯源、置信度和可复现性六个维度评价产品。无阻断项时判定为“可发布”（publishable）；只存在可复现性阻断项时至多为“已验证”（validated）；存在内容维度的阻断项时判定为“不完整”（incomplete）。——可复现性阻断指缺少复算所需的输入、实现身份或摘要；内容维度的阻断项指结构、标识、单位或溯源等维度不闭合。
+多表产品评估（ProductAssessment）从结构、关系、标识、溯源、置信度和可复现性六个维度评价产品。无阻断项时判定为“可发布”（publishable）；只存在可复现性阻断项时至多为“已验证”（validated）；存在内容维度的阻断项时判定为“不完整”（incomplete）。其中，可复现性阻断指缺少复算所需的输入、实现身份或摘要；内容维度的阻断项指结构、标识、单位或溯源等维度不闭合。
 这使得“CSV 能打开”与“数据产品含义上闭合”不再是同一件事。
 
 置信度按证据类型受到上限约束。确定性、受版本约束的解析可以获得包括 high 在内的较高可信等级；VLM、LLM、OCR 和网页抽取等非确定性来源最高封顶为 medium，并可按记录进入人工审核。系统关注的是“该记录由何种证据和处理产生”，而不是让模型自由输出一个看似精确的概率。
@@ -114,7 +108,7 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 \section{阶段 8：不可变发布与消费时重验（publish）}\label{sec:stage8-publish}
 
-发布器将通过质量门的候选复制到独立目录，生成发布清单（Manifest），并为每个文件记录相对路径、媒体类型、字节数和 SHA-256。典型正式产物包括主数据集与辅助数据集 CSV、表结构、溯源、审计/\allowbreak{}校验报告，以及发布清单和发布回执。
+发布器将质量检查合格的候选复制到独立目录，生成发布清单（Manifest），并为每个文件记录相对路径、媒体类型、字节数和 SHA-256。典型正式产物包括主数据集与辅助数据集 CSV、表结构、溯源、审计/\allowbreak{}校验报告，以及发布清单和发布回执。
 
 发布采用临时目录与原子切换。发布前，系统检查执行锁与代次围栏（表~\ref{tab:reliability-base}），防止超时或取消后的旧操作晚到并覆盖新结果。产品 API 在读取时重新验证发布清单和文件摘要；若文件被修改或损坏，API 返回错误，不继续展示该文件。
 
@@ -122,18 +116,18 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 \section{持久化人工确认与可恢复执行（Durable HIL）}\label{sec:hil}
 
-人工确认（Human-in-the-Loop, HIL）不是系统的第一反应，而是在确定性规则无法解决问题时使用的兜底环节。遇到模糊字段映射、未知单位或低置信度图表点等情况，Core 先尝试注册的确定性规则和候选推理；只有无法安全定案时，才创建结构化请求。例如，单位换算先查询注册公式表，命中后自动应用，不进入人工确认；只有没有可用规则时才暂停。图表审核也只针对低置信度记录发起。
+人工确认（Human-in-the-Loop, HIL）不是系统的第一反应，而是在确定性规则无法解决问题时使用的兜底环节。遇到模糊字段映射、未知单位或低置信度图表点等情况，Core 先尝试注册的确定性规则和候选推理；只有无法安全定案时，才创建结构化请求。例如，单位换算先查询注册公式表，命中后自动应用，不进入人工确认；只有不存在可用规则时才暂停。图表审核也只针对低置信度记录发起。
 请求携带逐项候选值（proposed\_\allowbreak{}value）、置信度（confidence\_\allowbreak{}level）、相关记录、证据摘要以及任务/\allowbreak{}运行/\allowbreak{}需求身份。前端以“在候选与证据概要上选择”为主，以自由修正为辅（approve /\allowbreak{} reject /\allowbreak{} correct）。只有证据摘要和任务身份都匹配时，响应才能恢复原操作。
 
-典型场景包括字段映射存在多个候选、未知单位或测量含义、probe-to-gene 映射歧义、低置信度图表点确认，以及冲突记录需指定保留策略等。
+典型场景包括字段映射存在多个候选、未知单位或测量含义、探针到基因映射的歧义、低置信度图表点的确认，以及冲突记录需指定保留策略等。
 
 按审批对象划分，人工确认覆盖三类：工具许可与凭据授权（approve/\allowbreak{}reject）、数据审核（字段映射、单位、图表与网页证据）和发布验收。对于需要验收的高风险产品（动态发布、图表证据、浏览器证据接受），发布验收不可绕过；只有人工 accept 后系统才执行发布。普通静态数据发布不统一要求 publication-acceptance HIL，这与“Core 独占发布权”相互配合。
 
-审批档位按对象配置。每类审批范围可设 \code{human\_\allowbreak{}review}（人工审批）、\code{llm\_\allowbreak{}pre\_\allowbreak{}review}（LLM 初审，仅不通过项上报人工）或 \code{auto\_\allowbreak{}approve}（显式自动通过）。初审不通过或模型调用失败时一律回退人工（fail-safe）；发布边界范围强制人工，配置其他档位会被直接拒绝。低风险确认可以配置自动放行，但需要发布验收的高风险场景（动态发布、图表证据、浏览器证据接受）始终由人工处理。
+审批档位按对象配置。每类审批范围可设为人工审批（\code{human\_\allowbreak{}review}）、LLM 初审（\code{llm\_\allowbreak{}pre\_\allowbreak{}review}，仅不通过项上报人工）或显式自动通过（\code{auto\_\allowbreak{}approve}）。初审不通过或模型调用失败时一律回退人工（fail-safe）；涉及发布验收的对象强制人工审批，配置其他档位会被直接拒绝。低风险确认可以配置自动放行，高风险场景始终由人工处理。
 
-请求和决策均落盘，进程重启后可以确定性恢复：系统持久化审批挂起时的原始工具调用，恢复时以原调用重放并由执行器从检查点续跑，零 LLM 参与；主机重启后无法确定性续跑的发布验收直接判整次运行失败，悬空的权限请求一律清算为拒绝。对于数据更正，系统重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史。
+请求和决策均落盘，进程重启后可以确定性恢复：系统持久化审批挂起时的原始工具调用，恢复时以原调用重放并由执行器从检查点续跑，零 LLM 参与；主机重启后无法确定性续跑的发布验收直接判整次运行失败，恢复时已失去对象的挂起权限请求一律按拒绝处理。对于数据更正，系统重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史。
 
-需要澄清的是：判失败的是无法确定性续跑的单个运行，其中已完成且摘要一致的阶段仍经检查点复用、不会整体重跑（gold9 中断后续测一次通过即为实例，见 \ref{sec:reliability-base} 节），因此基础设施故障不会丢失已完成的工作。
+需要澄清的是，判失败的只是无法确定性续跑的单个运行；其中已完成且摘要一致的阶段仍经检查点复用，不会整体重跑，gold9 中断后续测一次通过就是实例（\ref{sec:reliability-base} 节）。因此基础设施故障不会丢失已完成的工作。
 
 \section{可靠性基座}\label{sec:reliability-base}
 

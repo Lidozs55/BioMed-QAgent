@@ -71,6 +71,7 @@
 % 通用宏包（统一在此加载，main.tex 禁止再 \usepackage）
 % --------------------------------------------------------------
 \RequirePackage{graphicx}
+\RequirePackage{wrapfig}     % 图文绕排（Core 详图等竖版大图左置、文字右绕）
 \RequirePackage{pdflscape}   % 横排页面（主架构图等大图可用）
 \RequirePackage{booktabs}
 \RequirePackage{array}
@@ -88,6 +89,11 @@
 \RequirePackage{xcolor}
 \RequirePackage{fancyhdr}
 \RequirePackage{titlesec}
+
+% 目录行视觉（\cftsecfont 等）由 tocloft 提供；titles 选项保留类原生的
+% “目录/插图清单”标题排版（与 titlesec 的章标题一致）。tocloft 要求先于
+% hyperref 加载。
+\RequirePackage[titles]{tocloft}
 
 \RequirePackage{hyperref}
 

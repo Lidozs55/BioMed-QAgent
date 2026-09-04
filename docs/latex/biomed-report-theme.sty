@@ -330,44 +330,116 @@
 % ======================================================================
 % 封面
 %
-% 只负责正式提交信息。
-% 删除原来的“本报告采用紧凑排版……”等模板开发说明。
+% 两页结构（赛事要求）：
+%   第1页：盖章报名表扫描件 + 作品标题，必须作为第一页；
+%   第2页：参赛作品基本情况表。
+%
+% 两页共用顶部横幅（\ReportCoverBanner）与分隔线（\ReportCoverRule），
+% 避免两处手写导致样式漂移。
 % ======================================================================
+
+% 封面蓝色分隔线
+\newcommand{\ReportCoverRule}{%
+  {\color{ReportBlue}\rule{\textwidth}{1.2pt}\par}%
+}
+
+% 顶部横幅：左侧榜题，右侧赛题方向与日期
+\newcommand{\ReportCoverBanner}{%
+  \begin{minipage}[b]{0.70\textwidth}
+    {\sffamily\large\bfseries\color{ReportBlue}
+      2026 挑战杯“揭榜挂帅”阿里云榜题\par
+    }
+    {\sffamily\fontsize{24pt}{29pt}\selectfont\bfseries\color{ReportBlue}
+      基于国产开源大模型的 \\
+      AI Scientist 的研发与应用\par
+    }
+  \end{minipage}%
+  \begin{minipage}[b]{0.30\textwidth}
+    \raggedleft
+    {\sffamily\bfseries\color{ReportDark}赛题方向}\quad\ReportTrack\\[1.5mm]
+    {\sffamily\bfseries\color{ReportDark}日期}\quad\ReportDate\par
+    {\sffamily\bfseries\color{ReportDark}作品编码}\quad 611186 \par
+  \end{minipage}%
+}
 
 % 防止 class 未预定义时 \renewcommand 报错
 \providecommand{\makereporttitle}{}
 
 \renewcommand{\makereporttitle}{%
+  % ====================================================================
+  % 第1页：报名表扫描件（赛事要求必须放第一页）
+  % ====================================================================
   \begin{titlepage}
-
   \thispagestyle{empty}
   \setlength{\parindent}{0pt}
 
-  % 顶部横幅上移：左侧文件标题，右侧只留赛题方向与日期
-  % （团队/学校按要求移除，但仍保留在 metadata 中供 PDF 属性使用）
-  \vspace*{-12mm}
+  \vspace*{-4mm}
 
-  \begin{minipage}[b]{0.58\textwidth}
-    {\sffamily\Large\bfseries\color{ReportBlue}
-      2026 挑战杯“揭榜挂帅”阿里云榜题\par
-    }
-    {\sffamily\large\bfseries\color{ReportBlue}
-      基于国产开源大模型的 AI Scientist 的研发与应用\par
-    }
+  \ReportCoverRule
+
+  \vspace{12mm}
+
+  \ReportCoverBanner
+
+  \vspace{12mm}
+
+  \ReportCoverRule
+
+  \vspace{12mm}
+
+  % 作品 Logo + 标题/副标题
+  % logo.pdf 由 assets/logo/Logo.svg 导出（矢量）
+  \begin{minipage}[c]{22mm}
+    \includegraphics[width=24mm]{figures/logo}%
   \end{minipage}%
-  \hfill
-  \begin{minipage}[b]{0.38\textwidth}
-    {\raggedleft
-      {\sffamily\bfseries\color{ReportDark}赛题方向}\quad\ReportTrack\\[1.5mm]
-      {\sffamily\bfseries\color{ReportDark}日期}\quad\ReportDate\par
+  \hspace{8mm}%
+  \begin{minipage}[c]{\dimexpr\textwidth-28mm\relax}
+    {\sffamily\bfseries\fontsize{24pt}{29pt}\selectfont\color{ReportDark}
+      \ReportTitle\par
+    }
+    \ifstrempty{\ReportSubtitle}{}{%
+      \vspace{3mm}
+
+      {\sffamily\large\color{ReportGray}
+        \ReportSubtitle\par
+      }
     }
   \end{minipage}
 
-  \vspace{3mm}
+  \vfill
 
-  {\color{ReportBlue}
-    \rule{\textwidth}{1.2pt}\par
-  }
+  \begin{center}
+    \sffamily\Large\bfseries{参赛团队信息/成员信息}
+  \end{center}
+
+  % 报名表扫描件（正式提交材料，figures/ 下生成物）
+  % 赛事要求：第一页必须是盖章报名表的完整两页截图
+  \begin{center}
+    \includegraphics[width=\textwidth]{figures/registration.pdf}
+  \end{center}
+
+  \ReportCoverRule
+
+  \end{titlepage}
+
+  % ====================================================================
+  % 第2页：参赛作品基本情况（项目标题 + 参赛信息表）
+  % ====================================================================
+  \begin{titlepage}
+  \thispagestyle{empty}
+  \setlength{\parindent}{0pt}
+
+  \vspace*{-4mm}
+
+  \ReportCoverRule
+
+  \vspace{12mm}
+
+  \ReportCoverBanner
+
+  \vspace{12mm}
+
+  \ReportCoverRule
 
   \vspace{5mm}
 
@@ -387,18 +459,9 @@
 
   \vspace{8mm}
 
-  % 参赛信息表（作品名称/选题/简介/技术说明/链接）：
-  % 原为“参赛作品简介”章，2026-08 应要求移到封面填充下部空白；
-  % 内容单独成文件，本模板只负责装配。
+  % 参赛信息表（作品名称/选题/简介/技术说明/链接）
+  % 赛事要求：第二页必须是参赛作品基本情况表
   \input{chapters/ch00-submission-table}
-
-  \vspace{8mm}
-
-  % 报名表扫描件（正式提交材料，figures/ 下生成物）；
-  % 不设收尾横线，避免内容溢出时多出一张只有横线的空尾页。
-  \begin{center}
-    \includegraphics[width=0.92\textwidth]{figures/registration.pdf}
-  \end{center}
 
   \vfill
 
@@ -409,15 +472,30 @@
 % 目录
 %
 % 使用 ctexbook 原生 \tableofcontents，不重新实现、不包装。
+% 下面的 \cft... 命令由 tocloft 提供（在 biomed-report.cls 中于
+% hyperref 之前加载，titles 选项保留类原生目录标题）。
 %
 % 这样保留：
 %   - CTeX 中文目录名称
 %   - chapter/bookmark 行为
 %   - 原生目录生成逻辑
-% （目录字号等视觉优化后续再做）
+%
+% 字号整体缩小：正文 small，章标题（目录/插图清单等）同步缩小。
 % ======================================================================
 
 \setcounter{tocdepth}{2}
 \setcounter{secnumdepth}{3}
+
+% 目录条目（正文行）字号缩小
+\renewcommand{\cftsecfont}{\small\bfseries}
+\renewcommand{\cftsecpagefont}{\small\bfseries}
+\renewcommand{\cftsubsecfont}{\small}
+\renewcommand{\cftsubsecpagefont}{\small}
+\renewcommand{\cftsubsubsecfont}{\footnotesize}
+\renewcommand{\cftsubsubsecpagefont}{\footnotesize}
+
+% 目录首行（“目录”章标题）字号缩小，与 titlesec 章标题保持视觉一致
+\renewcommand{\cftchapfont}{\normalsize\bfseries}
+\renewcommand{\cftchappagefont}{\normalsize\bfseries}
 
 \endinput
