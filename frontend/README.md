@@ -64,7 +64,7 @@ src/
 
 ## UI 约定
 
-修改前先读 [`frontend/AGENTS.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/frontend/AGENTS.md)。优先复用 `src/components/ui/` 与现有业务组件，并通过仓库 shadcn 工作流查询/添加组件；不要手写第二套 primitive。新增交互需覆盖键盘、aria label、loading/error/empty 状态和亮暗主题。
+修改前先读 [`AGENTS.md`](AGENTS.md)。优先复用 `src/components/ui/` 与现有业务组件，并通过仓库 shadcn 工作流查询/添加组件；不要手写第二套 primitive。新增交互需覆盖键盘、aria label、loading/error/empty 状态和亮暗主题。
 
 组件 API 和实际目录以代码为准，不在 README 维护易漂移的逐文件清单。架构说明见 [`docs/architecture/agent-frontend.md`](https://github.com/Lidozs55/BioMed-QAgent/blob/dev/docs/architecture/agent-frontend.md)。
 
