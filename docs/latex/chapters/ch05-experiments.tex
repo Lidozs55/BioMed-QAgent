@@ -1,93 +1,93 @@
 \chapter{实验与评测}\label{ch:experiments}
 
-本章从两个层面评测系统。首先在十个生物医学数据任务上报告端到端运行结果，考察正式发布、运行成本与阻断行为；随后选择表达组学任务 gold1 和文献活性数据任务 gold6，在两档模型和两种运行环境下比较效率、需求覆盖与证据可审计性。所有 BioMed QAgent 任务使用同一冻结系统版本。每个实验条件只运行一次，因此结果用于描述观察差异，不作统计显著性或单因素因果推断。
+本章从两个层面评测系统。首先在十个生物医学数据任务上报告端到端运行结果，考察正式发布、运行成本与阻断行为；随后选择表达组学任务 样例1 和文献活性数据任务 样例6，在两档模型和两种运行环境下比较效率、需求覆盖与证据可审计性。所有 BioMed QAgent 任务使用同一冻结系统版本。每个实验条件只运行一次，因此结果用于描述观察差异，不作统计显著性或单因素因果推断。
 
 \section{实验设计总览与评测方法}\label{sec:eval-protocol}
 
 BioMed QAgent 的输入为预先定义的研究任务描述。系统自动记录任务起止时间、模型用量、工具调用与终态，并对正式发布产物逐件校验文件大小和 SHA-256。运行时长取任务开始到终态的时间区间，token 为模型调用的总用量。终态分为成功发布、未发布阻塞、失败或取消。文件摘要校验用于确认交付文件完整且与发布记录一致，不单独代表科学结论正确或需求绝对查全。
 
-对照环境使用相同的核心研究任务，并附带统一的 CSV 输出要求。Gold6 的对照结果根据导出的数据表、来源字段、清单和质量控制记录评估；由于其用量记录不完整，本章不报告该组的运行时长和 token，也不据此比较效率。
+对照环境使用相同的核心研究任务，并附带统一的 CSV 输出要求。样例6 的对照结果根据导出的数据表、来源字段、清单和质量控制记录评估；由于其用量记录不完整，本章不报告该组的运行时长和 token，也不据此比较效率。
 
-\section{BioMed QAgent 十案例结果}\label{sec:gold-overview}
+\section{BioMed QAgent 十样例结果}\label{sec:gold-overview}
 
-本项目设置了 10 个参考案例，覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。表~\ref{tab:gold-overview} 给出各案例的终态、主要交付和运行成本。
+本项目设置了 10 个参考样例（编号样例1--样例10，对应仓库中预置的参考评测集 gold1--gold10），覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。表~\ref{tab:gold-overview} 给出各样例的终态、主要交付和运行成本。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=1.3\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.3\hsize}L>{\hsize=0.8\hsize}L}
-\caption{BioMed QAgent 十案例运行结果}\label{tab:gold-overview}\\
+\caption{BioMed QAgent 十样例运行结果}\label{tab:gold-overview}\\
 \toprule
-\textbf{案例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
+\textbf{样例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
+\textbf{样例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
 \midrule
 \endhead
-gold1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & 成功发布 & GSE86374 肿瘤/正常表达长表（GPL6244 探针到基因映射），5{,}294{,}223 行，校验通过 & 26 min / 5{,}952 K \\
-gold2 & LUAD EGFR 突变表达的基因 / 探针双层级整合 & 成功发布 & GSE31547 探针级 + 基因级双发布（各 1{,}114{,}150 行），校验通过 & 23 min / 10{,}999 K \\
-gold3 & EGFR NSCLC 靶点多源证据整合 & 成功发布 & 靶点证据（11 行）+ 结构（6 行）+ 药物活性（100 行）三发布，校验通过 & 12 min / 3{,}818 K \\
-gold4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & 成功发布 & 五表：结构 2 / 病毒蛋白 2 / Spike 变异 110 / 界面残基 119 / 文献 2，校验通过 & 61 min / 9{,}916 K \\
-gold5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & 成功发布 & ChEMBL 活性 + 化合物交叉对照双发布（各 100 行），校验通过 & 14 min / 2{,}493 K \\
-gold6 & EGFR 突变体抑制实验与论文证据提取 & 成功发布 & 6 个数据表及表结构、溯源和质量评估，共 9 件；逐件校验通过 & 98.9 min / 6{,}915 K \\
-gold7 & 阿尔茨海默病 GWAS 风险位点多源整合 & 成功发布 & 风险位点与变异--基因映射分别发布，各含 5 件产物 & 36.2 min / 6{,}350 K \\
-gold8 & 药物性肝损伤（DILI）风险药物证据整合 & 成功发布 & 发布 openFDA FAERS 断言与研究两表（共 5 件）；其他证据维度尚未发布 & 45.9 min / 10{,}646 K \\
-gold9 & 原发性免疫缺陷基因--疾病证据整合 & 成功发布 & 固定结构不满足约束后切换到动态数据家族，形成 5 件正式产物 & 351.2 min / 8{,}529 K \\
-gold10 & 肠道微生物组--疾病关联整合（T2D /\allowbreak{} IBD /\allowbreak{} CRC） & 未发布阻塞 & 必需差异丰度载体未能正式获取并解析；两次执行因必需表为空被拒，0 件正式产物 & 108.5 min / 23{,}168 K \\
+样例1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & 成功发布 & GSE86374 肿瘤/正常表达长表（GPL6244 探针到基因映射），5{,}294{,}223 行，校验通过 & 26 min / 5{,}952 K \\ \hline
+样例2 & LUAD EGFR 突变表达的基因 / 探针双层级整合 & 成功发布 & GSE31547 探针级 + 基因级双发布（各 1{,}114{,}150 行），校验通过 & 23 min / 10{,}999 K \\ \hline
+样例3 & EGFR NSCLC 靶点多源证据整合 & 成功发布 & 靶点证据（11 行）+ 结构（6 行）+ 药物活性（100 行）三发布，校验通过 & 12 min / 3{,}818 K \\ \hline
+样例4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & 成功发布 & 五表：结构 2 / 病毒蛋白 2 / Spike 变异 110 / 界面残基 119 / 文献 2，校验通过 & 61 min / 9{,}916 K \\ \hline
+样例5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & 成功发布 & ChEMBL 活性 + 化合物交叉对照双发布（各 100 行），校验通过 & 14 min / 2{,}493 K \\ \hline
+样例6 & EGFR 突变体抑制实验与论文证据提取 & 成功发布 & 6 个数据表及表结构、溯源和质量评估，共 9 件；逐件校验通过 & 98.9 min / 6{,}915 K \\ \hline
+样例7 & 阿尔茨海默病 GWAS 风险位点多源整合 & 成功发布 & 风险位点与变异--基因映射分别发布，各含 5 件产物 & 36.2 min / 6{,}350 K \\ \hline
+样例8 & 药物性肝损伤（DILI）风险药物证据整合 & 成功发布 & 发布 openFDA FAERS 断言与研究两表（共 5 件）；其他证据维度尚未发布 & 45.9 min / 10{,}646 K \\ \hline
+样例9 & 原发性免疫缺陷基因--疾病证据整合 & 成功发布 & 固定结构不满足约束后切换到动态数据家族，形成 5 件正式产物 & 351.2 min / 8{,}529 K \\ \hline
+样例10 & 肠道微生物组--疾病关联整合（T2D /\allowbreak{} IBD /\allowbreak{} CRC） & 未发布阻塞 & 必需差异丰度载体未能正式获取并解析；两次执行因必需表为空被拒，0 件正式产物 & 108.5 min / 23{,}168 K \\
 \bottomrule
 \end{xltabular}
 
-十个案例中，gold1--9 均形成正式发布物，gold10 因必需的差异丰度数据未能满足发布条件而停止。Gold10 体现的是任务未完成时拒绝发布不完整结果，因此纳入端到端结果统计，但不进入发布产物质量比较。正式产物的 SHA-256 校验说明交付文件与发布记录一致；科学内容与覆盖范围仍按各案例的来源和质量报告解释。
+十个样例中，样例1--9 均形成正式发布物，样例10 因必需的差异丰度数据未能满足发布条件而停止。样例10 体现的是任务未完成时拒绝发布不完整结果，因此纳入端到端结果统计，但不进入发布产物质量比较。正式产物的 SHA-256 校验说明交付文件与发布记录一致；科学内容与覆盖范围仍按各样例的来源和质量报告解释。
 
-\section{Gold6--10 重点运行结果}\label{sec:corrected-six-run}
+\section{样例6--10 重点运行结果}\label{sec:corrected-six-run}
 
-为进一步比较模型档位，除 gold6--10 的 flash 运行外，还纳入 gold6 的 max 运行。表~\ref{tab:corrected-six-run} 给出这六个运行单元的终态和成本。发布/产物事件数表示运行过程中形成的正式发布记录和文件记录，可能包含同一任务的多个发布版本。
+为进一步比较模型档位，除 样例6--10 的 flash 运行外，还纳入 样例6 的 max 运行。表~\ref{tab:corrected-six-run} 给出这六个运行单元的终态和成本。发布/产物事件数表示运行过程中形成的正式发布记录和文件记录，可能包含同一任务的多个发布版本。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.8\hsize}L>{\hsize=1.25\hsize}L>{\hsize=1.15\hsize}L>{\hsize=0.85\hsize}L>{\hsize=0.8\hsize}L>{\hsize=0.65\hsize}L>{\hsize=0.55\hsize}L>{\hsize=0.7\hsize}L}
-\caption{Gold6--10 六个运行单元的终态与成本}\label{tab:corrected-six-run}\\
+\caption{样例6--10 六个运行单元的终态与成本}\label{tab:corrected-six-run}\\
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{终态} & \textbf{耗时} & \textbf{token} & \textbf{工具调用} & \textbf{人工确认} & \textbf{发布/产物事件} \\
+\textbf{样例} & \textbf{模型} & \textbf{终态} & \textbf{耗时} & \textbf{token} & \textbf{工具调用} & \textbf{人工确认} & \textbf{发布/产物事件} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{终态} & \textbf{耗时} & \textbf{token} & \textbf{工具调用} & \textbf{人工确认} & \textbf{发布/产物事件} \\
+\textbf{样例} & \textbf{模型} & \textbf{终态} & \textbf{耗时} & \textbf{token} & \textbf{工具调用} & \textbf{人工确认} & \textbf{发布/产物事件} \\
 \midrule
 \endhead
-gold6 & flash & 成功发布 & 5{,}935.328 s & 6{,}914{,}535 & 71 & 5 & 2 / 18 \\
-gold7 & flash & 成功发布 & 2{,}171.253 s & 6{,}349{,}559 & 75 & 0 & 2 / 10 \\
-gold8 & flash & 成功发布 & 2{,}754.172 s & 10{,}646{,}020 & 88 & 0 & 1 / 5 \\
-gold9 & flash & 成功发布 & 21{,}072.671 s & 8{,}529{,}008 & 65 & 0 & 2 / 10 \\
-gold10 & flash & 未发布阻塞 & 6{,}509.680 s & 23{,}168{,}188 & 264 & 0 & 0 / 0 \\
-gold6 & max & 成功发布 & 4{,}680.377 s & 7{,}510{,}894 & 54 & 4 & 1 / 9 \\
+样例6 & flash & 成功发布 & 5{,}935.328 s & 6{,}914{,}535 & 71 & 5 & 2 / 18 \\ \hline
+样例7 & flash & 成功发布 & 2{,}171.253 s & 6{,}349{,}559 & 75 & 0 & 2 / 10 \\ \hline
+样例8 & flash & 成功发布 & 2{,}754.172 s & 10{,}646{,}020 & 88 & 0 & 1 / 5 \\ \hline
+样例9 & flash & 成功发布 & 21{,}072.671 s & 8{,}529{,}008 & 65 & 0 & 2 / 10 \\ \hline
+样例10 & flash & 未发布阻塞 & 6{,}509.680 s & 23{,}168{,}188 & 264 & 0 & 0 / 0 \\ \hline
+样例6 & max & 成功发布 & 4{,}680.377 s & 7{,}510{,}894 & 54 & 4 & 1 / 9 \\
 \bottomrule
 \end{xltabular}
 
-六个运行单元中 5 个形成正式发布物，运行级发布率为 83.3\%。该比例描述端到端运行结果，不等同于模型准确率。Gold10 未完成任务且没有正式产物，后续产物质量分析仅覆盖成功发布的运行。
+六个运行单元中 5 个形成正式发布物，运行级发布率为 83.3\%。该比例描述端到端运行结果，不等同于模型准确率。样例10 未完成任务且没有正式产物，后续产物质量分析仅覆盖成功发布的运行。
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\textwidth]{figures/ui-gold6-table-topology.png}
-  \caption{gold6 前端界面：正式 Publication 中活性值、实验、论文、补充资产、图系列与图点六个 CSV 表及其关系；另含 schema、provenance 与 ProductAssessment}
+  \caption{样例6 前端界面：正式 Publication 中活性值、实验、论文、补充资产、图系列与图点六个 CSV 表及其关系；另含 schema、provenance 与 ProductAssessment}
   \label{fig:ui-gold6-topology}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\textwidth]{figures/ui-gold9-source-registry.png}
-  \caption{gold9 前端界面：动态路线中的来源资产注册与证据管理}
+  \caption{样例9 前端界面：动态路线中的来源资产注册与证据管理}
   \label{fig:ui-gold9-source}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\textwidth]{figures/ui-gold9-artifact-validation.png}
-  \caption{gold9 前端界面：发布产物的逐件字节与 SHA-256 回执核验及下载入口}
+  \caption{样例9 前端界面：发布产物的逐件字节与 SHA-256 回执核验及下载入口}
   \label{fig:ui-gold9-validation}
 \end{figure}
 
 \section{对照设计与适用范围}\label{sec:factorial-design}
 
-本节整理 gold1 与 gold6、flash 与 max、BioMed QAgent 与 Qoder 的八个观察单元。每个单元只有一次运行，没有重复、方差或显著性估计；跨环境提示词附加约束、默认推理参数和运行方式不同。因此，本节比较运行成本和产物差异，不作单因素因果推断。
+本节整理 样例1 与 样例6、flash 与 max、BioMed QAgent 与 Qoder 的八个观察单元。每个单元只有一次运行，没有重复、方差或显著性估计；跨环境提示词附加约束、默认推理参数和运行方式不同。因此，本节比较运行成本和产物差异，不作单因素因果推断。
 
-\textbf{观察单元选择}。gold1 与 gold6 分别代表数据库型表达组学任务和文献/图表型活性证据任务；flash 与 max 代表两档模型。两个案例覆盖不同来源形态，但并非随机抽样，不能代表全部十类任务。模型参数由各环境分别配置，因此模型档位只用于组内比较。
+\textbf{观察单元选择}。样例1 与 样例6 分别代表数据库型表达组学任务和文献/图表型活性证据任务；flash 与 max 代表两档模型。两个样例覆盖不同来源形态，但并非随机抽样，不能代表全部十类任务。模型参数由各环境分别配置，因此模型档位只用于组内比较。
 
 \textbf{实验条件}。两种环境使用相同的核心研究任务和 CSV 交付目标。BioMed QAgent 将来源约束、质量检查与发布规则内置于系统；Qoder 通过用户消息给出相应要求。两种环境还采用各自默认的推理参数和运行方式，因此比较结果同时受到提示方式与执行机制影响。每个条件只运行一次，不估计随机波动或统计显著性。
 
@@ -105,16 +105,16 @@ gold6 & max & 成功发布 & 4{,}680.377 s & 7{,}510{,}894 & 54 & 4 & 1 / 9 \\
 \textbf{维度} & \textbf{操作化定义} & \textbf{采集方式} \\
 \midrule
 \endhead
-运行时长 & 任务输入提交到终态的实际运行时间 & BioMed QAgent：监督程序记录的 run 起止时间戳；Qoder 侧：会话首末消息时间差（人工记录） \\
-token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百炼平台不提供拆分查询，统一不做输入 / 输出 / 缓存读拆分 & BioMed QAgent：事件流 \code{context\_\allowbreak{}usage} 聚合；Qoder 侧：阿里云百炼平台 token 导出 \\
-完整度 & 需求条目核对表口径：把需求原文拆为可核对条目（应交付的表与字段、来源标注、图表点、单位与可信度标注等），逐条判定已交付 / 部分交付 / 未交付，完整度 = 已交付条目占比；另与参考集规模作参考性对照 & 人工按冻结的条目核对表评分，双人独立核对 \\
+运行时长 & 任务输入提交到终态的实际运行时间 & BioMed QAgent：监督程序记录的 run 起止时间戳；Qoder 侧：会话首末消息时间差（人工记录） \\ \hline
+token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百炼平台不提供拆分查询，统一不做输入 / 输出 / 缓存读拆分 & BioMed QAgent：事件流 \code{context\_\allowbreak{}usage} 聚合；Qoder 侧：阿里云百炼平台 token 导出 \\ \hline
+完整度 & 需求条目核对表口径：把需求原文拆为可核对条目（应交付的表与字段、来源标注、图表点、单位与可信度标注等），逐条判定已交付 / 部分交付 / 未交付，完整度 = 已交付条目占比；另与参考集规模作参考性对照 & 人工按冻结的条目核对表评分，双人独立核对 \\ \hline
 证据可审计性 & 是否保留来源标注、记录级定位、文件清单、方法日志与原始证据；摘要重验只判断文件完整性，不等同于值级真实性 & BioMed QAgent：发布回执、SHA-256、溯源与质量报告；Qoder：数据表、文件清单和质量检查记录 \\
 \bottomrule
 \end{xltabular}
 
 图~\ref{fig:usage-dashboard} 展示模型用量页面，用于说明运行成本记录的采集方式。
 
-\begin{figure}[htbp]
+\begin{figure}[H]
   \centering
   \includegraphics[width=0.95\textwidth]{figures/usage.png}
   \caption{阿里云百炼平台模型用量页面（截图）。}
@@ -136,11 +136,11 @@ token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百
 \begin{xltabular}{\linewidth}{>{\hsize=0.45\hsize}L>{\hsize=0.55\hsize}L>{\hsize=0.55\hsize}L>{\hsize=2.25\hsize}L>{\hsize=0.85\hsize}L>{\hsize=1.35\hsize}L}
 \caption{八个观察单元的运行成本}\label{tab:factorial-efficiency}\\
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
+\textbf{样例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
+\textbf{样例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
 \midrule
 \endhead
 \bottomrule
@@ -149,15 +149,15 @@ token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百
 \bottomrule
 \multicolumn{6}{@{}p{\dimexpr\linewidth-2\tabcolsep\relax}@{}}{\footnotesize 注：BMQ* = BioMed QAgent；Q** = Qoder。后续相关对照表沿用此缩写。}\\
 \endlastfoot
-gold1 & flash & \BMQ{} & 成功发布 & \textbf{26 min} & 5{,}952 K \\
-gold1 & flash & \QDR{} & 交付（工作区文件） & 168 min & 52,940 K \\
-gold1 & max & \BMQ{} & 成功发布 & 30 min & \textbf{4{,}182 K} \\
-gold1 & max & \QDR{} & 交付（工作区文件） & 35 min & 4,474 K \\
+样例1 & flash & \BMQ{} & 成功发布 & \textbf{26 min} & 5{,}952 K \\ \hline
+样例1 & flash & \QDR{} & 交付（工作区文件） & 168 min & 52,940 K \\ \hline
+样例1 & max & \BMQ{} & 成功发布 & 30 min & \textbf{4{,}182 K} \\ \hline
+样例1 & max & \QDR{} & 交付（工作区文件） & 35 min & 4,474 K \\ \hline
 \addlinespace
-gold6 & flash & \BMQ{} & 成功发布 & 98.9 min & 6{,}915 K \\
-gold6 & flash & \QDR{} & 完成交付 & -- & -- \\
-gold6 & max & \BMQ{} & 成功发布 & 78.0 min & 7{,}511 K \\
-gold6 & max & \QDR{} & 完成交付 & -- & -- \\
+样例6 & flash & \BMQ{} & 成功发布 & 98.9 min & 6{,}915 K \\ \hline
+样例6 & flash & \QDR{} & 完成交付 & -- & -- \\ \hline
+样例6 & max & \BMQ{} & 成功发布 & 78.0 min & 7{,}511 K \\ \hline
+样例6 & max & \QDR{} & 完成交付 & -- & -- \\
 \end{xltabular}
 \renewcommand{\arraystretch}{1.08}
 
@@ -165,42 +165,42 @@ gold6 & max & \QDR{} & 完成交付 & -- & -- \\
 \begin{xltabular}{\linewidth}{>{\hsize=0.40\hsize}L>{\hsize=0.45\hsize}L>{\hsize=0.50\hsize}L>{\hsize=0.75\hsize}L>{\hsize=1.10\hsize}L>{\hsize=2.80\hsize}L}
 \caption{八个观察单元的需求覆盖与证据可审计性}\label{tab:factorial-quality}\\
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{覆盖评价} & \textbf{可审计性评价} & \textbf{主要依据与局限} \\
+\textbf{样例} & \textbf{模型} & \textbf{环境} & \textbf{覆盖评价} & \textbf{可审计性评价} & \textbf{主要依据与局限} \\
 \midrule
 \endfirsthead
 \toprule
-\textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{覆盖评价} & \textbf{可审计性评价} & \textbf{主要依据与局限} \\
+\textbf{样例} & \textbf{模型} & \textbf{环境} & \textbf{覆盖评价} & \textbf{可审计性评价} & \textbf{主要依据与局限} \\
 \midrule
 \endhead
-gold1 & flash & \BMQ{} & 高 & 高 & 完成 6/7 项；来源定位与发布校验完整；缺少差异表达结果 \\
-gold1 & flash & \QDR{} & 高 & 高 & 完成 6.5/7 项；提供 URL、MD5 与筛选记录；探针矩阵覆盖 5/16 个研究 \\
-gold1 & max & \BMQ{} & 高 & 高 & 完成 6/7 项；来源定位与发布校验完整；两层数据来自不同研究 \\
-gold1 & max & \QDR{} & 高 & 高 & 完成 6/7 项；提供 URL、MD5 与质量记录；8 个候选研究中纳入 4 个 \\
+样例1 & flash & \BMQ{} & 高 & 高 & 完成 6/7 项；来源定位与发布校验完整；缺少差异表达结果 \\ \hline
+样例1 & flash & \QDR{} & 高 & 高 & 完成 6.5/7 项；提供 URL、MD5 与筛选记录；探针矩阵覆盖 5/16 个研究 \\ \hline
+样例1 & max & \BMQ{} & 高 & 高 & 完成 6/7 项；来源定位与发布校验完整；两层数据来自不同研究 \\ \hline
+样例1 & max & \QDR{} & 高 & 高 & 完成 6/7 项；提供 URL、MD5 与质量记录；8 个候选研究中纳入 4 个 \\ \hline
 \addlinespace
-gold6 & flash & \BMQ{} & 高 & 高 & 核心数据与配套材料共 9 件；来源绑定和逐件校验完整；文献覆盖仍有边界 \\
-gold6 & flash & \QDR{} & 高 & 高 & X=0.950，Y=0.808；来源记录较细；清单有一处摘要不一致，部分 QC 不能精确复算 \\
-gold6 & max & \BMQ{} & 高 & 高 & 核心数据与配套材料共 9 件；94 项质量检查和逐件校验均通过 \\
-gold6 & max & \QDR{} & 中 & 高 & X=0.500，Y=0.758；文件清单可验证，但 6{,}439 行仅 11 个来源定位且缺少原始载体 \\
+样例6 & flash & \BMQ{} & 高 & 高 & 核心数据与配套材料共 9 件；来源绑定和逐件校验完整；文献覆盖仍有边界 \\ \hline
+样例6 & flash & \QDR{} & 高 & 高 & X=0.950，Y=0.808；来源记录较细；清单有一处摘要不一致，部分 QC 不能精确复算 \\ \hline
+样例6 & max & \BMQ{} & 高 & 高 & 核心数据与配套材料共 9 件；94 项质量检查和逐件校验均通过 \\ \hline
+样例6 & max & \QDR{} & 中 & 高 & X=0.500，Y=0.758；文件清单可验证，但 6{,}439 行仅 11 个来源定位且缺少原始载体 \\
 \bottomrule
 \end{xltabular}
 \renewcommand{\arraystretch}{1.08}
 
-覆盖评价统一按任务要求的交付程度分为高、中、低：完成比例不低于 $2/3$ 为高，不低于 $1/2$ 且低于 $2/3$ 为中，低于 $1/2$ 为低。可审计性也分为高、中、低，依据来源标注、记录级定位、文件清单、质量检查和原始证据保留情况综合判断。原始量化结果列在“主要依据与局限”中；由于 gold1 与 gold6 的任务要求不同，数值只在同一案例内比较。
+覆盖评价统一按任务要求的交付程度分为高、中、低：完成比例不低于 $2/3$ 为高，不低于 $1/2$ 且低于 $2/3$ 为中，低于 $1/2$ 为低。可审计性也分为高、中、低，依据来源标注、记录级定位、文件清单、质量检查和原始证据保留情况综合判断。原始量化结果列在“主要依据与局限”中；由于 样例1 与 样例6 的任务要求不同，数值只在同一样例内比较。
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\textwidth]{figures/fig-gold1-efficiency-comparison.pdf}
-  \caption{gold1 四个单次观察的运行时长与 token（数据来源：表~\ref{tab:factorial-efficiency}）。flash 档在本次记录中差异较大，max 档较接近；无重复且环境因素混杂，不作显著性或因果解释。}
+  \caption{样例1 四个单次观察的运行时长与 token（数据来源：表~\ref{tab:factorial-efficiency}）。flash 档在本次记录中差异较大，max 档较接近；无重复且环境因素混杂，不作显著性或因果解释。}
   \label{fig:gold1-efficiency}
 \end{figure}
 
-\subsection{gold1 对照的产物级横向比较}\label{subsec:gold1-artifact-compare}
+\subsection{样例1 对照的产物级横向比较}\label{subsec:gold1-artifact-compare}
 
-Gold1 的覆盖评价依据七项任务要求：研究纳入、差异表达、样本元数据、平台注释与探针--基因映射、探针水平数据、基因水平数据，以及分析可用性与来源标注；部分完成计 0.5。可审计性结合文件清单、来源定位、摘要校验和抽样复核判断。摘要一致用于确认文件完整性，不能替代对科学数值的来源核验。
+样例1 的覆盖评价依据七项任务要求：研究纳入、差异表达、样本元数据、平台注释与探针--基因映射、探针水平数据、基因水平数据，以及分析可用性与来源标注；部分完成计 0.5。可审计性结合文件清单、来源定位、摘要校验和抽样复核判断。摘要一致用于确认文件完整性，不能替代对科学数值的来源核验。
 
 \renewcommand{\arraystretch}{1.12}
 \begin{xltabular}{\linewidth}{>{\hsize=0.55\hsize}L>{\hsize=0.75\hsize}L>{\hsize=0.7\hsize}L>{\hsize=0.85\hsize}L>{\hsize=0.6\hsize}L>{\hsize=1.3\hsize}L}
-\caption{gold1 四组交付产物盘点（BioMed QAgent 侧为正式 Publication，Qoder 侧为交付 CSV 包）}\label{tab:gold1-artifacts}\\
+\caption{样例1 四组交付产物盘点（BioMed QAgent 侧为正式 Publication，Qoder 侧为交付 CSV 包）}\label{tab:gold1-artifacts}\\
 \toprule
 \textbf{组} & \textbf{纳入研究} & \textbf{样本元数据} & \textbf{探针水平} & \textbf{基因水平} & \textbf{溯源形态} \\
 \midrule
@@ -209,10 +209,10 @@ Gold1 的覆盖评价依据七项任务要求：研究纳入、差异表达、�
 \textbf{组} & \textbf{纳入研究} & \textbf{样本元数据} & \textbf{探针水平} & \textbf{基因水平} & \textbf{溯源形态} \\
 \midrule
 \endhead
-flash · \BMQ{} & 1（GSE86374） & 支撑表（GSM 分组：tumor/normal） & 与基因级融合于同一长表 & 长表 5{,}294{,}223 行（GPL6244 映射） & 逐格资产哈希链 + 发布逐件 SHA-256 重验 \\
-flash · \QDR{} & 16 纳入（1{,}008 系列筛选审计） & 3{,}226 行 & 5 研究宽表 & 13 研究宽表 + 1 汇总 & URL / MD5 / 检索日期 + 筛选审计 CSV \\
+flash · \BMQ{} & 1（GSE86374） & 支撑表（GSM 分组：tumor/normal） & 与基因级融合于同一长表 & 长表 5{,}294{,}223 行（GPL6244 映射） & 逐格资产哈希链 + 发布逐件 SHA-256 重验 \\ \hline
+flash · \QDR{} & 16 纳入（1{,}008 系列筛选审计） & 3{,}226 行 & 5 研究宽表 & 13 研究宽表 + 1 汇总 & URL / MD5 / 检索日期 + 筛选审计 CSV \\ \hline
 \addlinespace
-max · \BMQ{} & 2（GSE139038、GSE86374） & 支撑表（同上形态） & GSE139038 长表 2{,}895{,}360 行 & GSE86374 长表 5{,}294{,}223 行（128 肿瘤 vs 31 正常） & 同 flash \\
+max · \BMQ{} & 2（GSE139038、GSE86374） & 支撑表（同上形态） & GSE139038 长表 2{,}895{,}360 行 & GSE86374 长表 5{,}294{,}223 行（128 肿瘤 vs 31 正常） & 同 flash \\ \hline
 max · \QDR{} & 4 & 443 行 & 4 研究宽表 & 4 研究宽表 & URL / MD5 + QC 日志 \\
 \bottomrule
 \end{xltabular}
@@ -244,12 +244,12 @@ max · \QDR{} & 4 & 443 行 & 4 研究宽表 & 4 研究宽表 & URL / MD5 + QC �
 \item 需求中的差异表达在 BioMed QAgent 两个观察单元均未执行；这是本次交付缺口，而不是对系统分析能力的普遍判定。
 \end{itemize}
 
-综合起来，Gold1 的结果显示 BioMed QAgent 纳入研究较少且未执行差异表达，但提供了结构化发布、来源绑定与文件校验；Qoder 覆盖更多研究，并在 flash 单元执行了差异分析。两种环境在覆盖范围和审计方式上各有侧重。
+综合起来，样例1 的结果显示 BioMed QAgent 纳入研究较少且未执行差异表达，但提供了结构化发布、来源绑定与文件校验；Qoder 覆盖更多研究，并在 flash 单元执行了差异分析。两种环境在覆盖范围和审计方式上各有侧重。
 
 这些观察分成三条证据链：
 
 \begin{itemize}
 \item \textbf{时长与 token}：只对有冻结 usage 证据的单元报告观察值；由于没有重复且环境因素混杂，不作显著性或机制归因。
-\item \textbf{交付覆盖}：gold1 按七项任务要求评分，gold6 按结构覆盖与复用性指标评分，最终统一映射为高、临界、低三级；原始分数只在同一案例内比较。
-\item \textbf{证据可审计性}：BioMed QAgent 报告 Publication 回执、SHA-256、provenance 与 ProductAssessment；Qoder gold6 报告离线导出的 locator、manifest、QC 可复算程度和 raw/script 缺口。两者证明的是审计条件，不是未经逐值复核的科学真实性。
+\item \textbf{交付覆盖}：样例1 按七项任务要求评分，样例6 按结构覆盖与复用性指标评分，最终统一映射为高、临界、低三级；原始分数只在同一样例内比较。
+\item \textbf{证据可审计性}：BioMed QAgent 报告 Publication 回执、SHA-256、provenance 与 ProductAssessment；Qoder 样例6 报告离线导出的 locator、manifest、QC 可复算程度和 raw/script 缺口。两者证明的是审计条件，不是未经逐值复核的科学真实性。
 \end{itemize}
