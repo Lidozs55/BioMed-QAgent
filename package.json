@@ -13,6 +13,7 @@
     "build": "pnpm -r --if-present build",
     "docs:check": "node scripts/check-doc-links.mjs",
     "gold:supervise": "node scripts/gold-formal-supervisor.mjs",
+    "prepare": "husky",
     "commit": "cz",
     "pack": "node scripts/pack-release.mjs",
     "pack:target": "node scripts/pack-release.mjs"
@@ -21,7 +22,8 @@
     "@commitlint/cli": "^19.8.1",
     "@commitlint/config-conventional": "^19.8.0",
     "commitizen": "^4.3.1",
-    "cz-conventional-changelog": "^3.3.0"
+    "cz-conventional-changelog": "^3.3.0",
+    "husky": "^9.1.7"
   },
   "config": {
     "commitizen": {

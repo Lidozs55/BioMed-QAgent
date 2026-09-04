@@ -1,0 +1,299 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "artifact_f4a01f0cdbaac717d9b7d983ec49206d",
+      "media_type": "text/csv",
+      "relative_path": "tables/structures.csv",
+      "role": "primary_dataset",
+      "schema_version": "1.0",
+      "sha256": "34cdc28ab45a7c69d564b3e777ba2768a3d556009cbd2e4c3cf2957c5086fcbd",
+      "size_bytes": 585
+    },
+    {
+      "artifact_id": "artifact_4f47e4c202122d131f0206957ec14933",
+      "media_type": "text/csv",
+      "relative_path": "tables/chains.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "6e169750f4cf9dccd650c265d8e2e5d16eb0c996cdf66bf4ff3d4d8e2b5f1212",
+      "size_bytes": 518
+    },
+    {
+      "artifact_id": "artifact_d4047b2490a947d324c7ae457496d330",
+      "media_type": "text/csv",
+      "relative_path": "tables/ligands.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "665d3ab6f71f586320582098cbd9d14baa1f0069e86dbd9f5da3dc39e5ea3883",
+      "size_bytes": 555
+    },
+    {
+      "artifact_id": "artifact_ee8a3d9fc9957d583b7b935565a4295e",
+      "media_type": "text/csv",
+      "relative_path": "tables/sources.csv",
+      "role": "supporting_dataset",
+      "schema_version": "1.0",
+      "sha256": "040494e93877645fb0abf217c922985424f65fed06a0a2496706eb768fdd3303",
+      "size_bytes": 534
+    },
+    {
+      "artifact_id": "artifact_589affc32263b8422b737e9824fe2724",
+      "media_type": "application/json",
+      "relative_path": "schema.json",
+      "role": "schema",
+      "schema_version": "1.0",
+      "sha256": "d2c23713355bcbe0e1b1663d2a5c3e441a17340af2d8fa781d999fcd00c8f33e",
+      "size_bytes": 14023
+    },
+    {
+      "artifact_id": "artifact_a521731a81c75f2a0a40b647fab66644",
+      "media_type": "application/json",
+      "relative_path": "provenance.json",
+      "role": "provenance",
+      "schema_version": "1.0",
+      "sha256": "4f34fb4bc52cdaffa80e7d3728662c167c228b0ad9301068846038a36bfe0922",
+      "size_bytes": 518
+    },
+    {
+      "artifact_id": "artifact_ee750ffbd4de02c35ff11aefbca9e21b",
+      "media_type": "application/json",
+      "relative_path": "registered_adapter_audit.json",
+      "role": "audit_report",
+      "schema_version": "1.0",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "size_bytes": 3
+    },
+    {
+      "artifact_id": "artifact_8d262159ad6a024c31292f07fc03bb44",
+      "media_type": "application/json",
+      "relative_path": "source_coverage_report.json",
+      "role": "audit_report",
+      "schema_version": "1.0",
+      "sha256": "6e7cad1042b46ccf5d6a8e2f2e81bb924c54d7d0d5e4fff187fb9a1dc717ecb8",
+      "size_bytes": 2140
+    }
+  ],
+  "candidate_refs": [
+    {
+      "audit_refs": [],
+      "candidate_id": "candidate_6199b96fe6be2fd77874a7bccee275cb",
+      "confidence_refs": [
+        "result_egfr-structures_structures:integrated_table:0:34cdc28ab45a7c69d564b3e777ba2768a3d556009cbd2e4c3cf2957c5086fcbd",
+        "result_egfr-structures_chains:integrated_table:0:6e169750f4cf9dccd650c265d8e2e5d16eb0c996cdf66bf4ff3d4d8e2b5f1212",
+        "result_egfr-structures_ligands:integrated_table:0:665d3ab6f71f586320582098cbd9d14baa1f0069e86dbd9f5da3dc39e5ea3883",
+        "result_egfr-structures_sources:integrated_table:0:040494e93877645fb0abf217c922985424f65fed06a0a2496706eb768fdd3303"
+      ],
+      "provenance_refs": [
+        "result_egfr-structures_structures:integrated_table:0:34cdc28ab45a7c69d564b3e777ba2768a3d556009cbd2e4c3cf2957c5086fcbd",
+        "result_egfr-structures_chains:integrated_table:0:6e169750f4cf9dccd650c265d8e2e5d16eb0c996cdf66bf4ff3d4d8e2b5f1212",
+        "result_egfr-structures_ligands:integrated_table:0:665d3ab6f71f586320582098cbd9d14baa1f0069e86dbd9f5da3dc39e5ea3883",
+        "result_egfr-structures_sources:integrated_table:0:040494e93877645fb0abf217c922985424f65fed06a0a2496706eb768fdd3303"
+      ],
+      "relation_ids": [
+        "chain_structure",
+        "ligand_structure",
+        "structure_source",
+        "chain_source",
+        "ligand_source"
+      ],
+      "table_ids": [
+        "structures",
+        "chains",
+        "ligands",
+        "sources"
+      ]
+    }
+  ],
+  "confidence_summary": {
+    "source": "registered_table_schema_and_b3"
+  },
+  "dataset_family": "protein_structure",
+  "manifest_id": "manifest_ec15d414651cd857",
+  "primary_key": [
+    "structure_id",
+    "structure_version"
+  ],
+  "provenance_summary": {
+    "coverage": {
+      "coverage_ratio": 1,
+      "traced_rows": 1,
+      "untraced_rows": 0
+    },
+    "source_count": 1
+  },
+  "relations": [
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "structure_id",
+        "structure_version"
+      ],
+      "from_table_id": "chains",
+      "missing_policy": "reject",
+      "relation_id": "chain_structure",
+      "to_fields": [
+        "structure_id",
+        "structure_version"
+      ],
+      "to_table_id": "structures"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "structure_id",
+        "structure_version"
+      ],
+      "from_table_id": "ligands",
+      "missing_policy": "reject",
+      "relation_id": "ligand_structure",
+      "to_fields": [
+        "structure_id",
+        "structure_version"
+      ],
+      "to_table_id": "structures"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "structures",
+      "missing_policy": "reject",
+      "relation_id": "structure_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "chains",
+      "missing_policy": "reject",
+      "relation_id": "chain_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    },
+    {
+      "cardinality": "many_to_one",
+      "from_fields": [
+        "source_id"
+      ],
+      "from_table_id": "ligands",
+      "missing_policy": "reject",
+      "relation_id": "ligand_source",
+      "to_fields": [
+        "source_id"
+      ],
+      "to_table_id": "sources"
+    }
+  ],
+  "requirement_id": "egfr-structures",
+  "row_count": 1,
+  "row_granularity": "one versioned macromolecular structure record",
+  "schema_ref": "protein_structure.structure.v1",
+  "schema_version": "2.0",
+  "sha256": "ec15d414651cd85708e925140cbafd99a801285cf0d408e6c6d872ba8f6ecbe7",
+  "source_summary": {
+    "source_pdb_61ebe73c98dfaeac0f82": {
+      "asset_id": "asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d"
+    }
+  },
+  "tables": [
+    {
+      "allow_empty": false,
+      "field_names": [
+        "structure_id",
+        "structure_namespace",
+        "structure_version",
+        "title",
+        "experimental_method",
+        "resolution_angstrom",
+        "deposited_at",
+        "source_id",
+        "source_locator"
+      ],
+      "primary_key": [
+        "structure_id",
+        "structure_version"
+      ],
+      "required": true,
+      "role": "primary",
+      "schema_ref": "protein_structure.structure.v1",
+      "table_id": "structures"
+    },
+    {
+      "allow_empty": false,
+      "field_names": [
+        "chain_record_id",
+        "structure_id",
+        "structure_version",
+        "chain_id",
+        "polymer_type",
+        "entity_id",
+        "entity_namespace",
+        "sequence_length",
+        "source_id",
+        "source_locator"
+      ],
+      "primary_key": [
+        "chain_record_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "protein_structure.chain.v1",
+      "table_id": "chains"
+    },
+    {
+      "allow_empty": false,
+      "field_names": [
+        "ligand_record_id",
+        "structure_id",
+        "structure_version",
+        "ligand_id",
+        "ligand_namespace",
+        "chemical_name",
+        "formula",
+        "source_id",
+        "source_locator"
+      ],
+      "primary_key": [
+        "ligand_record_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "protein_structure.ligand.v1",
+      "table_id": "ligands"
+    },
+    {
+      "allow_empty": false,
+      "field_names": [
+        "source_id",
+        "source_database",
+        "source_asset_id",
+        "source_locator",
+        "retrieved_at",
+        "carrier_type"
+      ],
+      "primary_key": [
+        "source_id"
+      ],
+      "required": true,
+      "role": "supporting",
+      "schema_ref": "protein_structure.source.v1",
+      "table_id": "sources"
+    }
+  ],
+  "task_id": "task_ts_31a55800-ac0c-40a5-b137-6d3b9e2bada8",
+  "validation_summary": {
+    "checked_count": 66,
+    "failed_count": 0,
+    "profile_ref": "protein_structure.release.v1",
+    "report_path": "validation_report.json",
+    "status": "passed"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "api_endpoint": "/api/v1/tasks/task_ts_b41c545e-2375-4244-9305-103dc06f991a/artifacts",
+  "artifacts": [],
+  "artifact_count": 0,
+  "degraded": false,
+  "formal_publication_count": 0,
+  "current_publication_id": null,
+  "interpretation": "This is the final formal artifact API projection. It is intentionally empty because R4 produced no Publication and no authoritative Artifact."
+}

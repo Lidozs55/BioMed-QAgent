@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "verification": "PASS",
+  "evidence_root": "data/gold-runs/42984ecb1c43-gold6-qwen38flash-r4-standard",
+  "verified_at_observation": "2026-09-01T00:36:59.398Z",
+  "checks": [
+    {
+      "name": "terminal_event_stream",
+      "status": "pass",
+      "event_count": 10478,
+      "terminal_sequence": 10478,
+      "sha256": "97073dddfd684c96668dc3b38ef9d92cb3131e06c73780e6e78a7d415a3cb0ef"
+    },
+    {
+      "name": "formal_terminal_state",
+      "status": "pass",
+      "task_status": "completed",
+      "run_status": "completed",
+      "active_run_id": null,
+      "current_publication_id": null,
+      "publications": 0,
+      "artifacts": 0
+    },
+    {
+      "name": "source_asset_bytes",
+      "status": "pass",
+      "count": 14,
+      "all_size_sha256_verified": true
+    },
+    {
+      "name": "committed_derived_operations",
+      "status": "pass",
+      "count": 5,
+      "output_bytes_verified": true
+    },
+    {
+      "name": "carrier_row_counts_and_manifest_gap",
+      "status": "pass",
+      "papers": 3,
+      "experiments": 107,
+      "activities": 185,
+      "supplementary": 4,
+      "series": 86,
+      "points": 0,
+      "carrier_manifest_present": false
+    },
+    {
+      "name": "binding_kind_dual_closure",
+      "status": "pass",
+      "complete_prepare_calls": 9,
+      "observed_shapes": [
+        "3 transform_input + 10 provenance_only",
+        "3 transform_input + 13 provenance_only"
+      ]
+    },
+    {
+      "name": "untrusted_fallback_bytes",
+      "status": "pass",
+      "count": 30,
+      "all_size_sha256_verified": true,
+      "authoritative": false,
+      "trust": "untrusted"
+    },
+    {
+      "name": "transform_quarantine_evidence",
+      "status": "pass",
+      "generations": 5,
+      "table_files": 30
+    },
+    {
+      "name": "empty_formal_publication_and_artifact_projections",
+      "status": "pass",
+      "publications": 0,
+      "artifacts": 0,
+      "current_publication_id": null
+    },
+    {
+      "name": "typed_rejection_and_fallback_split",
+      "status": "pass",
+      "submit_attempts": 8,
+      "typed_rejections_with_fallback": 5,
+      "control_rejections_without_fallback": 3
+    },
+    {
+      "name": "route_discipline_audit",
+      "status": "pass",
+      "selected_route": "dynamic_family",
+      "validate_calls": 2,
+      "execute_calls": 6,
+      "all_execute_calls_failed": true
+    },
+    {
+      "name": "credential_hil_scope",
+      "status": "pass",
+      "credential_approvals": 5,
+      "vlm_data_reviews": 0,
+      "publication_acceptance": 0
+    },
+    {
+      "name": "permission_boundary",
+      "status": "pass",
+      "requests": 1,
+      "denied": 1
+    },
+    {
+      "name": "single_run_and_host_closure",
+      "status": "pass",
+      "post_attempt_marker": true,
+      "post_count": 1,
+      "port_5198": "free",
+      "forbidden_runtime_files_absent": true
+    }
+  ],
+  "counts": {
+    "evidence_files_before_manifest": 38,
+    "event_lines": 10478,
+    "source_assets": 14,
+    "committed_derived_operations": 5,
+    "paper_carriers": 3,
+    "quarantine_receipts": 30,
+    "transform_quarantine_tables": 30,
+    "credential_hil": 5,
+    "publication_acceptance": 0
+  },
+  "note": "This archive verification performs no POST, restart, resume, or Host launch."
+}

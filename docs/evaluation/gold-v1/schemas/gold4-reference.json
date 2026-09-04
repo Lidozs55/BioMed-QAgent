@@ -1,0 +1,16 @@
+{
+  "schema_id": "gold4-reference",
+  "version": "1",
+  "family": "protein_structure",
+  "tables": [
+    {"table_id":"viral_protein_records","role":"primary","granularity":"one viral protein sequence record","primary_key":["accession","sequence_version"],"columns":["virus_name","strain","accession","protein_name","gene","sequence_length","host","collection_date","country","sequence","sequence_version","source_database"]},
+    {"table_id":"spike_variant_records","role":"supporting","granularity":"one Spike variant assertion","primary_key":["accession","position","alternate_residue","source_record"],"columns":["strain","accession","variant_name","position","reference_residue","alternate_residue","mutation","region","source_record","confidence_level"]},
+    {"table_id":"structure_records","role":"supporting","granularity":"one PDB structure/chain record","primary_key":["pdb_id","virus_chain","ace2_chain"],"columns":["pdb_id","title","protein_chains","virus_chain","ace2_chain","construct_description","mutation","experimental_method","resolution","primary_citation","source_url"]},
+    {"table_id":"interface_records","role":"derived","granularity":"one deterministic interface contact","primary_key":["pdb_id","spike_chain","ace2_chain","residue_number","residue_name","interaction_type"],"columns":["pdb_id","spike_chain","ace2_chain","residue_number","residue_name","interaction_type","distance_if_available","interface_source","extraction_method","review_status"]},
+    {"table_id":"paper_records","role":"supporting","granularity":"one linked paper","primary_key":["pmid","pmcid","doi"],"columns":["pmid","pmcid","doi","title","journal","publication_date","linked_pdb_ids","open_access_status","source_url"]}
+  ],
+  "relations":[{"from":"structure_records.pdb_id","to":"interface_records.pdb_id","cardinality":"one_to_many","missing":"allow_empty"},{"from":"structure_records.pdb_id","to":"paper_records.linked_pdb_ids","cardinality":"many_to_many","missing":"profile_defined"}],
+  "required_provenance":["source_asset_id","source_locator","retrieved_at","confidence_level"],
+  "derived_contract":{"table_id":"interface_records","algorithm_id":"registered_interface_distance_v1","reference_version":"declared_per_run","parameters":["distance_cutoff_angstrom","atom_selection","chain_selection"],"input_asset_digest_required":true,"agent_code_forbidden":true},
+  "confidence_policy":"derived contacts never masquerade as source records; unclear source/chain mapping blocks publication"
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "result_manifest_id": "result_archive_eef24411e114aecbdf07ddf29e559983",
+  "task_id": "task_ts_b41c545e-2375-4244-9305-103dc06f991a",
+  "run_id": "core",
+  "requirement_id": "archive_extraction",
+  "operation_id": "result_archive_eef24411e114aecbdf07ddf29e559983",
+  "operation_kind": "parse",
+  "operation_attempt_id": "attempt_result_archive_eef24411e114aecbdf07ddf29e559983",
+  "attempt": 1,
+  "status": "succeeded",
+  "input_digest": "63d8e571455c72dfa3045aa4b1ce05cdd2b9ec87e3e9bbb0d705f81bac74ea48",
+  "parameter_digest": "6bd76f6ea2fb6acb6eefb246b3c7afac9937de99576e7a3515b9ab1442ea3cb2",
+  "implementation_digest": "f002d6c5f3a47b2b7386e24473233f8f653f4ba72fec99efde075c07ed53c510",
+  "output_digest": "38428f9b7c2dbefb063ba78bd33a754c4862c3add8a983faa6682dfd06a8e9c4",
+  "output_kind": "source_asset",
+  "output_summary": {
+    "parent_archive_asset_id": "asset_63d8e571455c72dfa3045aa4b1ce05cdd2b9ec87e3e9bbb0d705f81bac74ea48",
+    "member_path": "OR-37-01-0066-g00.jpg",
+    "member_asset_id": "asset_38428f9b7c2dbefb063ba78bd33a754c4862c3add8a983faa6682dfd06a8e9c4"
+  },
+  "output_files": [
+    {
+      "relative_path": "source_assets/extract/63d8e571455c/38428f9b7c2dbefb063ba78bd33a754c4862c3add8a983faa6682dfd06a8e9c4.jpg",
+      "size_bytes": 182452,
+      "sha256": "38428f9b7c2dbefb063ba78bd33a754c4862c3add8a983faa6682dfd06a8e9c4"
+    }
+  ],
+  "dependency_closure": {
+    "input_asset_ids": [
+      "asset_63d8e571455c72dfa3045aa4b1ce05cdd2b9ec87e3e9bbb0d705f81bac74ea48"
+    ],
+    "upstream_result_manifest_ids": [],
+    "parameter_digest": "6bd76f6ea2fb6acb6eefb246b3c7afac9937de99576e7a3515b9ab1442ea3cb2",
+    "implementation_digest": "f002d6c5f3a47b2b7386e24473233f8f653f4ba72fec99efde075c07ed53c510"
+  },
+  "commit": {
+    "state": "committed",
+    "commit_id": "commit_result_archive_eef24411e114aecbdf07ddf29e559983",
+    "committed_at": "2026-08-31T23:46:02.309Z"
+  }
+}

@@ -1,0 +1,2 @@
+ligand_record_id,structure_id,structure_version,ligand_id,ligand_namespace,chemical_name,formula,source_id,source_locator
+2ITY_v6_IRE_A_2020,2ITY,6,IRE,pdb_chemical_component,GEFITINIB,C22 H24 CL F N4 O3,source_pdb_2ity,"{""locator_version"":""2.0"",""locator_type"":""json_pointer"",""asset_id"":""asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d"",""logical_file"":""source_assets/asset_c49febda8422da4d8d072f1c45614abd1a6a64c1ad9420e6dc550babfdab9e6d/2ITY.pdb"",""raw_value"":""IRE_A_2020"",""json_pointer"":""/pdb_lines/3010""}"
