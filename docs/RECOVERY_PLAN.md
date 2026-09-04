@@ -84,8 +84,7 @@ git push -u origin release/prune-hotfix   # PR → main；合并后删除分支�
 ## 4. 流程根因与再发防止
 
 - dev→main 的**任何** PR 都会把 dev 独有文件带入 main。因此凡面向 main 的修复，
-  一律从 main（或按 §0 在专用 worktree 中现切的裁剪分支）发起，禁止直接
-  dev→main 开热修 PR；dev→main 只允许"裁剪后"的发布分支。
+  一律在专用 worktree 中现切的裁剪分支发起，禁止直接 dev→main 开热修 PR。
 - main 合回 dev 时，裁剪删除会以"干净删除"静默落地（本次事故一）——dev 侧合并
   main 后必须 `git diff <merge-base> HEAD --name-status -- docs/ | grep ^D` 审计。
 - 本文随 docs/ 的恢复一并保留在 dev；面向 main 时随裁剪剪除。
