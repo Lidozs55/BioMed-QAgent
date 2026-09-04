@@ -4,7 +4,7 @@
 
 本文以“纯人工整理”和“纯Agent问答”两条路线为基线，表~\ref{tab:benefit-cost} 总结本系统带来的收益及新增消耗。
 
-\begin{xltabular}{\linewidth}{>{\hsize=0.7\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.1\hsize}L}
+\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.2\hsize}L}
 \caption{相较两条基线的收益与消耗}\label{tab:benefit-cost}\\
 \toprule
 \textbf{基线} & \textbf{本系统的收益} & \textbf{新增消耗} \\
@@ -33,7 +33,7 @@
 
 \textbf{运行终态与字节级验证}。十二个运行单元（十个 flash 基础运行与样例1、样例6 的两个 max 运行）中，11 个形成正式 Publication，样例10 以 \mbox{\code{blocked\_no\_publication}} 结束，运行级发布率为 91.7\%。样例10 在任务交付层面是未完成，在安全边界层面则证明系统没有把缺少必需差异丰度表的暂存结果提升为正式产物。11 个成功运行的当前 Publication 均通过产物回执（Artifact）与 SHA-256 重验；该结果证明字节完整性和运行绑定，不单独证明科学值正确或需求完整覆盖。
 
-\textbf{效率结果仅作单次观察}。样例1 的四组结果显示，flash 档下 BioMed QAgent 用时和 token 较低，但各实验条件没有重复，且两种环境在提示词附加约束、默认推理参数和运行方式上存在差异，因此不能将成本差异归因于某一单独机制。样例6 对照组的用量记录不完整，本章只比较其产物覆盖与可审计性。
+\textbf{轻量模型效率明显优势}。样例1 与样例6 的对照显示，两个案例的 flash 档中 BioMed QAgent 的用时为 Qoder 的约 $1/6.5$ 与 $1/1.8$，token 约为 $1/9$ 与 $1/9.8$，是全部对照中幅度最大的差异，与确定性管线承担数据操作、模型调用集中于理解与抽取的分工相符；max 档则互有高低。但各实验条件没有重复，且两种环境在提示词附加约束、默认推理参数和运行方式上存在差异，因此该优势是分层观察结果，不能归因于某一单独机制。
 
 \textbf{证据可审计性存在差异}。BioMed QAgent 的正式产物具有 Publication 回执、SHA-256、溯源（Provenance）与产品评估（ProductAssessment）记录；样例6 的 Qoder 离线导出具有来源列、文件清单和质量检查日志，但两个数据包都缺少其方法日志所引用的原始数据文件与处理脚本，flash 档清单还有一处摘要不一致，max 档的 6{,}439 行数据只有 11 个不同的来源定位。现有检查足以比较审计条件，不能支持“所有单元均无编造值”的全称结论。
 
