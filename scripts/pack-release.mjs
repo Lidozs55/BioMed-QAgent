@@ -108,7 +108,7 @@ const PYTHON_MAJOR_MINOR = PYTHON_VERSION.split(".").slice(0, 2).join(".");
 // NOT part of the exe, desktop-app.py stays the single launcher code path.
 const WIN_EXE_NAME = "BioMed-QAgent.exe";
 const WIN_EXE_WRAPPER = path.join("scripts", "packaging", "win-exe-wrapper.py");
-const WIN_EXE_ICON = path.join("assets", "logo", "icon.ico");
+const WIN_EXE_ICON = path.join("assets", "logo", "biomed-qagent.ico");
 const WIN_EXE_PROJECT = path.join("packaging", "windows");
 
 const NODE_DIST = "https://nodejs.org/dist";
@@ -920,7 +920,9 @@ for (const key of selected) {
     path.join(packageDir, "desktop-app.py"),
   );
   mkdirSync(path.join(packageDir, "assets"), { recursive: true });
-  copyFileSync(path.join(srcDir, "assets", "logo", "icon.ico"), path.join(packageDir, "assets", "icon.ico"));
+  // biomed-qagent.ico carries the full 16-256px frame set (the single-frame
+  // 256px icon.ico renders as a default icon in small taskbar/Explorer sizes).
+  copyFileSync(path.join(srcDir, "assets", "logo", "biomed-qagent.ico"), path.join(packageDir, "assets", "icon.ico"));
   writeFileSync(path.join(packageDir, "README.txt"), readmeText(version, platform));
 
   step(8, "desktop-app self-test");

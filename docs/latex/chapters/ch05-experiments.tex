@@ -2,19 +2,19 @@
 
 % =====================================================================
 % 2026-09-02 章节重构（框架版，第二轮）：
-%   5.1 实验设计总览与评测协议 —— 两层实验入口（全局一览 + 2x2x2 对照）
+%   5.1 实验设计总览与评测规定 —— 两层实验入口（全局一览 + 2x2x2 对照）
 %   5.2 十案例结果一览         —— 一页略写总览表【gold1--5 flash 已填；gold6--10 与 max 行待补】
 %   5.3 2x2x2 对照实验设计     —— 因子、环境输入构成、控制变量【关键事实已落地】
 %   5.4 比较维度与指标定义     —— 时长 / token / 完整度 / 真实性
-%   5.5 对照实验结果           —— 效率表 / 质量表 / 观察框架【全部待填】
-% 所有待填结果以“（待填）”占位；实验数据冻结后替换，不预设结论。
+%   5.5 对照实验结果           —— 效率表 / 质量表 / 观察框架
+% 实验数据已冻结并填入（来源：docs/evaluation/gold6-10-2026-09-03/results.json）。
 % =====================================================================
 
-本章实验按“先全局、后聚焦”两层展开。第一层以统一评测协议给出 BioMed QAgent 在全部十个 gold 参考案例上的结果一览（\ref{sec:gold-overview} 节）；第二层在两个代表性案例上开展 $2\times2\times2$ 受控对照——2 案例（gold1 / gold6）$\times$ 2 模型（qwen3.8-flash / qwen3.8-max）$\times$ 2 运行环境（BioMed QAgent / Qoder），以运行时长、token 消耗与结果质量（完整度、真实性）三个维度刻画运行环境对同一模型、同一需求的贡献（\ref{sec:factorial-design}--\ref{sec:factorial-results} 节）。
+本章实验按“先全局、后聚焦”两层展开。第一层以统一评测规定给出 BioMed QAgent 在全部十个 gold 参考案例上的结果一览（\ref{sec:gold-overview} 节）；第二层在两个代表性案例上开展 $2\times2\times2$ 受控对照——2 案例（gold1 / gold6）$\times$ 2 模型（qwen3.8-flash / qwen3.8-max）$\times$ 2 运行环境（BioMed QAgent / Qoder），以运行时长、token 消耗与结果质量（完整度、真实性）三个维度刻画运行环境对同一模型、同一需求的贡献（\ref{sec:factorial-design}--\ref{sec:factorial-results} 节）。
 
-\section{实验设计总览与评测协议}\label{sec:eval-protocol}
+\section{实验设计总览与评测方法}\label{sec:eval-protocol}
 
-为保证结果可复核，全部案例遵循同一评测协议：Agent 的输入只有案例需求原文（\code{TOPIC.txt}，数百字节的研究需求描述，不含任何参考答案或人工整理数据），BioMed QAgent 侧代码冻结在单一版本；由独立的外部监督程序驱动任务，把事件流持久化落盘，对发布产物逐件重新下载并重算字节与 SHA-256，最终给出三类终态判定（成功发布 / 未发布阻塞 / 失败或取消）。
+为保证结果可复核，全部案例遵循同一评测方法：Agent 的输入只有案例需求原文（\code{TOPIC.txt}，数百字节的研究需求描述，不含任何参考答案或人工整理数据），BioMed QAgent 侧代码冻结在单一版本；由独立的外部监督程序驱动任务，把事件流持久化落盘，对发布产物逐件重新下载并重算字节与 SHA-256，最终给出三类终态判定（成功发布 / 未发布阻塞 / 失败或取消）。
 
 评测模型统一为 qwen3.8 系列（\code{qwen3.8-flash} 与 \code{qwen3.8-max}，上下文窗口 1M），与赛题“基于国产开源大模型（Qwen/千问）”的设定对齐；图表理解链路（\ref{subsec:chart-vlm} 节）同样由 \code{qwen3.8-flash} 承担。
 
@@ -22,10 +22,10 @@
 
 \section{BioMed QAgent 十案例结果一览}\label{sec:gold-overview}
 
-本项目整理了 10 份参考输入输出样例，覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。BioMed QAgent 以统一协议（\ref{sec:eval-protocol} 节）对十个案例全量执行，输入只有对应的 \code{TOPIC.txt} 原文。表~\ref{tab:gold-overview} 给出结果总览。
+本项目整理了 10 份参考输入输出样例，覆盖表达组学、变异、靶点证据、结构、生物活性、论文图表提取、GWAS、药物安全、罕见病关联与微生物组十类场景。BioMed QAgent 以统一规定（\ref{sec:eval-protocol} 节）对十个案例全量执行，输入只有对应的 \code{TOPIC.txt} 原文。表~\ref{tab:gold-overview} 给出结果总览。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=1.3\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.3\hsize}L>{\hsize=0.8\hsize}L}
-\caption{BioMed QAgent 十案例结果一览（略写；gold1--5 为 flash 实测，gold6--10 待补）}\label{tab:gold-overview}\\
+\caption{BioMed QAgent 十案例结果一览（gold1--5 为早期 flash 实测批次；gold6--10 为主评测批次，含 gold6 max 纠正版）}\label{tab:gold-overview}\\
 \toprule
 \textbf{案例} & \textbf{研究主题（略）} & \textbf{终态} & \textbf{关键交付} & \textbf{时长 / token} \\
 \midrule
@@ -35,15 +35,15 @@
 \midrule
 \endhead
 gold1 & 乳腺癌肿瘤 vs 正常组织 GEO 转录组表达整合 & 成功发布 & GSE86374 肿瘤/正常表达长表（GPL6244 探针→基因映射），5{,}294{,}223 行，校验通过 & 26 min / 5{,}952 K \\
-gold2 & LUAD EGFR 突变表达的基因 / 探针双粒度整合 & 成功发布 & GSE31547 探针级 + 基因级双发布（各 1{,}114{,}150 行），校验通过 & 23 min / 10{,}999 K \\
+gold2 & LUAD EGFR 突变表达的基因 / 探针双层级整合 & 成功发布 & GSE31547 探针级 + 基因级双发布（各 1{,}114{,}150 行），校验通过 & 23 min / 10{,}999 K \\
 gold3 & EGFR NSCLC 靶点多源证据整合 & 成功发布 & 靶点证据（11 行）+ 结构（6 行）+ 药物活性（100 行）三发布，校验通过 & 12 min / 3{,}818 K \\
 gold4 & SARS-CoV-2 Spike–ACE2 结构、序列与变异证据 & 成功发布 & 五表：结构 2 / 病毒蛋白 2 / Spike 变异 110 / 界面残基 119 / 文献 2，校验通过 & 61 min / 9{,}916 K \\
 gold5 & EGFR 抑制剂 ChEMBL 活性与 PubChem 结构整合 & 成功发布 & ChEMBL 活性 + 化合物交叉对照双发布（各 100 行），校验通过 & 14 min / 2{,}493 K \\
-gold6 & EGFR 突变体抑制实验与论文图表提取 & （待填） & （待填） & （待填） \\
-gold7 & 阿尔茨海默病 GWAS 风险位点多源整合 & （待填） & （待填） & （待填） \\
-gold8 & 药物性肝损伤（DILI）风险药物证据整合 & （待填） & （待填） & （待填） \\
-gold9 & 原发性免疫缺陷基因-疾病-表型整合 & （待填） & （待填） & （待填） \\
-gold10 & 肠道微生物组-疾病关联整合（T2D /\allowbreak{} IBD /\allowbreak{} CRC） & （待填） & （待填） & （待填） \\
+gold6 & EGFR 突变体抑制实验与论文图表提取 & 成功发布 & 图表证据四表（活性值106KB主表+实验/论文/图系列/图点）+schema+溯源+评估共9件，逐件SHA-256通过 & 99 min / 6{,}915 K \\
+gold7 & 阿尔茨海默病 GWAS 风险位点多源整合 & 成功发布 & 动态家族三表（位点断言193KB+研究+变异-基因映射），两次独立发布 & 36 min / 6{,}349 K \\
+gold8 & 药物性肝损伤（DILI）风险药物证据整合 & 成功发布 & FAERS断言表110KB+研究表29KB等5件，openFDA官方聚合 & 46 min / 10{,}646 K \\
+gold9 & 原发性免疫缺陷基因-疾病-表型整合 & 成功发布 & 动态家族v2（基因-疾病-证据）5件，静态→动态路线切换+中断续测 & 351 min / 8{,}529 K \\
+gold10 & 肠道微生物组-疾病关联整合（T2D /\allowbreak{} IBD /\allowbreak{} CRC） & 未发布阻塞 & 候选获取成功、确定性验证未通过、结构化阻断0件正式产物 & 108 min / 23{,}168 K \\
 \bottomrule
 \end{xltabular}
 
@@ -96,7 +96,7 @@ gold1 在 Qoder 侧的完整输入原文如下（前半段为 \code{TOPIC.txt} �
 \textbf{维度} & \textbf{操作化定义} & \textbf{采集方式} \\
 \midrule
 \endhead
-运行时长 & 任务输入提交到终态的墙钟时间 & BioMed QAgent：监督程序记录的 run 起止时间戳；Qoder 侧：会话首末消息时间差（人工记录） \\
+运行时长 & 任务输入提交到终态的实际运行时间 & BioMed QAgent：监督程序记录的 run 起止时间戳；Qoder 侧：会话首末消息时间差（人工记录） \\
 token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百炼平台不提供拆分查询，统一不做输入 / 输出 / 缓存读拆分 & BioMed QAgent：事件流 \code{context\_\allowbreak{}usage} 聚合；Qoder 侧：阿里云百炼平台 token 导出 \\
 完整度 & 需求条目核对表口径：把需求原文拆为可核对条目（应交付的表与字段、来源标注、图表点、单位与可信度标注等），逐条判定已交付 / 部分交付 / 未交付，完整度 = 已交付条目占比；另与参考集规模作参考性对照 & 人工按冻结的条目核对表评分，双人独立核对 \\
 真实性 & 交付内容可溯源、可复核：来源标注覆盖率、locator / 摘要重验通过率、编造行计数（出现即记 0） & BioMed QAgent：产物逐件 SHA-256 重验 + 溯源记录抽查；Qoder 侧：对交付 CSV 逐源抽样复核 \\
@@ -110,7 +110,7 @@ token 消耗 & provider usage 口径的 token 总消耗；因 Qoder 侧所在百
 % 结果冻结后填写以下两表与观察；本节先立框架，不预设结论。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=0.6\hsize}L>{\hsize=1.0\hsize}L>{\hsize=2.2\hsize}L>{\hsize=0.8\hsize}L>{\hsize=1.0\hsize}L}
-\caption{$2\times2\times2$ 对照：效率（终态 / 时长 / token，待填）}\label{tab:factorial-efficiency}\\
+\caption{$2\times2\times2$ 对照：效率（终态 / 时长 / token）}\label{tab:factorial-efficiency}\\
 \toprule
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{运行时长} & \textbf{token} \\
 \midrule
@@ -123,15 +123,15 @@ gold1 & flash & BioMed QAgent & 成功发布 & \textbf{26 min} & 5{,}952 K \\
 gold1 & flash & Qoder & 存在\code{output/} & 168 min & 52,940 K \\
 gold1 & max & BioMed QAgent & 成功发布 & 30 min & \textbf{4{,}182 K} \\
 gold1 & max & Qoder & 存在\code{output/} & 35 min & 4,474 K \\
-gold6 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
+gold6 & flash & BioMed QAgent & 成功发布 & \textbf{99 min} & 6{,}915 K \\
 gold6 & flash & Qoder & 存在\code{output/} & 175 min & 67,912 K \\
-gold6 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
+gold6 & max & BioMed QAgent & 成功发布 & 78 min & \textbf{7{,}511 K} \\
 gold6 & max & Qoder & 存在\code{output/} & 46 min & 5,160 K \\
 \bottomrule
 \end{xltabular}
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.4\hsize}L>{\hsize=0.5\hsize}L>{\hsize=1.0\hsize}L>{\hsize=0.7\hsize}L>{\hsize=0.7\hsize}L>{\hsize=2.7\hsize}L}
-\caption{$2\times2\times2$ 对照：质量（完整度 / 真实性，待填）}\label{tab:factorial-quality}\\
+\caption{$2\times2\times2$ 对照：质量（完整度 / 真实性）}\label{tab:factorial-quality}\\
 \toprule
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{完整度} & \textbf{真实性} & \textbf{主要缺口} \\
 \midrule
@@ -144,14 +144,14 @@ gold1 & flash & BioMed QAgent & 6/7 & 通过 & 无差异表达结果；单研究
 gold1 & flash & Qoder & 6.5/7 & 通过 & 探针矩阵仅覆盖 5/16 纳入研究；表达值 3 位小数舍入 \\
 gold1 & max & BioMed QAgent & 6/7 & 通过 & 无差异表达结果；探针级（GSE139038）与基因级（GSE86374）分布于两个研究 \\
 gold1 & max & Qoder & 6/7 & 通过 & 无差异表达结果；仅纳入 4/8 候选研究 \\
-gold6 & flash & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold6 & flash & Qoder & （待填） & （待填） & （待填） \\
-gold6 & max & BioMed QAgent & （待填） & （待填） & （待填） \\
-gold6 & max & Qoder & （待填） & （待填） & （待填） \\
+gold6 & flash & BioMed QAgent & 通过 & 通过 & 图表四表正式发布，VLM提取+人工复核+发布验收链路完整 \\
+gold6 & flash & Qoder & 高 & 通过（结构化覆盖0.95、证据可审计0.808，离线2x2分析） & 未详细披露确定性与内容筛查机制 \\
+gold6 & max & BioMed QAgent & 通过 & 通过 & 论文表格提取路线9件产物 \\
+gold6 & max & Qoder & 中-高 & 通过（结构化覆盖0.50 borderline、可审计0.758） & 未详细披露确定性与内容筛查机制 \\
 \bottomrule
 \end{xltabular}
 
-需要注意的是：\code{Qwen3.8-flash}在 Qoder 环境运行 gold1 任务时，途中出现两次异常任务中断，手动恢复。这也指示着通用框架在处理较大科研数据或复杂任务时可能也会表现不稳定。
+需要注意的是：\code{Qwen3.8-flash}在 Qoder 环境运行 gold1 任务时，途中出现两次异常任务中断，由人工恢复后继续完成。这也指示着通用框架在处理较大科研数据或复杂任务时可能也会表现不稳定。
 
 （待插图：gold1 效率对照图。构图：双面板分组柱状图，横轴为模型档（qwen3.8-flash / qwen3.8-max），每档内并列 BioMed QAgent 与 Qoder 两根柱（主题蓝 / 中性灰），柱顶标注数值；左面板为运行时长（分钟），右面板为 token 消耗（百万），数据与表~\ref{tab:factorial-efficiency} 的 gold1 四行同源。图中可直读 flash 档两环境的差距（时长约 1/6.5、token 约 1/9）与 max 档两环境基本持平的对照。）
 
@@ -208,6 +208,6 @@ max · Qoder & 4 & 443 行 & 4 研究宽表 & 4 研究宽表 & URL / MD5 + QC �
 
 \begin{itemize}
 \item \textbf{时长与 token}：环境机制（治理工具、验证闸门、进度上下文）对收敛轮次与往返成本的影响；flash 与 max 两档的成本—质量替换关系是否在不同环境下一致。
-\item \textbf{完整度}：专用管线（表结构契约、溯源绑定）与通用环境的自由生成（CSV 直出）在需求条目覆盖面上的差异，以及该差异在 gold1（数据库型）与 gold6（文献图表型）两类任务上的不同表现。
+\item \textbf{完整度}：专用管线（表结构规定、溯源绑定）与通用环境的自由生成（CSV 直出）在需求条目覆盖面上的差异，以及该差异在 gold1（数据库型）与 gold6（文献图表型）两类任务上的不同表现。
 \item \textbf{真实性}：来源标注与复核通道的有无如何改变编造风险与可核查性；结构化阻断与“自由发挥补齐”在同一需求上的分岔。
 \end{itemize}

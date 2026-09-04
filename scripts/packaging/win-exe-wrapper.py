@@ -16,6 +16,8 @@ import os
 import subprocess
 import sys
 
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 
 def bundle_root() -> str:
     if getattr(sys, "frozen", False):
@@ -43,6 +45,10 @@ def main() -> int:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
+            # A windowed exe has no console to inherit; without this flag the
+            # console-subsystem python would allocate its own empty black
+            # console window.
+            creationflags=CREATE_NO_WINDOW,
         )
     return completed.returncode
 
