@@ -34,6 +34,12 @@ This file is a derived, redacted report. It contains no prompt text, assistant d
 
 Completed with a current publication after a superseded earlier publication.
 
+## Paper-Use Boundary
+
+- Describe the current formal product as six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts total); the phrase 'four-table chart product' is not supported by the manifest.
+- The five HIL requests were three exact-only credential grants and two publication-acceptance decisions. No low-confidence point-correction or generic data-review HIL occurred in this run.
+- Artifact SHA-256 verification proves byte integrity and receipt binding, not scientific correctness or complete coverage of all potentially relevant EGFR literature.
+
 ## Model and Context Usage
 
 | Metric | Value |

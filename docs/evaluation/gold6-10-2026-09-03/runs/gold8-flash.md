@@ -36,6 +36,12 @@ Duration reconciliation: the recorder field `wall_times.run_wall_duration_s` rep
 
 Completed with one byte-verified publication. Event-derived duration is authoritative because a monitor arithmetic field is inconsistent.
 
+## Paper-Use Boundary
+
+- The formal Publication covers the openFDA FAERS assertion and study tables (five artifacts including schema/provenance/assessment). Other requested integration dimensions remained workspace staging; the run report records this as one of three evidence dimensions formally published.
+- Use 2754.172 seconds from run_started to run_completed. The 2174.166-second monitor arithmetic value is inconsistent and must not appear in primary tables.
+- The prompt is reconstructed historical TOPIC text; do not describe this as an exact original-prompt replay or as complete DILI multi-source coverage.
+
 ## Model and Context Usage
 
 | Metric | Value |

@@ -19,6 +19,8 @@ Campaign ID: `2026-09-03-main-e5aadfe0-qwen38-six-run-corrected`. Model profile:
 
 Formal publication success rate: 5/6 (83.3%). This is an outcome rate over heterogeneous Gold requirements, not a controlled benchmark of model quality.
 
+Publication success is not synonymous with full scientific-task completion: Gold8 formally published the FAERS assertion/study dimension while other requested integration dimensions remained staging. Conversely, Gold10 is a task-level non-completion whose zero-Publication outcome is useful evidence that the formal boundary failed closed. Publication-level artifact-quality comparisons therefore cover only the five runs with formal outputs and must retain each run's Paper-Use Boundary.
+
 ## Measurement Method
 
 Each principal run is rebuilt from the evidence-pack manifest, selected authoritative JSONL stream, closure, run metadata, and formal artifact receipts. The generator validates manifest entries, sequence contiguity, lifecycle timestamps, context-usage sums against closure token totals, tool pairing, and formal artifact receipt hashes. Raw assistant/reasoning deltas, prompt content, tool arguments, tool outputs, permission resources, and raw error text are deliberately excluded from this report and from `processed-log.jsonl`.
@@ -63,7 +65,7 @@ The Qoder Flash/Max zip comparison is an offline, read-only artifact analysis. I
 | Flash | 0.95 | 0.808 | Q1_high_coverage_high_auditability |
 | Max | 0.5 | 0.758 | borderline |
 
-Key measured differences: Flash has finer provenance granularity (10,215 distinct locations across 10,682 facts versus 11 across 6,439); Flash's manifest has a self-referential SHA-1 mismatch and truncated SHA-1 prefixes while Max validates 5/5 full MD5 entries; and neither offline export contains the raw payloads or scripts referenced by its methods log. The offline analysis verification has `6` checked hashes and pass=`true`. Its source root is `qoder-gold6-2x2-analysis`.
+Key measured differences: Flash has finer provenance granularity (10,215 distinct locations across 10,682 facts versus 11 across 6,439); Flash's manifest has a self-referential SHA-1 mismatch and truncated SHA-1 prefixes while Max validates 5/5 full MD5 entries; and neither offline export contains the raw payloads or scripts referenced by its methods log. The offline analysis verification has `4` checked hashes and pass=`true`. Its source root is `docs/evaluation/gold6-qoder-2x2`.
 
 ## Diagnostic Appendices Excluded from Main Statistics
 

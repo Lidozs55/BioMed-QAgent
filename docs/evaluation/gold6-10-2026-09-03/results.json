@@ -4,7 +4,7 @@
   "generator": {
     "script": "scripts/generate-gold6-10-session-report.mjs",
     "script_version": "1.0.0",
-    "script_sha256": "b936ee9e33c06eeeb7e6c744b0739d0a3001c5006bf63a2c3d711d37c32b3fa7",
+    "script_sha256": "d592d9071d2923c2f4d8e8a553c6a9e98e4e06640affc7b4f82922832550d7f7",
     "deterministic_generation": "No wall-clock generation timestamp is emitted; output is determined by the named evidence inputs and generator version."
   },
   "campaign": {
@@ -456,6 +456,11 @@
         "artifact_produced_event_count": 18,
         "b3": null
       },
+      "paper_use_notes": [
+        "Describe the current formal product as six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts total); the phrase 'four-table chart product' is not supported by the manifest.",
+        "The five HIL requests were three exact-only credential grants and two publication-acceptance decisions. No low-confidence point-correction or generic data-review HIL occurred in this run.",
+        "Artifact SHA-256 verification proves byte integrity and receipt binding, not scientific correctness or complete coverage of all potentially relevant EGFR literature."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "runs/gold6-flash/evidence/evidence-manifest.sha256",
@@ -850,6 +855,11 @@
         "artifact_produced_event_count": 10,
         "b3": null
       },
+      "paper_use_notes": [
+        "Treat the risk-loci and variant-gene-map outputs as two independent Publications (five artifacts each), not as one three-table Publication and not as a v1-to-v2 superseding chain; both publication events have supersedes_publication_id=null.",
+        "This corrected run contains two profile-scaffold calls, zero business HIL requests, and no evidence for the older '11 rejection-revision rounds' narrative. Keep that narrative historical unless its separate run is cited explicitly.",
+        "The prompt is reconstructed historical TOPIC text, so the observed outcome is not an exact replay of an original Gold7 prompt."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "runs/gold7-flash/evidence/evidence-manifest.sha256",
@@ -1285,6 +1295,11 @@
         "artifact_produced_event_count": 5,
         "b3": null
       },
+      "paper_use_notes": [
+        "The formal Publication covers the openFDA FAERS assertion and study tables (five artifacts including schema/provenance/assessment). Other requested integration dimensions remained workspace staging; the run report records this as one of three evidence dimensions formally published.",
+        "Use 2754.172 seconds from run_started to run_completed. The 2174.166-second monitor arithmetic value is inconsistent and must not appear in primary tables.",
+        "The prompt is reconstructed historical TOPIC text; do not describe this as an exact original-prompt replay or as complete DILI multi-source coverage."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "runs/gold8-flash/evidence/evidence-manifest.sha256",
@@ -1661,6 +1676,11 @@
         "artifact_produced_event_count": 10,
         "b3": null
       },
+      "paper_use_notes": [
+        "The durable evidence proves a static-to-dynamic_family route change after successful dynamic preparation. It does not prove a model-level causal explanation for that choice.",
+        "The v1 and v2 publication events are independent records with supersedes_publication_id=null; v2 became current, but this run does not evidence a formal supersedes chain.",
+        "Supervisor adoption after permission stops is not, by itself, evidence of Dataset Core checkpoint replay. Do not summarize this corrected run as an interrupted computation resumed from a deterministic checkpoint unless separate checkpoint records are cited."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "runs/gold9-flash/evidence/evidence-manifest.sha256",
@@ -2070,6 +2090,11 @@
         "artifact_produced_event_count": 0,
         "b3": null
       },
+      "paper_use_notes": [
+        "Retain this run in the six-run outcome denominator as a negative/fail-closed case, but exclude it from Publication-level artifact-quality comparisons because no formal artifact exists.",
+        "Do not say acquisition broadly succeeded: some source-traceable candidates were staged, but the required cohort-bound differential-abundance supplement could not be formally acquired and parsed, and two executions were rejected for empty required tables.",
+        "Fail-closed behavior is a verified safety property of this outcome; task completion still failed. Avoid relabeling the blocked scientific request as an overall success."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "runs/gold10-flash/evidence/evidence-manifest.sha256",
@@ -2445,6 +2470,11 @@
           "profile_ref": "literature_experiment_chart.validation.v1"
         }
       },
+      "paper_use_notes": [
+        "Use v2 as the corrected Max result; v1 had incorrect 100,000-token context metadata and belongs only in the diagnostic appendix.",
+        "The formal product is six CSV tables plus schema, provenance, and ProductAssessment (nine artifacts); B3 checked 94 items with zero failures.",
+        "This is not a pure model-only comparison with Gold6 Flash: v2 used the isolated proxy host as well as corrected context/output metadata."
+      ],
       "source_evidence": {
         "evidence_manifest": {
           "manifest_path": "proxy-rerun/runs/gold6-max-v2/evidence/evidence-manifest.sha256",
@@ -2564,12 +2594,12 @@
     }
   },
   "qoder_gold6_offline_2x2": {
-    "source_root": "qoder-gold6-2x2-analysis",
+    "source_root": "docs/evaluation/gold6-qoder-2x2",
     "source_outputs": {
       "report_json_sha256": "8c46e90b0fa203667ae408ae285f28effe25083e7ee44af2877f849d60977941",
       "analysis_metadata_sha256": "d83024933313994b07913d2d679176f23283d97e5ce712cd6ba8e9bf26dd8906",
-      "verification_sha256": "9152d83380cbe2743e8275ecf894f990f2ea1614801e47a617bf35f250bb0376",
-      "verification_entries": 6,
+      "verification_sha256": "7b1086313cd08ffbe64767edfe49c1e0fff7f4041f9852b459258bfc80e07f80",
+      "verification_entries": 4,
       "verification_pass": true
     },
     "source_archives": {
