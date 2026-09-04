@@ -43,7 +43,7 @@ PDF 解析保留页面和位置证据。对于可提取文本的表格，可依�
 
 图表工具采用多层降级策略。系统优先通过 \code{qwen3.8-flash} 理解页面图像或嵌入图像；失败后尝试解析 PDF 表格；再次失败时，只提取标题（caption）作为有限信息。模型抽取结果必须携带模型名；图表中每个数据点的抽取结果还必须包含置信度及其判定原因。其可信级受 \ref{sec:stage7-validate} 节所述确定性上限的约束，不会因为模型自报 high 就自动成为正式真值。
 
-就规范侧而言，已落地的链路是：VLM（视觉语言模型）、PDF 表格或标题抽取的结果先作为结构化图表证据（chart-evidence）进入系统，形成带点级取值与来源绑定的证据资产，再进入生产环境的 bioactivity\_\allowbreak{}measurement 数据家族，落在活性值、实验、论文、图系列与图点四张表上。组装前，系统逐点核对来源并复核证据，无法确认的图表数据不纳入正式数据。复核未通过时，系统写入结构化 \code{chart\_\allowbreak{}evidence\_\allowbreak{}gate} 检查结果并阻止发布，不会让任意工作区 CSV 直接获得正式发布权。人工修正保留原始值，并记录 human\_\allowbreak{}correction 处理步骤。这条经注册通道进入正式发布的抽取链路已在 gold6 案例落地，图表四表随发布清单交付；未接入该通道的自然语言端到端抽取仍是待办。
+就规范侧而言，已落地的链路是：VLM（视觉语言模型）、PDF 表格或标题抽取的结果先作为结构化图表证据（chart-evidence）进入系统，形成带点级取值与来源绑定的证据资产，再进入生产环境的 bioactivity\_\allowbreak{}measurement 数据家族。corrected gold6 的正式发布包含活性值、实验、论文、补充资产、图系列与图点 6 个 CSV 表，另有 schema、provenance 与 ProductAssessment，共 9 件 Artifact。组装前，系统逐点核对来源并复核证据，无法确认的图表数据不纳入正式数据。复核未通过时，系统写入结构化 \code{chart\_\allowbreak{}evidence\_\allowbreak{}gate} 检查结果并阻止发布，不会让任意工作区 CSV 直接获得正式发布权。人工修正保留原始值，并记录 human\_\allowbreak{}correction 处理步骤；但本次 corrected gold6 的 5 次 HIL 是 3 次 credential 授权和 2 次发布验收，不应写成低置信度点值人工修正。
 
 系统用确定性规则检查轴与图例，不以模型自报为准。\code{chart\_\allowbreak{}series} 表记录轴名、轴单位与刻度和图例文本，并须声明轴/\allowbreak{}图例校验状态（clear /\allowbreak{} unclear /\allowbreak{}
 human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴或图例含义 unclear 即直接判失败；系列允许省略点数据的唯一条件是轴或图例状态明确标为 unclear。这条链路已有点级的 gold 案例完成测试。无论采纳（accepted）还是人工修正（corrected），两条路径都产出正式发布物并逐件重算 SHA-256；未经复核或缺表的运行不产生任何发布物。
@@ -56,10 +56,9 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 缺失与重复按类型分层处理：必填字段缺失时拒绝或阻断，可选字段缺失则保留为空并计入完整性统计；完全重复按确定性键去重；主键重复且值一致时合并血缘、保留多来源。每类处理都保留对应证据，如定位信息与来源集合，以便后续复核。
 
-这些规则在案例中这样体现。gold8 有 4 个药物在官方聚合数据中确认没有任何报告词条，系统不为它们制造数据行，也不做零填充，而是把这类缺失逐条列出。gold9 的可选证据列留空，并计入完整性统计。
+这些规则在 corrected gold8 中体现为：正式 Publication 只包含 openFDA FAERS 的断言表与研究表；其他请求维度仍是工作区 staging，不能据此声称整个 DILI 多源请求完整发布。未取得的来源不以零值补齐。
 
-原始写法的保留在 gold9 发布表中直接可见。HGNC 归一后的 \code{hgnc\_\allowbreak{}symbol} 与来源原写法 \code{orphanet\_\allowbreak{}gene\_\allowbreak{}symbol} 并列成列，\code{gene\_\allowbreak{}records} 另外保留 \code{alias\_\allowbreak{}symbols} 与 \code{previous\_\allowbreak{}symbols}。归一不抹去历史身份。gold7 的变体-基因映射表（127 行）
-则整体来自补充材料这份逐研究注释资产，而非模型推测。
+原始写法与规范值并列保存是当前规范化设计；具体案例中的字段与行数则必须以对应 Publication manifest 为准。corrected gold7 的风险位点和变异--基因映射属于两个独立 Publication，corrected gold9 的正式主表为 assertion records，不能沿用旧版“三张实体表”叙述来描述本次主评测。
 
 实体身份对齐同样采用确定性机制。化合物以 InChI Key 精确匹配建立交叉映射表，例如 ChEMBL 与 PubChem 的互查按 exact\_\allowbreak{}inchi\_\allowbreak{}key 方法匹配，匹配不上时显式标记为冲突，而不强行合并。基因符号归一有内置确定性映射表，也可使用注册的外部规范资产，如 gold9 使用的 HGNC current。探针到基因的映射依赖逐平台注释资产，未映射探针保留原命名空间，不静默丢弃。
 
@@ -127,7 +126,7 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 
 请求和决策均落盘，进程重启后可以确定性恢复：系统持久化审批挂起时的原始工具调用，恢复时以原调用重放并由执行器从检查点续跑，零 LLM 参与；主机重启后无法确定性续跑的发布验收直接判整次运行失败，恢复时已失去对象的挂起权限请求一律按拒绝处理。对于数据更正，系统重新执行受影响阶段并发布新版本，通过 supersedes 关系保留旧版本历史。
 
-需要澄清的是，判失败的只是无法确定性续跑的单个运行；其中已完成且摘要一致的阶段仍经检查点复用，不会整体重跑，gold9 中断后续测一次通过就是实例（\ref{sec:reliability-base} 节）。因此基础设施故障不会丢失已完成的工作。
+需要澄清的是，检查点复用是一项运行时机制，但个别监督会话在 permission stop 后重新 adopt，不自动等价于 Dataset Core 阶段检查点命中。corrected gold9 的证据确认多次权限挂起后继续运行并最终发布，却不足以单独证明“中断后未重跑全链路”；后者应由明确的 checkpoint/replay 记录支撑。
 
 \section{可靠性基座}\label{sec:reliability-base}
 
@@ -143,10 +142,10 @@ human\_\allowbreak{}validated）；声明为 exact 的数值点一旦对应轴�
 \textbf{机制} & \textbf{一句定义} & \textbf{实测记录} \\
 \midrule
 \endhead
-执行锁 & 同一任务同一需求的发布互斥；目录原子锁，单机多进程有效 & 开发期主机重启曾打断进行中的运行（gold7 两轮），锁内旧执行不再写入 \\
-代次围栏 & 发布前复核执行租约，超时或已取消的旧执行不得晚到覆盖新结果 & gold9 前两轮因主机崩溃与资源耗尽中断，新执行安全接管后续测通过 \\
-检查点与重放 & 已完成且输出摘要一致的操作按重放身份复用 & gold9 中断后续测一次通过，未重跑全链路 \\
-超时与取消 & 每个操作有界，取消即时生效 & gold9 会话取消路径的无界等待缺陷被定位并以强制取消修复 \\
+执行锁 & 同一任务同一需求的发布互斥；目录原子锁，单机多进程有效 & 机制由运行时测试覆盖；主评测报告不以历史主机重启次数作统计 \\
+代次围栏 & 发布前复核执行租约，超时或已取消的旧执行不得晚到覆盖新结果 & 机制由执行租约与取消路径测试覆盖 \\
+检查点与重放 & 已完成且输出摘要一致的操作按重放身份复用 & 需要独立 checkpoint/replay 事件证明；permission resume 不作替代证据 \\
+超时与取消 & 每个操作有界，取消即时生效 & 运行时测试覆盖超时与取消；历史缺陷不混入 corrected cohort \\
 事件溯源 & 全部操作追加事件日志，状态可由日志重建 & qwen3.7-plus 三轮谎报“整合完成”被事件流的终态分类标为未完成 \\
 Durable HIL & 审批请求与决策落盘；恢复以原调用重放、零 LLM 参与 & 机制与三档审批见 \ref{sec:hil} 节 \\
 内容摘要与重验 & 逐件 SHA-256；读取端每次读取重算，不匹配即拒绝展示 & 正式案例全部产物经监督程序逐件重验一致（\ref{sec:eval-protocol} 节） \\
