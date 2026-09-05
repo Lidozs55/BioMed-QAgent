@@ -32,6 +32,7 @@ import type { SourceRecord } from "../contracts/source.js";
 import {
   acquireSource,
   type AcquireSourceOptions,
+  type AcquisitionPaginationSpec,
 } from "../../external/acquisition/downloader.js";
 import { ContentCache } from "../../external/acquisition/content-cache.js";
 import type { PublicHttpClient } from "../../external/network/http-client.js";
@@ -110,6 +111,12 @@ export interface AcquisitionDownloadPlan {
    * parameters and tool inputs never populate this field.
    */
   providerRevisionFacts?: AcquisitionProviderRevisionFacts;
+  /**
+   * Trusted provider-declared JSON pagination. When present the downloader
+   * fetches successive pages and merges them into one asset; caps fail
+   * loudly instead of truncating. Never populated by request parameters.
+   */
+  pagination?: AcquisitionPaginationSpec;
 }
 
 export interface AcquisitionProviderRevisionFacts {
@@ -198,6 +205,8 @@ export interface CoreAcquisitionErrorDetails {
   endpoint_host?: string;
   elapsed_ms?: number;
   timeout_stage?: "wall_clock" | null;
+  /** Downloader-provided failure detail (e.g. pagination cap specifics). */
+  error_message?: string | null;
 }
 
 export class CoreAcquisitionError extends Error {
@@ -549,6 +558,7 @@ export class CoreAcquisitionRuntime {
             provider_id: handler.providerId,
             error_code: result.attempt.error_code,
             attempts: attemptNumber,
+            error_message: result.attempt.error_message,
             ...acquisitionFailureContext(request, plan, acquireStartedAtMs, result.attempt.error_code),
           },
           false,

@@ -13,8 +13,7 @@
 
 ## P1 — Runtime and evidence hardening
 
-- [ ] **采集 provider 自动翻页（ChEMBL limit 截断的完整修复）。** 采集运行时当前为"单计划=单 URL=单资产"模型，provider 无法在匹配数超过单请求上限时继续翻页（ChEMBL 曾因此静默截断，见 [ISSUES](ISSUES.md)；2026-09-06 已缓解为 limit=10,000）。按 Core-owned acquisition 边界扩展 `AcquisitionDownloadPlan` 支持多请求计划或 provider 分页循环，实施时同步 bump implementation digest。
-  - 验收：构造超过单页的 ChEMBL 查询（mock 分页响应）时，注册资产包含全部记录与页级来源定位；达到总页数上限时显式失败而非静默截断；既有单请求 provider 行为不回退。
+- [x] **采集 provider 自动翻页（ChEMBL limit 截断的完整修复，2026-09-06 完成）。** `AcquisitionDownloadPlan` 新增 `pagination`（recordsPath/pageSize/maxRecords/maxPages），下载器对声明分页的 provider 逐页取回（offset 步进）并合并为单一注册资产，ChEMBL 每页 1,000 条、默认上限 10,000 条；超限返回 `pagination_record_cap_exceeded` 显式失败；implementation digest 已同步 bump。多页合并、offset 步进、超限响亮失败三类回归见 `acquisition-first-composition.test.ts`。
 - [ ] **全局 exact-only 图表坐标迁移（ADR-043）。** Prompt/skill 已将正式图表数值限定为正文表格、补充数值文件、官方出版社 source data 或论文/作者明确关联仓库中的显式数值；旧 VLM 图像估计点 + HIL 发布路径仅为迁移期兼容代码，已过时。按 [`architecture/chart-exact-data-policy.md`](architecture/chart-exact-data-policy.md) 的文件所有权并行：(1) 新增 exact source-data acquisition/parser/semantic mapping 正向路径；(2) 移除 producer/review、contracts/profile/validator、frontend 和 evaluator 旧估计行为。冻结 `gold-v1` 不原地修改，另建 successor evaluation。
   - 验收：任何 pixel/vector/OCR/interpolation/fitting estimate 即使 accepted/corrected 也被 Core 硬拒；无精确 point source 时 `chart_points` 可空且留有有界检索审计，独立精确表格值仍可部分发布；最终报告列出跳过 figure/panel、已搜索来源和联系作者/提供 source-data 建议；正向 source-data、正确弃权、已知但不可访问、hostile reviewed estimate、部分发布五类回归通过。
 

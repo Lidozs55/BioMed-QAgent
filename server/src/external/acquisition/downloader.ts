@@ -11,7 +11,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { link, mkdir, open, rename, stat, unlink } from "node:fs/promises";
+import { link, mkdir, open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -81,6 +81,25 @@ export const CURATED_SOURCE_HOSTS: ReadonlySet<string> = new Set([
   "search.clinicalgenome.org",
 ]);
 
+/**
+ * Provider-declared pagination for JSON list APIs. When present the
+ * downloader fetches successive pages — stepping the `offset` query parameter
+ * by `pageSize` — and merges the arrays found at `recordsPath` into a single
+ * registered JSON asset. All caps fail loudly: a pagination run that exceeds
+ * `maxRecords` or `maxPages` is an acquisition error, never a silent
+ * truncation.
+ */
+export interface AcquisitionPaginationSpec {
+  /** Dot path to the record array inside each JSON page (e.g. "activities"). */
+  recordsPath: string;
+  /** Records requested per page; sent as the `limit` query parameter. */
+  pageSize: number;
+  /** Loud-failure bound on total accumulated records across pages. */
+  maxRecords: number;
+  /** Loud-failure bound on the number of page requests. */
+  maxPages: number;
+}
+
 export interface AcquireSourceOptions {
   source: SourceRecord;
   filename: string;
@@ -124,6 +143,14 @@ export interface AcquireSourceOptions {
    * checksum covers the whole file (prefix re-hashed).
    */
   resumeFromBytes?: number;
+  /**
+   * Provider-declared JSON pagination. When present the request streams the
+   * first page from `source.url` (`limit` = pageSize, `offset` = 0) and then
+   * fetches further pages by stepping `offset`; the merged document is
+   * published as one asset. Mutually exclusive with resume (resumable single
+   * downloads) and POST bodies.
+   */
+  pagination?: AcquisitionPaginationSpec;
   /**
    * Called once after a verified file is published (cache hit or fresh
    * download) with the immutable destination path and its hashes. The host
@@ -274,6 +301,7 @@ function errorCodeFrom(error: unknown): AcquisitionError["code"] {
  * network/validation failures — Python parity. Cancellation propagates.
  */
 export async function acquireSource(options: AcquireSourceOptions): Promise<AcquisitionResult> {
+  if (options.pagination !== undefined) return acquireJsonPaginatedSource(options);
   const {
     source,
     filename,
@@ -630,6 +658,289 @@ export async function acquireSource(options: AcquireSourceOptions): Promise<Acqu
     }
     // Caller-owned part files survive non-abort failures for the caller to
     // resume or clean up; the default part is always removed.
+    if (!callerOwnedPart) await cleanupPart();
+    if (error instanceof AcquisitionError) return fail(error.code, error.message);
+    if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
+    return fail("internal_error", `download failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Pagination variant of ``acquireSource`` for provider-declared JSON list
+ * APIs. Fetches successive pages by stepping the ``offset`` query parameter,
+ * merges the arrays at ``pagination.recordsPath``, and publishes the merged
+ * document through the same cache/task-asset path as the single-request
+ * flow. Caps are loud: exceeding ``maxRecords`` or ``maxPages`` fails the
+ * acquisition instead of truncating.
+ */
+async function acquireJsonPaginatedSource(options: AcquireSourceOptions): Promise<AcquisitionResult> {
+  const {
+    source,
+    filename,
+    workdirRoot,
+    cache,
+    client,
+    dataLevel,
+    maxBytes,
+    expectedMediaTypes,
+    requestHeaders,
+    progress,
+    signal,
+    allowedHosts = CURATED_SOURCE_HOSTS,
+    resolve,
+    pagination,
+  } = options;
+  if (options.method === "POST" || options.body !== undefined || (options.resumeFromBytes ?? 0) > 0) {
+    throw new TypeError("paginated acquisition supports plain GET without resume only");
+  }
+  if (options.expectedSize !== undefined || options.expectedSha256 !== undefined || options.expectedMd5 !== undefined) {
+    throw new TypeError("paginated acquisition cannot verify expected checksums of a merged document");
+  }
+  if (pagination === undefined) throw new TypeError("pagination spec is required");
+  if (!Number.isSafeInteger(pagination.pageSize) || pagination.pageSize < 1) {
+    throw new TypeError("pagination pageSize must be a positive integer");
+  }
+  if (!Number.isSafeInteger(pagination.maxRecords) || pagination.maxRecords < 1) {
+    throw new TypeError("pagination maxRecords must be a positive integer");
+  }
+  if (!Number.isSafeInteger(pagination.maxPages) || pagination.maxPages < 1) {
+    throw new TypeError("pagination maxPages must be a positive integer");
+  }
+  if (!/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(pagination.recordsPath)) {
+    throw new TypeError("pagination recordsPath must be a dot path of plain keys");
+  }
+
+  const dirs = taskWorkDirs(workdirRoot);
+  await ensureAcquisitionDirs(dirs);
+  const attemptId = `download_attempt_${randomUUID()}`;
+  const startedAt = new Date().toISOString();
+  const partPath = options.partPath ?? path.join(dirs.downloadTmp, `${attemptId}.part`);
+  const callerOwnedPart = options.partPath !== undefined;
+  const onPublished = options.onPublished;
+  const notifyPublished = async (
+    filePath: string,
+    checksum: string,
+    sizeBytes: number,
+    mediaType: string,
+  ): Promise<void> => {
+    await onPublished?.({
+      filename,
+      filePath,
+      sha256: checksum,
+      sizeBytes,
+      mediaType,
+      sourceUrl: source.url,
+      sourceDatabase: source.database,
+    });
+  };
+  const fail = (code: AcquisitionError["code"], message: string): AcquisitionResult => ({
+    schema_version: "1.0",
+    attempt: {
+      schema_version: "1.0",
+      attempt_id: attemptId,
+      source_id: source.source_id,
+      url: source.url,
+      status: "failed",
+      bytes_received: 0,
+      error_code: code,
+      error_message: message,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    },
+    asset: null,
+  });
+  const cleanupPart = async (): Promise<void> => {
+    await unlink(partPath).catch(() => undefined);
+  };
+
+  try {
+    const resolver = resolve ?? client.resolve;
+    await validateHttpsSourceUrl(source.url, allowedHosts, { resolvePublic: true, resolve: resolver });
+    const base = new URL(source.url);
+    base.searchParams.set("limit", String(pagination.pageSize));
+    base.searchParams.set("offset", "0");
+    const recordsPathKeys = pagination.recordsPath.split(".");
+    const requestHash = canonicalRequestHash(source.database, source.accession, source.url, undefined);
+
+    const cached = await cache.readMetadata(requestHash);
+    if (cached !== null) {
+      const cachedSha = cached.sha256;
+      const cachedBlob = cache.blobPath(cachedSha);
+      const cachedStat = await stat(cachedBlob).catch(() => null);
+      if (cachedStat !== null && cachedStat.isFile() && (await sha256File(cachedBlob)) === cachedSha) {
+        const cachedSize = cachedStat.size;
+        const cachedMediaType = (cached.media_type ?? "application/octet-stream").split(";", 1)[0].trim().toLowerCase();
+        if (cachedSize > maxBytes) {
+          throw new AcquisitionError("size_exceeded", "cached download exceeds maximum size");
+        }
+        if (expectedMediaTypes !== undefined && !expectedMediaTypes.has(cachedMediaType)) {
+          throw new AcquisitionError("validation_error", `unexpected cached content type: ${cachedMediaType || "missing"}`);
+        }
+        const assetId = assetIdFromSha256(cachedSha);
+        const destination = await publishTaskAsset(cachedBlob, dirs, assetId, filename, cachedSha);
+        await notifyPublished(destination, cachedSha, cachedSize, cachedMediaType);
+        await progress?.finalize?.(cachedSize, cachedSize);
+        return {
+          schema_version: "1.0",
+          attempt: {
+            schema_version: "1.0",
+            attempt_id: attemptId,
+            source_id: source.source_id,
+            url: source.url,
+            status: "succeeded",
+            bytes_received: cachedSize,
+            started_at: startedAt,
+            finished_at: new Date().toISOString(),
+            error_code: null,
+            error_message: null,
+          },
+          asset: buildSourceAsset(assetId, destination, dirs, cachedSha, cachedSize, cachedMediaType, source, attemptId, dataLevel),
+        };
+      }
+    }
+
+    const readPage = async (pageUrl: string): Promise<{ records: Record<string, unknown>[]; document: Record<string, unknown> }> => {
+      const response = await client.request(pageUrl, {
+        method: "GET",
+        headers: { Accept: "application/json", ...requestHeaders },
+        signal,
+        timeoutMs: options.timeoutMs,
+        resolve: resolver,
+        validateUrl: async (candidate) => {
+          try {
+            await validateHttpsSourceUrl(candidate, allowedHosts, { resolvePublic: true, resolve: resolver });
+          } catch (error) {
+            if (error instanceof UnsafeUrlError) throw new AcquisitionError("validation_error", error.message);
+            throw error;
+          }
+        },
+      });
+      if (response.status < 200 || response.status >= 300) {
+        await response.discard();
+        throw new AcquisitionError(httpFailureCode(response.status), `download returned HTTP ${response.status}`);
+      }
+      const mediaType = mediaTypeFromHeader(response.headers);
+      if (expectedMediaTypes !== undefined && !expectedMediaTypes.has(mediaType)) {
+        await response.discard();
+        throw new AcquisitionError("media_mismatch", `unexpected content type: ${mediaType || "missing"}`);
+      }
+      const chunks: Buffer[] = [];
+      let pageBytes = 0;
+      for await (const chunk of response.body) {
+        if (signal?.aborted === true) {
+          throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+        }
+        pageBytes += chunk.length;
+        if (pageBytes > maxBytes) {
+          throw new AcquisitionError("size_exceeded", "paginated page exceeded maximum size");
+        }
+        chunks.push(chunk);
+      }
+      let document: unknown;
+      try {
+        document = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        throw new AcquisitionError("internal_error", "paginated response was not valid JSON");
+      }
+      if (document === null || typeof document !== "object" || Array.isArray(document)) {
+        throw new AcquisitionError("internal_error", "paginated response must be a JSON object");
+      }
+      let cursor: unknown = document as Record<string, unknown>;
+      for (const key of recordsPathKeys) {
+        if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
+          throw new AcquisitionError("internal_error", `paginated response missing records path "${pagination.recordsPath}"`);
+        }
+        cursor = (cursor as Record<string, unknown>)[key];
+      }
+      if (!Array.isArray(cursor) || cursor.some((entry) => entry === null || typeof entry !== "object" || Array.isArray(entry))) {
+        throw new AcquisitionError("internal_error", `paginated response field "${pagination.recordsPath}" must be an array of objects`);
+      }
+      return { records: cursor as Record<string, unknown>[], document: document as Record<string, unknown> };
+    };
+
+    const records: Record<string, unknown>[] = [];
+    let firstDocument: Record<string, unknown> | null = null;
+    let lastDocument: Record<string, unknown> | null = null;
+    let pages = 0;
+    let shortPage = false;
+    while (pages < pagination.maxPages && !shortPage) {
+      const pageUrl = new URL(base);
+      pageUrl.searchParams.set("offset", String(pages * pagination.pageSize));
+      const page = await readPage(pageUrl.toString());
+      pages += 1;
+      if (firstDocument === null) firstDocument = page.document;
+      lastDocument = page.document;
+      records.push(...page.records);
+      if (records.length > pagination.maxRecords) {
+        await cleanupPart();
+        return fail(
+          "validation_error",
+          `pagination_record_cap_exceeded: paginated acquisition exceeded the configured record cap of ${pagination.maxRecords}`,
+        );
+      }
+      shortPage = page.records.length < pagination.pageSize;
+    }
+    if (!shortPage) {
+      await cleanupPart();
+      return fail(
+        "validation_error",
+        `pagination_record_cap_exceeded: paginated acquisition exhausted ${pagination.maxPages} full pages without reaching the end; raise the configured record cap or narrow the query`,
+      );
+    }
+
+    const merged: Record<string, unknown> = { ...firstDocument };
+    let cursor: Record<string, unknown> = merged;
+    for (const key of recordsPathKeys.slice(0, -1)) {
+      const child = cursor[key];
+      cursor = child !== null && typeof child === "object" && !Array.isArray(child)
+        ? child as Record<string, unknown>
+        : (cursor[key] = {});
+    }
+    cursor[recordsPathKeys[recordsPathKeys.length - 1]!] = records;
+    const lastMeta = lastDocument !== null ? lastDocument["page_meta"] : null;
+    if (lastMeta !== null && typeof lastMeta === "object" && !Array.isArray(lastMeta)) {
+      merged["page_meta"] = lastMeta;
+    }
+    const mergedBytes = Buffer.from(JSON.stringify(merged), "utf8");
+    if (mergedBytes.length > maxBytes) {
+      await cleanupPart();
+      return fail("size_exceeded", "merged paginated document exceeded maximum size");
+    }
+    await writeFile(partPath, mergedBytes);
+    const checksum = createHash("sha256").update(mergedBytes).digest("hex");
+
+    const blobPath = await publishCache(partPath, cache, checksum);
+    const assetId = assetIdFromSha256(checksum);
+    const destination = await publishTaskAsset(blobPath, dirs, assetId, filename, checksum);
+    await cache.writeMetadata(requestHash, {
+      sha256: checksum,
+      size_bytes: String(mergedBytes.length),
+      media_type: "application/json",
+    });
+    await cleanupPart();
+    await notifyPublished(destination, checksum, mergedBytes.length, "application/json");
+    await progress?.finalize?.(mergedBytes.length, mergedBytes.length);
+    return {
+      schema_version: "1.0",
+      attempt: {
+        schema_version: "1.0",
+        attempt_id: attemptId,
+        source_id: source.source_id,
+        url: source.url,
+        status: "succeeded",
+        bytes_received: mergedBytes.length,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        error_code: null,
+        error_message: null,
+      },
+      asset: buildSourceAsset(assetId, destination, dirs, checksum, mergedBytes.length, "application/json", source, attemptId, dataLevel),
+    };
+  } catch (error) {
+    if ((error instanceof Error && error.name === "AbortError") || signal?.aborted === true) {
+      if (!callerOwnedPart) await cleanupPart();
+      throw error;
+    }
     if (!callerOwnedPart) await cleanupPart();
     if (error instanceof AcquisitionError) return fail(error.code, error.message);
     if (error instanceof UnsafeUrlError) return fail("validation_error", error.message);
