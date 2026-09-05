@@ -157,7 +157,7 @@
 
 ### ChEMBL 采集单请求上限 100 导致结果静默截断
 
-- **状态：** 已修复为可配置上限（2026-09-06，协作者 `c855cbab` 将 `chembl_max_records`/`chembl_max_compounds` 纳入 RuntimeLimits 并贯通设置页；本会话并行修复在合并中保留 64MB 响应字节上限贡献）；完整翻页待立项（见 TODO P1）。
+- **状态：** 已修复（2026-09-06）。`chembl_max_records`/`chembl_max_compounds` 纳入 RuntimeLimits 并贯通设置页（协作者 `c855cbab`）；同日落地自动翻页——`AcquisitionDownloadPlan.pagination`（recordsPath/pageSize/maxRecords/maxPages）由下载器逐页取回合并为单一资产，超限显式失败而非静默截断，64MB 响应字节上限同步保留。
 - **现象：** `chembl-provider.ts` 的 `chemblFilesUrl` 固定 `limit=100&offset=0`，且采集计划为"单 URL=单资产"，匹配数超过 100 时超出部分被静默丢弃、无任何信号。论文样例3/样例5 活性表"恰好 100 行"即此缺陷的直接后果（2026-09-06 代码级核实）。
 - **已落地缓解：** 单请求 `limit` 由固定 100 改为可配置 `chembl_max_records`（默认 10,000，远超该查询形态——单靶点×≤1,000 化合物×IC50/EC50/Ki/Kd——的现实结果集规模），前端设置页可调；响应字节上限 16MB→64MB 同步放宽；回归测试钉住 limit/offset/maxBytes（`acquisition-first-composition.test.ts`）。live 探测确认 API 对 10,000 量级 limit 无硬拒绝（EBI 间歇性 500 与 limit 取值无关）。
 - **遗留（完整修复）：** 采集运行时是"单计划=单 URL=单资产"模型，provider 无多请求翻页钩子；自动翻页需要扩展 `AcquisitionDownloadPlan` 或引入 provider 分页循环（ADR 级改动），实施时须同步 bump implementation digest（本次缓解刻意未动 digest，避免 recipe 注册漂移）。

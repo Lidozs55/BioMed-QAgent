@@ -9,7 +9,7 @@ import type {
 
 export const CHEMBL_FILES_PROVIDER_ID = "chembl.files.v1";
 export const CHEMBL_FILES_IMPLEMENTATION_DIGEST =
-  "f6347cf2389f5ff4c83c01cd1fe84a9729c9f04b1f13f9045d242981b5d730b7";
+  "c84a9a3d7891f71690b43311670a66b70b77058916a9f11dafc837924a4af08a";
 export const CHEMBL_FILES_SOURCE_ID_PREFIX = "source_chembl_bioactivity";
 
 const CHEMBL_HOST = "www.ebi.ac.uk";
@@ -17,6 +17,10 @@ const CHEMBL_ID = /^CHEMBL[1-9][0-9]*$/;
 const MAX_CHEMBL_RESPONSE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_COMPOUNDS = 1000;
 const DEFAULT_MAX_RECORDS = 10000;
+// Records per page request. The API silently drops results beyond `limit`,
+// so the pagination loop — not a single oversized request — is what
+// guarantees completeness up to the configured record cap.
+const CHEMBL_PAGE_SIZE = 1000;
 const ACTIVITY_TYPES = new Set(["IC50", "EC50", "Ki", "Kd"]);
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
 const TARGET_KEYS = ["chembl_target", "chembl_targets", "target_chembl_id", "target_chembl_ids"];
@@ -112,17 +116,14 @@ export function chemblFilesUrl(options: {
   targetId: string;
   compoundIds: readonly string[];
   activityTypes: readonly string[];
-  maxRecords?: number;
+  /** First-page record count; further pages step `offset` under pagination. */
+  pageSize?: number;
 }): string {
   const query = new URLSearchParams();
   query.set("target_chembl_id", options.targetId);
   query.set("molecule_chembl_id__in", options.compoundIds.join(","));
   query.set("standard_type__in", options.activityTypes.join(","));
-  // The API silently drops results beyond `limit`; the configured cap must
-  // stay beyond any realistic result set for this query shape (one target ×
-  // at most maxCompounds compounds × IC50/EC50/Ki/Kd) until follow-up
-  // pagination is available.
-  query.set("limit", String(options.maxRecords ?? DEFAULT_MAX_RECORDS));
+  query.set("limit", String(options.pageSize ?? CHEMBL_PAGE_SIZE));
   query.set("offset", "0");
   return `https://${CHEMBL_HOST}/chembl/api/data/activity.json?${query.toString()}`;
 }
@@ -155,7 +156,7 @@ export function createChemblFilesProvider(options: {
           source_id: sourceId(targetId, compoundIds),
           database: "chembl",
           accession: targetId,
-          url: chemblFilesUrl({ targetId, compoundIds, activityTypes, maxRecords }),
+          url: chemblFilesUrl({ targetId, compoundIds, activityTypes, pageSize: CHEMBL_PAGE_SIZE }),
           title: `ChEMBL bioactivity records for ${targetId}`,
           retrieved_at: new Date().toISOString(),
         },
@@ -166,6 +167,12 @@ export function createChemblFilesProvider(options: {
         accept: "application/json",
         allowedHosts: new Set([CHEMBL_HOST]),
         assetRole: "carrier",
+        pagination: {
+          recordsPath: "activities",
+          pageSize: CHEMBL_PAGE_SIZE,
+          maxRecords,
+          maxPages: Math.ceil(maxRecords / CHEMBL_PAGE_SIZE),
+        },
       };
     },
   });

@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,6 +12,7 @@ import {
   chemblFilesUrl,
   createChemblFilesProvider,
 } from "../src/dataset/acquisition/chembl-provider.js";
+import type { CoreAcquisitionError } from "../src/dataset/acquisition/runtime.js";
 import { FIXED_BIOMEDICAL_PROVIDER_IDS } from "../src/dataset/acquisition/biomedical-providers.js";
 import {
   createGeoFilesProvider,
@@ -33,11 +35,14 @@ const CHEMBL_PARAMETERS: CoreAcquisitionRequest["parameters"] = {
   },
 };
 
-function request(parameters: CoreAcquisitionRequest["parameters"] = CHEMBL_PARAMETERS): CoreAcquisitionRequest {
+function request(
+  parameters: CoreAcquisitionRequest["parameters"] = CHEMBL_PARAMETERS,
+  taskId = "task_chembl",
+): CoreAcquisitionRequest {
   return {
     schema_version: "1.0",
     request_id: "request_chembl",
-    task_id: "task_chembl",
+    task_id: taskId,
     requirement_id: "build_chembl",
     binding_id: "binding_chembl",
     mode: "builtin",
@@ -122,16 +127,22 @@ describe("acquisition-first phase3 composition", () => {
     });
   });
 
-  it("caps ChEMBL activity requests beyond any realistic result set so results are never silently truncated at 100", async () => {
+  it("caps ChEMBL activity requests with declared pagination so results are never silently truncated", async () => {
     const url = new URL(chemblFilesUrl({
       targetId: "CHEMBL9999",
       compoundIds: ["CHEMBL100", "CHEMBL200"],
       activityTypes: ["IC50", "Ki"],
     }));
-    expect(url.searchParams.get("limit")).toBe("10000");
+    expect(url.searchParams.get("limit")).toBe("1000");
     expect(url.searchParams.get("offset")).toBe("0");
     const plan = await createChemblFilesProvider().plan(request());
     expect(plan.maxBytes).toBe(64 * 1024 * 1024);
+    expect(plan.pagination).toEqual({
+      recordsPath: "activities",
+      pageSize: 1000,
+      maxRecords: 10000,
+      maxPages: 10,
+    });
   });
 
   it("registers the fixed ChEMBL provider and publishes a carrier asset", async () => {
@@ -175,6 +186,97 @@ describe("acquisition-first phase3 composition", () => {
     expect(plan.source.source_id).toMatch(new RegExp(`^${CHEMBL_FILES_SOURCE_ID_PREFIX}_[0-9a-f]{20}$`));
     expect(result.attempts).toHaveLength(1);
     expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges ChEMBL pages into one asset and requests each offset until a short page", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "acquisition-first-"));
+    roots.push(root);
+    const pageBody = (offset: number, count: number, total: number): string =>
+      JSON.stringify({
+        activities: Array.from({ length: count }, (_, i) => ({ activity_id: offset + i })),
+        page_meta: { limit: 1000, offset, total_count: total },
+      });
+    const requestedUrls: string[] = [];
+    const executor = vi.fn(async ({ url }: { url: URL }) => {
+      requestedUrls.push(url.toString());
+      const offset = Number(url.searchParams.get("offset"));
+      const count = offset === 0 ? 1000 : 700;
+      const body = pageBody(offset, count, 1700);
+      return {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) },
+        body: (async function* (): AsyncIterable<Buffer> {
+          yield Buffer.from(body);
+        })(),
+      };
+    });
+    const client = new PublicHttpClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      executor,
+    });
+    const runtime = createPhase3AcquisitionRuntime({
+      taskId: "task_chembl_pages",
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+    });
+
+    const result = await runtime.acquire(request(CHEMBL_PARAMETERS, "task_chembl_pages"));
+    expect(result.attempts).toHaveLength(1);
+    expect(requestedUrls).toHaveLength(2);
+    expect(new URL(requestedUrls[0]!).searchParams.get("offset")).toBe("0");
+    expect(new URL(requestedUrls[1]!).searchParams.get("offset")).toBe("1000");
+    const expected = JSON.stringify({
+      activities: Array.from({ length: 1700 }, (_, i) => ({ activity_id: i })),
+      page_meta: { limit: 1000, offset: 1000, total_count: 1700 },
+    });
+    const sha = createHash("sha256").update(expected).digest("hex");
+    const merged = JSON.parse(await readFile(
+      path.join(root, "source_assets", `asset_${sha}`, "chembl-chembl9999-bioactivity.json"),
+      "utf8",
+    ));
+    expect(merged.activities).toHaveLength(1700);
+    expect(merged.activities[0].activity_id).toBe(0);
+    expect(merged.activities[1699].activity_id).toBe(1699);
+    expect(merged.page_meta).toEqual({ limit: 1000, offset: 1000, total_count: 1700 });
+  });
+
+  it("fails loudly when ChEMBL pagination exhausts its configured record cap", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "acquisition-first-"));
+    roots.push(root);
+    const executor = vi.fn(async ({ url }: { url: URL }) => {
+      const offset = Number(url.searchParams.get("offset"));
+      const body = JSON.stringify({
+        activities: Array.from({ length: 1000 }, (_, i) => ({ activity_id: offset + i })),
+        page_meta: { limit: 1000, offset, total_count: 999_999 },
+      });
+      return {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) },
+        body: (async function* (): AsyncIterable<Buffer> {
+          yield Buffer.from(body);
+        })(),
+      };
+    });
+    const client = new PublicHttpClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      executor,
+    });
+    const runtime = createPhase3AcquisitionRuntime({
+      taskId: "task_chembl_cap",
+      taskRoot: root,
+      cache: new ContentCache(path.join(root, "cache")),
+      client,
+      chemblMaxRecords: 2000,
+    });
+
+    const error = await runtime.acquire(request(CHEMBL_PARAMETERS, "task_chembl_cap")).then(
+      (): CoreAcquisitionError => { throw new Error("expected paginated acquisition to fail"); },
+      (reason: unknown) => reason as CoreAcquisitionError,
+    );
+    expect(error.message).toBe("acquisition failed: validation_error");
+    expect(error.details.error_message).toContain("pagination_record_cap_exceeded");
+    expect(executor).toHaveBeenCalledTimes(2);
   });
 
   it("rejects unregistered ChEMBL query controls and incomplete identities", async () => {
