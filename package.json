@@ -2,6 +2,7 @@
   "name": "biomed-qagent",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "scripts": {
     "dev": "pnpm --filter @biomed/server dev",
     "dev:frontend-standalone": "pnpm --filter @biomed/frontend dev",
