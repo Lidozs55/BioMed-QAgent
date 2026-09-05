@@ -122,6 +122,18 @@ describe("acquisition-first phase3 composition", () => {
     });
   });
 
+  it("caps ChEMBL activity requests beyond any realistic result set so results are never silently truncated at 100", async () => {
+    const url = new URL(chemblFilesUrl({
+      targetId: "CHEMBL9999",
+      compoundIds: ["CHEMBL100", "CHEMBL200"],
+      activityTypes: ["IC50", "Ki"],
+    }));
+    expect(url.searchParams.get("limit")).toBe("10000");
+    expect(url.searchParams.get("offset")).toBe("0");
+    const plan = await createChemblFilesProvider().plan(request());
+    expect(plan.maxBytes).toBe(64 * 1024 * 1024);
+  });
+
   it("registers the fixed ChEMBL provider and publishes a carrier asset", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "acquisition-first-"));
     roots.push(root);
