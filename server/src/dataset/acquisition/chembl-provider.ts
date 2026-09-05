@@ -15,7 +15,8 @@ export const CHEMBL_FILES_SOURCE_ID_PREFIX = "source_chembl_bioactivity";
 const CHEMBL_HOST = "www.ebi.ac.uk";
 const CHEMBL_ID = /^CHEMBL[1-9][0-9]*$/;
 const MAX_CHEMBL_RESPONSE_BYTES = 16 * 1024 * 1024;
-const MAX_COMPOUNDS = 32;
+const DEFAULT_MAX_COMPOUNDS = 1000;
+const DEFAULT_MAX_RECORDS = 10000;
 const ACTIVITY_TYPES = new Set(["IC50", "EC50", "Ki", "Kd"]);
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
 const TARGET_KEYS = ["chembl_target", "chembl_targets", "target_chembl_id", "target_chembl_ids"];
@@ -86,12 +87,12 @@ function parseTarget(input: ChemblParameters): string {
   return candidates[0]!;
 }
 
-function parseCompounds(input: ChemblParameters): string[] {
+function parseCompounds(input: ChemblParameters, maxCompounds: number): string[] {
   const candidates = valuesFor(input.entities, COMPOUND_KEYS);
-  if (candidates.length === 0 || candidates.length > MAX_COMPOUNDS ||
+  if (candidates.length === 0 || candidates.length > maxCompounds ||
       candidates.some((value) => !CHEMBL_ID.test(value))) {
     throw new TypeError(
-      `chembl.files.v1 requires 1-${MAX_COMPOUNDS} valid ChEMBL compound IDs ` +
+      `chembl.files.v1 requires 1-${maxCompounds} valid ChEMBL compound IDs ` +
         `in entities under keys: ${COMPOUND_KEYS.join(", ")}`,
     );
   }
@@ -111,12 +112,13 @@ export function chemblFilesUrl(options: {
   targetId: string;
   compoundIds: readonly string[];
   activityTypes: readonly string[];
+  maxRecords?: number;
 }): string {
   const query = new URLSearchParams();
   query.set("target_chembl_id", options.targetId);
   query.set("molecule_chembl_id__in", options.compoundIds.join(","));
   query.set("standard_type__in", options.activityTypes.join(","));
-  query.set("limit", "100");
+  query.set("limit", String(options.maxRecords ?? DEFAULT_MAX_RECORDS));
   query.set("offset", "0");
   return `https://${CHEMBL_HOST}/chembl/api/data/activity.json?${query.toString()}`;
 }
@@ -129,14 +131,19 @@ function sourceId(targetId: string, compoundIds: readonly string[]): string {
   return `${CHEMBL_FILES_SOURCE_ID_PREFIX}_${digest}`;
 }
 
-export function createChemblFilesProvider(): AcquisitionProviderHandler {
+export function createChemblFilesProvider(options: {
+  maxCompounds?: number;
+  maxRecords?: number;
+} = {}): AcquisitionProviderHandler {
   return Object.freeze({
     providerId: CHEMBL_FILES_PROVIDER_ID,
     implementationDigest: CHEMBL_FILES_IMPLEMENTATION_DIGEST,
     plan(request: CoreAcquisitionRequest): AcquisitionDownloadPlan {
       const parsed = parameters(request);
       const targetId = parseTarget(parsed);
-      const compoundIds = parseCompounds(parsed);
+      const maxCompounds = options.maxCompounds ?? DEFAULT_MAX_COMPOUNDS;
+      const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
+      const compoundIds = parseCompounds(parsed, maxCompounds);
       const activityTypes = parseActivityTypes(parsed);
       return {
         source: {
@@ -144,7 +151,7 @@ export function createChemblFilesProvider(): AcquisitionProviderHandler {
           source_id: sourceId(targetId, compoundIds),
           database: "chembl",
           accession: targetId,
-          url: chemblFilesUrl({ targetId, compoundIds, activityTypes }),
+          url: chemblFilesUrl({ targetId, compoundIds, activityTypes, maxRecords }),
           title: `ChEMBL bioactivity records for ${targetId}`,
           retrieved_at: new Date().toISOString(),
         },

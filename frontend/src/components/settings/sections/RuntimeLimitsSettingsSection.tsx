@@ -52,6 +52,8 @@ const FIELDS: ReadonlyArray<{
   { key: "max_download_mib", label: "单文件下载大小", description: "来源文件允许下载的最大大小。不会改变安全 URL、完整性校验和发布门禁。", unit: "MiB", section: "data" },
   { key: "acquisition_max_attempts", label: "采集最大尝试次数", description: "Core 来源采集在可重试网络故障后的总尝试次数，重试按同来源请求间隔指数退避。", unit: "次", section: "data" },
   { key: "gdc_max_files", label: "GDC 单次下载文件数", description: "一次 GDC 数据获取最多下载的文件数，避免只取极小样本导致无法比较。", unit: "个", section: "data" },
+  { key: "chembl_max_compounds", label: "ChEMBL 单请求化合物数", description: "单次 ChEMBL 活性数据请求允许的化合物数量。", unit: "个", section: "data" },
+  { key: "chembl_max_records", label: "ChEMBL 单请求记录数", description: "单次 ChEMBL 活性数据请求返回的最大记录数量。", unit: "条", section: "data" },
 ];
 
 const SECTION_META = {
