@@ -454,9 +454,14 @@ export function createPhase3AcquisitionRuntime(options: {
   maxAttempts?: number;
   /** RuntimeLimits-derived base delay between acquisition retries. */
   retryBaseDelayMs?: number;
+  chemblMaxCompounds?: number;
+  chemblMaxRecords?: number;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
-  for (const provider of createCoreAcquisitionProviders()) registry.registerProvider(provider);
+  for (const provider of createCoreAcquisitionProviders({
+    chembl_max_compounds: options.chemblMaxCompounds ?? DEFAULT_RUNTIME_LIMITS.chembl_max_compounds,
+    chembl_max_records: options.chemblMaxRecords ?? DEFAULT_RUNTIME_LIMITS.chembl_max_records,
+  })) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
     sourceAssetRegistry: options.sourceAssetRegistry ?? new SourceAssetRegistry(options.taskId, options.taskRoot),
@@ -609,6 +614,8 @@ export async function createPhase3Runtime(
         downloadTimeoutMs: limits.download_timeout_seconds * 1000,
         maxAttempts: limits.acquisition_max_attempts,
         retryBaseDelayMs: limits.request_interval_ms,
+        chemblMaxCompounds: limits.chembl_max_compounds,
+        chemblMaxRecords: limits.chembl_max_records,
       });
       const service = createDatasetCoreService({
         tsCore,
