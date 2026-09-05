@@ -1,4 +1,5 @@
 import type { AcquisitionProviderHandler } from "./runtime.js";
+import type { RuntimeLimits } from "@biomed/contracts";
 import { createChemblFilesProvider, CHEMBL_FILES_PROVIDER_ID } from "./chembl-provider.js";
 import { createGdcFilesProvider, createGeoFilesProvider, GDC_FILES_PROVIDER_ID, GEO_FILES_PROVIDER_ID } from "./expression-providers.js";
 import { createFixedBiomedicalProviders, FIXED_BIOMEDICAL_PROVIDER_IDS } from "./biomedical-providers.js";
@@ -60,9 +61,12 @@ export const CORE_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProv
 export const DYNAMIC_ACQUISITION_PROVIDER_DESCRIPTORS: readonly CoreAcquisitionProviderDescriptor[] =
   Object.freeze(CORE_ACQUISITION_PROVIDER_DESCRIPTORS.filter((entry) => entry.dynamicInput !== "binary_archive"));
 
-export function createCoreAcquisitionProviders(): readonly AcquisitionProviderHandler[] {
+export function createCoreAcquisitionProviders(limits?: Pick<RuntimeLimits, "chembl_max_compounds" | "chembl_max_records">): readonly AcquisitionProviderHandler[] {
   return [
-    createChemblFilesProvider(),
+    createChemblFilesProvider({
+      maxCompounds: limits?.chembl_max_compounds,
+      maxRecords: limits?.chembl_max_records,
+    }),
     createGeoFilesProvider(),
     createGdcFilesProvider(),
     ...createFixedBiomedicalProviders(),

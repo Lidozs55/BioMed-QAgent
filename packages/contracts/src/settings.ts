@@ -39,6 +39,8 @@ export interface RuntimeLimits {
   database_timeout_seconds: number;
   max_download_mib: number;
   gdc_max_files: number;
+  chembl_max_compounds: number;
+  chembl_max_records: number;
   request_interval_ms: number;
   /**
    * Wall-clock timeout for a single model-provider HTTP request (VLM chart
@@ -88,6 +90,8 @@ export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
   database_timeout_seconds: 600,
   max_download_mib: 8192,
   gdc_max_files: 50,
+  chembl_max_compounds: 1000,
+  chembl_max_records: 10000,
   request_interval_ms: 500,
   model_request_timeout_seconds: 120,
   acquisition_max_attempts: 3,
@@ -135,6 +139,8 @@ export const RUNTIME_LIMIT_RANGES = {
   database_timeout_seconds: { min: 10, max: 3600 },
   max_download_mib: { min: 64, max: 65_536 },
   gdc_max_files: { min: 1, max: 1000 },
+  chembl_max_compounds: { min: 1, max: 10_000 },
+  chembl_max_records: { min: 1, max: 100_000 },
   request_interval_ms: { min: 0, max: 10_000 },
   model_request_timeout_seconds: { min: 10, max: 3600 },
   acquisition_max_attempts: { min: 1, max: 10 },
