@@ -13,6 +13,8 @@
 
 ## P1 — Runtime and evidence hardening
 
+- [ ] **采集 provider 自动翻页（ChEMBL limit 截断的完整修复）。** 采集运行时当前为"单计划=单 URL=单资产"模型，provider 无法在匹配数超过单请求上限时继续翻页（ChEMBL 曾因此静默截断，见 [ISSUES](ISSUES.md)；2026-09-06 已缓解为 limit=10,000）。按 Core-owned acquisition 边界扩展 `AcquisitionDownloadPlan` 支持多请求计划或 provider 分页循环，实施时同步 bump implementation digest。
+  - 验收：构造超过单页的 ChEMBL 查询（mock 分页响应）时，注册资产包含全部记录与页级来源定位；达到总页数上限时显式失败而非静默截断；既有单请求 provider 行为不回退。
 - [ ] **全局 exact-only 图表坐标迁移（ADR-043）。** Prompt/skill 已将正式图表数值限定为正文表格、补充数值文件、官方出版社 source data 或论文/作者明确关联仓库中的显式数值；旧 VLM 图像估计点 + HIL 发布路径仅为迁移期兼容代码，已过时。按 [`architecture/chart-exact-data-policy.md`](architecture/chart-exact-data-policy.md) 的文件所有权并行：(1) 新增 exact source-data acquisition/parser/semantic mapping 正向路径；(2) 移除 producer/review、contracts/profile/validator、frontend 和 evaluator 旧估计行为。冻结 `gold-v1` 不原地修改，另建 successor evaluation。
   - 验收：任何 pixel/vector/OCR/interpolation/fitting estimate 即使 accepted/corrected 也被 Core 硬拒；无精确 point source 时 `chart_points` 可空且留有有界检索审计，独立精确表格值仍可部分发布；最终报告列出跳过 figure/panel、已搜索来源和联系作者/提供 source-data 建议；正向 source-data、正确弃权、已知但不可访问、hostile reviewed estimate、部分发布五类回归通过。
 
@@ -63,7 +65,7 @@
 ## 论文整改遗留（2026-09-05 两轮评审核验后；表述类问题已落地，以下为需运行数据/实验支撑的硬项）
 
 - [ ] **M1 数据值正确性对照评测。** 主体即 P0"参考集对照准确性评测（G1 evaluator）"条目；补充三点：样例1 两环境互查需补抽样协议与共有记录数并更新报告 5.4.2；样例6 图表通道统计提取点数、误差分布与 `chart_evidence_gate` 排除量并写入 5.4.3（本版已声明为零量化）。
-- [ ] **M3 完备性疑点核实。** 核实样例3/样例5 活性数据恰为 100 行是否为检索分页上限，结论写入报告；样例4 文献仅 2 行的完备性说明。
+- [x] **M3 完备性疑点核实（2026-09-06 完成）。** 根因确认为 ChEMBL 采集提供者单请求硬编码 limit=100 且无翻页（`chembl-provider.ts`，代码级证据），结论已写入报告 5.2.1（定性为采集缺陷，注明缓解与重跑口径）；样例4 文献 2 行的中性说明同步写入。缓解修复见 `fix/chembl-request-cap`，完整翻页立项见 P1。
 - [ ] **M5 架构图 4.1 表述。** 图中"Agent 不可编排 DAG"与"Agent 设计多表拓扑"并置易读作自相矛盾（正文 3.5 已加执行编排 vs 产品结构的澄清）；修改 drawio 源措辞并重导出（遵循 drawio-diagram-style skill）。
 - [ ] **M6 反馈迭代与 HIL 细节。** 从样例6 flash 运行事件恢复 v1→v2 替代的错误原因、反馈来源与修改内容并写入 5.4.3（本版仅指向归档事件记录）；细分 3 次受控来源访问授权的人工/初审归属；测 LLM 初审准确率与同族自审偏差。相关：P1"HIL 交互案例级证据归档"。
 - [ ] **M8 VLM 通道量化与配置依据。** VLM 置信度三档的校准与误差率；"降级失败"判定的显式定义；图表提取选用 qwen3.8-flash（轻量档）承担高精度数值提取的理由或档位调整。
