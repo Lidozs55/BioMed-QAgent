@@ -1,5 +1,7 @@
 # BioMed-QAgent
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 BioMed-QAgent 面向生物医学开放数据，把自然语言需求转化为可追溯、可验证、可下载的标准化数据集。Pi Agent 负责意图理解、来源发现和规格生成，确定性的 TypeScript Dataset Core 负责获取、解析、整合、验证和不可变发布。
 
 ## 核心能力
@@ -93,10 +95,7 @@ Agent workspace 与 Core publication 物理分离；API 只暴露经 manifest �
 
 ## 分支与开发
 
-- `main` 是公开发布分支：承载面向使用者的 README 与 release tag，受分支保护，仅通过来自 `dev` 的 PR 更新。
-- `dev` 是开发集成分支：所有功能开发在此进行；架构文档、ADR、开发指南与任务规划也在 `dev` 上维护，见 [dev 分支 docs/ 目录](https://github.com/Lidozs55/BioMed-QAgent/tree/dev/docs)。
-
-开发环境的常见质量门命令：
+开发环境常用命令：
 
 ```bash
 pnpm lint          # workspace lint
@@ -112,4 +111,4 @@ pnpm run pack      # 打自包含部署包到 target/
 
 ## License
 
-见仓库分发包中的许可证文件（如适用）。
+本项目基于 [MIT License](./LICENSE) 发布。
