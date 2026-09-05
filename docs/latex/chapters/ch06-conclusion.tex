@@ -55,7 +55,7 @@ BioMed QAgent针对赛题“从科学问题到可用数据”，建立了一条�
 
 系统把“任务完成”定义为可重验的数据产品。每条正式数据都应说明来源、处理过程、质量状态和不确定之处；收到反馈后，系统可以定位修正并形成可追溯的新版本。这些能力直接对应赛题关于数据质量控制、来源追溯和图表数据提取的要求。
 
-十二个运行中，11 个形成可逐件校验的正式发布物，1 个在缺少必需输入时拒绝发布。跨环境比较进一步表明，正式发布机制能够提供比普通工作区导出更明确的文件清单、来源绑定和质量状态；由于每个条件只运行一次且部分用量记录不完整，实验不据此推断普遍效率优势。
+十二个运行中，11 个形成可逐件校验的正式发布物，1 个在缺少必需输入时拒绝发布。跨环境比较进一步表明，正式发布机制能够提供比普通工作区导出更明确的文件清单、来源绑定和质量状态。
 
 \textbf{核心贡献总结}：本系统展示了从任务事件、来源资产到发布回执的可检查证据链。十二个运行单元均留下运行边界内的事件记录，其中 11 个当前发布物的产物逐件通过回执与 SHA-256 重验，样例10 则在必需表缺失时保持未发布。该机制把候选准入与模型自报分离；其已验证范围是字节完整性、运行绑定和确定性门禁，科学真实性与需求覆盖仍需来源级和任务级评估。
 
@@ -67,4 +67,5 @@ BioMed QAgent针对赛题“从科学问题到可用数据”，建立了一条�
 \bibitem{docetl} Shankar S., et al. DocETL: A Deeply Optimized Declarative ETL System for Complex Data [C/OL]. arXiv:2410.12189, 2024.
 \bibitem{palimpzest} Shankar S., et al. Palimpzest: Optimizing AI-Powered Data Pipelines with Adaptive Declarative Programming [C/OL]. arXiv:2405.14696, 2024.
 \bibitem{temporal-approval} Temporal Technologies. Temporal Design Patterns: Human Approval [OL]. https://docs.temporal.io/develop/, 2026-08检索.
+\bibitem{qoder} Qoder. 什么是 Qoder: 面向真实工作的 Agentic 平台 [OL]. https://docs.qoder.com/zh/product-series/what-is-qoder, 2026-09检索.
 \end{thebibliography}

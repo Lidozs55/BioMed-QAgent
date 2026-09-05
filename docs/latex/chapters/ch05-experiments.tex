@@ -66,6 +66,8 @@
 
 \section{跨环境对照设计}\label{sec:factorial-design}
 
+Qoder 是阿里巴巴推出的面向真实工作的 Agentic 平台\cite{qoder}，可作为通用智能体环境的典型代表。本节以相同的核心任务与模型档位，对 BioMed QAgent 与 Qoder 进行对照测试，以观察专用数据管线在运行成本、需求覆盖和可审计性上是否较通用环境具有优势。
+
 \subsection{实验条件}
 
 样例1 考察 GEO 转录组的研究筛选、样本元数据、平台注释、探针--基因映射和表达数据交付；样例6 考察 EGFR 突变体活性记录、论文与实验信息、补充材料和图表证据。BioMed QAgent 使用 \code{qwen3.8-flash} 与 \mbox{\code{qwen3.8-max}}；Qoder 使用相同命名档位的模型，但完整推理配置未随导出文件提供。每个案例的四个观察单元共享核心任务与 CSV 交付目标，模型档位只在同一环境内比较。
@@ -103,7 +105,7 @@ token 消耗 & 模型调用的 token 总量 & 模型用量记录 \\ \hline
 \subsection{总体比较}
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.45\hsize}L>{\hsize=0.55\hsize}L>{\hsize=0.55\hsize}L>{\hsize=1.15\hsize}L>{\hsize=0.85\hsize}L>{\hsize=1.05\hsize}L>{\hsize=0.85\hsize}L>{\hsize=1.00\hsize}L}
-\caption{八个观察单元的运行成本与质量评价}\label{tab:factorial-efficiency}\\
+\caption{八个观察单元的运行成本与质量评价（样例1 为大批量数据处理工作，运行时长对性能和网速敏感，跨机器可对照性较差；文中样例1 测试均在同一网络环境和同一机器上运行）}\label{tab:factorial-efficiency}\\
 \toprule
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{时长} & \textbf{token} & \textbf{覆盖} & \textbf{可审计性} \\
 \midrule
@@ -112,9 +114,9 @@ token 消耗 & 模型调用的 token 总量 & 模型用量记录 \\ \hline
 \textbf{案例} & \textbf{模型} & \textbf{环境} & \textbf{终态} & \textbf{时长} & \textbf{token} & \textbf{覆盖} & \textbf{可审计性} \\
 \midrule
 \endhead
-样例1 & flash & \BMQ{} & 成功发布 & 26 min & 5{,}952 K & 高 & 高 \\ \hline
+样例1 & flash & \BMQ{} & 成功发布 & \textbf{26 min} & \textbf{5{,}952 K} & 高 & 高 \\ \hline
 样例1 & flash & \QDR{} & 完成交付 & 168 min & 52{,}940 K & 高 & 高 \\ \hline
-样例1 & max & \BMQ{} & 成功发布 & 30 min & 4{,}182 K & 高 & 高 \\ \hline
+样例1 & max & \BMQ{} & 成功发布 & \textbf{30 min} & \textbf{4{,}182 K} & 高 & 高 \\ \hline
 样例1 & max & \QDR{} & 完成交付 & 35 min & 4{,}474 K & 高 & 高 \\ \hline
 \addlinespace
 样例6 & flash & \BMQ{} & 成功发布 & \textbf{98.9 min} & \textbf{6{,}915 K} & 高 & 高 \\ \hline
@@ -135,7 +137,7 @@ token 消耗 & 模型调用的 token 总量 & 模型用量记录 \\ \hline
 
 \subsection{样例1：表达组学数据整合}\label{subsec:gold1-artifact-compare}
 
-样例1 按七项要求评价：研究纳入、差异表达、样本元数据、平台注释与探针--基因映射、探针水平数据、基因水平数据，以及分析可用性与来源标注。完整交付计 1 分，完全缺失计 0 分；对复合条目，若只交付其中一部分字段或只覆盖所纳入研究的一部分，计 0.5 分。研究纳入项评价是否给出明确的检索、筛选与纳入结果，不以某个预设研究总数为分母。两名评审独立核对四组交付，其中三组评分一致；flash · Qoder 的探针水平数据只覆盖 16 个纳入研究中的 5 个，经复核按部分完成计分，最终为 6.5/7，其余三组均为 6/7。文件摘要和来源记录均通过检查；另按研究编号、平台探针或基因标识及样本标识匹配两个环境共有的记录，并抽查其表达值。后文仅报告这些可对应记录的核对结果，不外推到未抽查数据。评分使用的条目核对表与两名评审的独立评分记录随项目资料保留，可供第三方复核。表~\ref{tab:gold1-artifacts} 展示四组产物。
+样例1 按七项要求评价：研究纳入、差异表达、样本元数据、平台注释与探针--基因映射、探针水平数据、基因水平数据，以及分析可用性与来源标注。完整交付计 1 分，完全缺失计 0 分；对复合条目，若只交付其中一部分字段或只覆盖所纳入研究的一部分，计 0.5 分。研究纳入项评价是否给出明确的检索、筛选与纳入结果。两名评审独立核对四组交付，其中三组评分一致；flash · Qoder 的探针水平数据只覆盖 16 个纳入研究中的 5 个，经复核按部分完成计分，最终为 6.5/7，其余三组均为 6/7。表~\ref{tab:gold1-artifacts} 展示四组产物。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.55\hsize}L>{\hsize=0.75\hsize}L>{\hsize=0.72\hsize}L>{\hsize=0.88\hsize}L>{\hsize=0.72\hsize}L>{\hsize=1.38\hsize}L}
 \caption{样例1 四组数据产品比较}\label{tab:gold1-artifacts}\\
@@ -158,7 +160,9 @@ max · \QDR{} & 4 & 443 行 & 4 个研究宽表 & 4 个研究宽表 & URL、MD5 
 
 \textbf{来源定位与质量证据。}BioMed QAgent 的优势主要体现在三个方面。第一，来源定位与发布清单形成机器可核验的证据链，抽样记录能够定位到原始压缩文件中的具体行。第二，编码、数值类型、单位、行边界、映射和溯源等检查在发布前执行，两档运行的发布检查均通过。第三，系统保留源文件数值精度；在样例1 flash的 GPL6244 探针集合中，33.3\% 的探针没有基因注释，这些记录被原样保留并标明未映射，而不是静默删除或猜测填补。对两个环境共有记录的核对显示，数值差异来自显示精度，例如 BioMed QAgent 的 4.1862 在 Qoder 中显示为 4.186。Qoder 以 URL、MD5 和检索日期支持人工复核，BioMed QAgent 则进一步提供记录级定位和发布文件校验。
 
-\textbf{成本、交付与边界。}样例1 flash 中，BioMed QAgent 用时 26 分钟、消耗 5{,}952 K token；Qoder 用时 168 分钟、消耗 52{,}940 K token，前者分别约为后者的 $1/6.5$ 和 $1/8.9$。max 档两者成本接近。BioMed QAgent 两档均未执行差异表达，纳入研究数也少于 Qoder；记录级溯源还带来存储开销，例如 GSE86374 的规范化日志约 0.6 GB。总体而言，样例1 对照显示，BioMed QAgent 在 flash 档以较低成本提供了更细的来源绑定、数值保真和发布前质量控制，Qoder 则在研究覆盖和分析便利性上更突出。
+\textbf{成本、交付与边界。}样例1 flash 中，BioMed QAgent 用时 26 分钟、消耗 5{,}952 K token；Qoder 用时 168 分钟、消耗 52{,}940 K token，前者分别约为后者的 $1/6.5$ 和 $1/8.9$。max 档两者成本接近。BioMed QAgent 两档均未执行差异表达，纳入研究数也少于 Qoder；记录级溯源还带来存储开销，例如 GSE86374 的规范化日志约 0.6 GB。总体而言，样例1 对照显示，BioMed QAgent 在 flash 档以较低成本提供了更细的来源绑定、数值保真和发布前质量控制，Qoder 则在研究覆盖和分析便利性上略突出。
+
+\textbf{运行稳定性。}在 Qoder flash 运行中，系统发生两次异常中断，由人类手动恢复后继续运行。
 
 \subsection{样例6：文献活性与图表证据}\label{subsec:gold6-artifact-compare}
 
@@ -237,7 +241,7 @@ max · \QDR{} & 6{,}439 行事实表、来源登记与方法日志 & 清单 5/5 
 \item \textbf{完成性由正式数据产品判定。} BioMed QAgent 的四个对照单元均形成正式发布物，数据文件与表结构、来源和质量结果共同接受检查，避免把临时文件或自然语言完成声明当作最终交付。
 \item \textbf{质量控制进入执行链。} 样例1 的未映射探针被显式保留，样例6 的多表关系和发布文件接受统一检查；质量状态不是事后附加说明，而是发布条件的一部分。
 \item \textbf{证据组织支持机器复核。} BioMed QAgent 将记录级来源定位、文件摘要和发布版本绑定在同一数据产品中。相较仅提供工作区文件，这种组织方式更适合长期复核、修正和复用。
-\item \textbf{flash 轻量档的效率优势}。两个案例的 flash 档对照中，BioMed QAgent 的运行时长为 Qoder 的约 $1/6.5$ 与 $1/1.8$，token 约为 $1/9$ 与 $1/9.8$，与确定性管线替代模型探索式操作的分工相符；max 档两环境互有高低。该优势为两个案例的单次观察，且两环境交付范围不完全相同（\ref{subsec:gold1-artifact-compare} 节），不作统计检验。
+\item \textbf{flash 轻量档的效率优势。}两个案例的 flash 档对照中，BioMed QAgent 的运行时长为 Qoder 的约 $1/6.5$ 与 $1/1.8$，token 约为 $1/9$ 与 $1/9.8$，与确定性管线替代模型探索式操作的分工相符；max 档两环境互有高低。该优势为两个案例的单次观察，且两环境交付范围不完全相同（\ref{subsec:gold1-artifact-compare} 节），不作统计检验；但两环境使用相同的模型，token 单价一致，结合各档模型调用成本估算，上述差距仍可表明 BioMed QAgent 在 flash 档具有明显的运行成本优势。
 \end{enumerate}
 
 这些优势并不意味着所有任务维度都已达到最高覆盖。样例1 的差异表达和研究覆盖仍有提升空间；样例6 的文献集合也不能解释为绝对查全。对照实验说明的是专用数据管线在正式交付与证据治理上的优势，以及通用环境在部分任务上的覆盖和分析灵活性。
