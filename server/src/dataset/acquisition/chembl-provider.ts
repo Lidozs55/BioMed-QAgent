@@ -14,7 +14,7 @@ export const CHEMBL_FILES_SOURCE_ID_PREFIX = "source_chembl_bioactivity";
 
 const CHEMBL_HOST = "www.ebi.ac.uk";
 const CHEMBL_ID = /^CHEMBL[1-9][0-9]*$/;
-const MAX_CHEMBL_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_CHEMBL_RESPONSE_BYTES = 64 * 1024 * 1024;
 const MAX_COMPOUNDS = 32;
 const ACTIVITY_TYPES = new Set(["IC50", "EC50", "Ki", "Kd"]);
 const PARAMETER_KEYS = new Set(["source", "accession", "entities"]);
@@ -116,7 +116,10 @@ export function chemblFilesUrl(options: {
   query.set("target_chembl_id", options.targetId);
   query.set("molecule_chembl_id__in", options.compoundIds.join(","));
   query.set("standard_type__in", options.activityTypes.join(","));
-  query.set("limit", "100");
+  // The API silently drops results beyond `limit`; keep the cap beyond any
+  // realistic result set for this query shape (one target × at most 32
+  // compounds × IC50/EC50/Ki/Kd) until follow-up pagination is available.
+  query.set("limit", "10000");
   query.set("offset", "0");
   return `https://${CHEMBL_HOST}/chembl/api/data/activity.json?${query.toString()}`;
 }
