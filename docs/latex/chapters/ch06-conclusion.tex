@@ -1,61 +1,59 @@
 \chapter{总结与讨论}
 
-\section{相较基线的收益与消耗}
+\section{适用范围与额外开销}
 
-本文以“纯人工整理”和“纯 Agent 问答”两条路线为基线。表~\ref{tab:benefit-cost} 总结了本系统带来的收益及新增消耗。
+本节从使用流程讨论系统可能减少哪些重复操作、增加哪些开销，不作为人工实验基线。第五章实际比较对象是 Qoder，并未测量纯人工完成任务的时间与成本。
 
-\begin{xltabular}{\linewidth}{>{\hsize=0.6\hsize}L>{\hsize=1.2\hsize}L>{\hsize=1.2\hsize}L}
-\caption{相较两条基线的收益与消耗}\label{tab:benefit-cost}\\
+\begin{table}[htbp]
+\centering
+\caption{不同工作方式与本系统的额外开销}\label{tab:benefit-cost}
+\begin{tabularx}{\linewidth}{>{\hsize=0.60000\hsize}L>{\hsize=1.20000\hsize}L>{\hsize=1.20000\hsize}L}
 \toprule
-\textbf{基线} & \textbf{本系统的收益} & \textbf{新增消耗} \\
+\textbf{工作方式} & \textbf{本系统希望减少的重复操作} & \textbf{仍需承担的开销} \\
 \midrule
-\endfirsthead
-\toprule
-\textbf{基线} & \textbf{本系统的收益} & \textbf{新增消耗} \\
-\midrule
-\endhead
-纯人工整理 & 消除多库重复查询与下载、\newline 手工复制对列与统一缺失值、\newline 逐条查证来源与版本、\newline 人工检查主外键/重复/冲突、\newline 中断与错误后的重做，以及\newline 为下游补写表结构与来源说明 & token 与模型调用费用（Agent 推理、\code{qwen3.8-flash} 图表抽取）；\newline 来源文件、审计与发布物的存储；\newline SHA-256 与验证的计算开销；\newline 数据API访问费用；\newline 模糊映射与冲突的人工审核；\newline 新数据源接入的一次性适配 \\
-纯 Agent 问答 & 把对话输出升级为可复用、可核验的数据产品：\newline 确定性可复现；\newline 来源与版本证据；\newline 发布前质量检查与冲突审计；\newline 可恢复、可修正——而纯 Agent 的自由改写难以稳定复现，中断后往往整体重来 & 高于“一次问答”的模型与验证开销；\newline 产物持久化与维护；\newline 流程中的人工介入点（纯 Agent“先回答后纠错”完全自助，但没有质量保证）；\newline 数据族表结构、解析器与校验配置的一次性投入 \\
+人工整理 & 多库查询、重复下载、复制对列、检查重复与冲突，以及补写来源说明 & 模型调用、文件存储、摘要计算、来源适配及人工复核 \\
+依靠对话与临时脚本 & 寻找当前文件、补记处理步骤、追查来源及确认哪些结果可以交付 & 维护表结构与解析器、执行检查、保存过程记录和发布版本 \\
 \bottomrule
-\end{xltabular}
+\end{tabularx}
+\end{table}
 
-因此，项目的价值不在于“消除人工”，而是将人工从重复搬运转向对科学含义、不确定性和冲突的高价值核对，并使核对结果能够持续复用。
+系统并不消除人工，而是让研究者少做重复整理，将注意力放在来源选择、字段含义、冲突与不确定记录上。能减少多少人工工作，仍需另行测量。
 
 \section{对科研数据适用性的实际意义}
 
-对研究者而言，正式发布物比聊天答案更接近可以纳入科研流程的数据对象。它可以直接供脚本读取，具有明确的表结构、来源和质量说明，并可在发现错误时定位和修正。对团队协作而言，发布清单和版本替代关系降低了“每个人手里有一份不同CSV”的风险。
+发布包将数据表、来源、检查结果与版本记录一并保存。研究者可以按明确的连接键使用多表数据，也能在发现问题时回查并修正。它减少了交付文件缺少说明、不同成员持有不同版本的风险，但是否适合某项分析，仍需结合研究任务判断。
 
-对后续知识图谱、统计分析或证据推理而言，多表关系和溯源提供了比复制宽表更稳定的输入。上述意义成立有一个前提：系统在交付正式产物的同时，明确交付能力边界说明。
+\section{实验结果的关键发现}\label{sec:findings-validation}
 
-\section{实验结果与机制验证}\label{sec:findings-validation}
+十二次列示运行中，十一次正式发布，一次未发布，汇总比例为91.7\%。样例10缺少必需输入，因而没有正式交付。发布状态与需求完成情况必须分别记录；这个比例不代表原始需求全部满足，也不是统一条件下的成功概率。
 
-第\ref{ch:experiments}章的评测揭示了三个关键事实，三项系统贡献（\ref{sec:contributions} 节）也在评测中得到实际执行与验证；其中人工确认仅在样例6 的两次运行中触发。
+两案例的 flash 记录成本均是本系统较低，样例6 max 则是 Qoder 较低。交付范围与计量方式不同，无法据此区分执行效率、工作量与其他运行条件的影响。
 
-\textbf{运行终态与字节级验证。}十二个运行单元（十个 flash 运行与样例1、样例6 的两个 max 运行）中，11 个形成正式发布物并通过产物回执与 SHA-256 重验，运行级发布率为 91.7\%；样例10 以未发布阻塞结束，没有把缺少必需差异丰度表的暂存结果提升为正式产物。十二个运行均形成明确终态，本次实验中没有出现“没有正式产物却判定成功”的情况。
+本系统保存发布清单、来源与检查结果；Qoder 样例6两份离线包也有来源列、清单和方法日志，但缺少所引用的原始文件与脚本。两者便于复核的程度不同，不等于已经测得数值正确率。
 
-\textbf{轻量模型效率优势（样例6）。}样例6 的 flash 档对照显示，BioMed QAgent 用时约为 Qoder 的 $1/1.8$，token 约为 $1/9.8$，且 Qoder 的交付量不小于本系统，该差距与确定性管线承担数据操作、模型调用集中于理解与抽取的分工相符；样例1 flash 的总量差距在按交付研究数归一后反转，由交付规模差异解释（第\ref{ch:experiments}章）。该对照为两个完整系统的单次运行比较，机制级归因属消融实验，是后续工作方向。
+\section{核心机制的实际表现}
 
-\textbf{证据可审计性存在差异。}BioMed QAgent 的正式产物具有发布回执、SHA-256、溯源与产品评估记录；样例6 的 Qoder 离线导出具有来源列、文件清单和质量检查日志，但两个数据包都缺少其方法日志所引用的原始数据文件与处理脚本，flash 档清单还有一处摘要不一致，max 档的 6{,}439 行数据只有 11 个不同的来源定位。这些记录使两个产品的审计条件可以逐项比较。
+\textbf{正式发布与文件核验。}成功运行具有可检查文件，未发布运行保留原因。摘要重验确认了既有文件与回执一致，未检验冻结输入后的跨次重跑。
 
-在机制层面：\textbf{确定性八阶段数据核心}的执行由第\ref{ch:experiments}章全程记录——11 个运行单元发布成功、样例10 因必需数据缺失阻断，全部正式产物经逐件 SHA-256 重验一致，同规格重跑可直接比对，验证了“执行由注册代码承担、结果可复现”的设计；\textbf{可验证产物与完成性绑定}即上述终态结果——成功与发布物一一对应；\textbf{表结构准入控制}表现为样例7 分别形成风险位点与变异--基因映射两个动态数据产品、样例9 在固定结构不能满足数据约束后切换到动态数据族并完成发布——这一贡献的权衡（预置可靠性对开放覆盖，见第\ref{ch:dataset-core}章）随之显形，两个动态案例均运行在 Core 既有提供者之上，跨领域开放场景的独立处理能力是后续评测方向；\textbf{人工确认与证据绑定}表现为样例6 flash 的 5 次人工确认中，3 次为受控来源访问授权、2 次为发布验收，第二次发布明确替代第一次发布并保留版本关系，展示了敏感操作授权和发布验收在同一证据链中的作用。flash 运行采用 LLM 初审档位、按策略仅上报不通过项，其初审准确率未在本轮测量，可结合参考集对照评测一并标定。
+\textbf{运行时表结构检查。}样例7、9展示了动态路线的执行与发布。样例9采用的产品不同于原静态四表规格，不能视作同范围任务已经全部完成；新领域适用范围与变换计算仍需另行检验。
+
+\textbf{证据绑定的人工确认。}样例6 flash 记录三次来源访问授权、两次发布验收及两个版本的替代关系。该记录说明相应步骤实际执行过，但不足以评估模型初审准确率；零 HIL 的动态案例也不证明所有路径均强制触发人工验收。
 
 \section{结论}
 
-BioMed QAgent针对赛题“从科学问题到可用数据”，建立了一条从自然语言需求、来源发现、正式采集、异构解析、字段规范化、多源整合与校验，直到不可变发布的处理链路。
+\mbox{BioMed QAgent} 将研究需求依次转换为检索、采集、解析、整合与正式交付。Agent 提出查询、来源、多表规格和修改建议，Dataset Core 检查候选并控制正式写入，文件与处理记录随版本保存。
 
-这套链路的关键，在于把模型放在适合开放式推理的位置。Agent 作为数据产品的设计者提出检索策略、来源选择、多表规格和修正建议；正式数据变更则交给 Dataset Core 的来源绑定、解析、规范化、验证与发布检查。这一分工降低了模型自报或自由生成直接成为正式数据的风险；来源错误、解析器缺陷或验证规则覆盖不足仍无法因此消除，由产品评估、来源级抽查与能力边界披露承接。
-
-系统把“任务完成”定义为可重验的数据产品。每条正式数据都说明来源、处理过程、质量状态和不确定之处；收到反馈后，系统可以定位修正并形成可追溯的新版本。对照赛题的评价维度：来源可追溯性、清洗整合可靠性与输出格式可用性，已由第\ref{ch:experiments}章的案例与对照实验直接覆盖（其余一个维度——数据查找完备性——的衡量标准见 \ref{sec:eval-protocol} 节）。
-
-\textbf{核心贡献总结}：本系统展示了从任务事件、来源资产到发布回执的可检查证据链；其已验证范围是字节完整性、运行绑定和确定性检查规则，科学真实性与需求覆盖仍需来源级和任务级评估。
+本轮运行展示了可核验交付、缺少必要数据时拒绝发布，以及保留修改历史三项行为。后续应优先核对原始字段与数值、检查明确范围内的参考来源，并在冻结输入、代码和参数后重跑。系统旨在让数据交付有据可查，不以发布成功替代科学判断。
 
 \renewcommand{\bibname}{参考文献}
 \begin{thebibliography}{9}
-\bibitem{langgraph} LangChain. LangGraph: Orchestrate LLM agents as stateful graphs [OL]. https://github.com/langchain-ai/langgraph, 2025.
-\bibitem{autogen} Wu Q., Bansal G., et al. AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation [C/OL]. arXiv:2308.08155, 2023.
-\bibitem{openai-agents} OpenAI. OpenAI Agents SDK: Lightweight agent harness [OL]. https://openai.github.io/openai-agents-python/, 2025.
-\bibitem{docetl} Shankar S., et al. DocETL: A Deeply Optimized Declarative ETL System for Complex Data [C/OL]. arXiv:2410.12189, 2024.
-\bibitem{palimpzest} Shankar S., et al. Palimpzest: Optimizing AI-Powered Data Pipelines with Adaptive Declarative Programming [C/OL]. arXiv:2405.14696, 2024.
-\bibitem{temporal-approval} Temporal Technologies. Temporal Design Patterns: Human Approval [OL]. https://docs.temporal.io/develop/, 2026-08检索.
-\bibitem{qoder} Qoder. 什么是 Qoder: 面向真实工作的 Agentic 平台 [OL]. https://docs.qoder.com/zh/product-series/what-is-qoder, 2026-09检索.
+\bibitem{langgraph} LangChain. LangGraph: Interrupts [EB/OL]. \url{https://docs.langchain.com/oss/python/langgraph/interrupts}. 2026-09-06查阅。
+\bibitem{autogen} Wu Q., Bansal G., Zhang J., et al. AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation [EB/OL]. arXiv:2308.08155, 2023.
+\bibitem{openai-agents} OpenAI. OpenAI Agents SDK [EB/OL]. \url{https://openai.github.io/openai-agents-python/}. 2026-09-06查阅。
+\bibitem{docetl} Shankar S., Parameswaran A. G., Wu E. DocETL: Agentic Query Rewriting and Evaluation for Complex Document Processing [EB/OL]. arXiv:2410.12189v1, 2024.
+\bibitem{palimpzest} Liu C., Russo M., Cafarella M., et al. A Declarative System for Optimizing AI Workloads [EB/OL]. arXiv:2405.14696v2, 2024.
+\bibitem{temporal-approval} Temporal Technologies. Workflow message passing [EB/OL]. \url{https://docs.temporal.io/encyclopedia/workflow-message-passing}. 2026-09-06查阅。
+\bibitem{qoder} Qoder. 什么是Qoder [EB/OL]. \url{https://docs.qoder.com/zh/product-series/what-is-qoder}. 2026-09-06查阅。
+\bibitem{biomed-evidence} BioMed-QAgent项目组. Gold6–10 Corrected Campaign Session Report [EB/OL]. 实验代码版本：e5aadfe0；归档目录：\path{docs/evaluation/gold6-10-2026-09-03/}，2026。
 \end{thebibliography}
+
