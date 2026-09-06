@@ -71,11 +71,17 @@
 %
 %   1  项目概述
 %   ─────────────────────────────
+%
+% 章编号前缀默认为空；附录部分由 main.tex 在 \appendix 后把它
+% 置为“附录~”，使章标题呈“附录 A 标题”格式（TOC 由 ctex 处理，
+% 不受此影响）。
 % ----------------------------------------------------------------------
+
+\newcommand{\ReportChapterLabelPrefix}{}
 
 \titleformat{\chapter}[hang]
   {\Large\bfseries\sffamily\color{ReportDark}}
-  {\color{ReportBlue}\thechapter}
+  {\color{ReportBlue}\ReportChapterLabelPrefix\thechapter}
   {0.65em}
   {}
   [%

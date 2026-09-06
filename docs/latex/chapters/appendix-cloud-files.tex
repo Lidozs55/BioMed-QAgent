@@ -2,6 +2,8 @@
 % 附录 A — 网盘文件说明
 %
 % 网盘随附文件清册。
+% 列宽策略:文件名列定宽(\seqsplit 断词 + \texttt),说明列吃掉
+% 全部剩余宽度;避免长文件名把说明列挤到重叠。
 % =====================================================================
 
 \chapter{网盘文件说明}\label{app:cloud-files}
@@ -11,17 +13,16 @@
 \begin{table}[htbp]
 \centering
 \caption{网盘文件清单}\label{tab:cloud-files}
-\renewcommand{\arraystretch}{1.3}
-\begin{tabularx}{\linewidth}{>{\hsize=0.16000\hsize}L>{\hsize=0.88000\hsize}L>{\hsize=0.96000\hsize}L}
+\begin{tabularx}{\linewidth}{@{}>{\raggedleft\arraybackslash}p{2.4em} l >{\raggedright\arraybackslash}X@{}}
 \toprule
 \textbf{序号} & \textbf{文件名} & \textbf{内容说明} \\
 \midrule
-1 & \texttt{BioMed-QAgent-1.0.0-win.zip} & Windows 安装包。 \\
-2 & \texttt{BioMed-QAgent-1.0.0-x86\_64-Linux.AppImage} & Linux x86\_64 安装包。 \\
-3 & \texttt{BioMed-QAgent-1.0.0.zip} & 纯构建产物，不包含运行环境。使用前需自行安装并配置 Python、uv 和 pnpm。 \\
-4 & \texttt{biomed-qagent-main.pdf} & 系统架构图。 \\
-5 & \texttt{qwen调用凭证.png} & Qwen 调用凭证。 \\
-6 & \texttt{video.mp4} & 系统演示视频。 \\
+1 & \seqsplit{BioMed-QAgent-1.0.0-win.zip} & Windows 安装包。 \\
+2 & \seqsplit{BioMed-QAgent-1.0.0-x86\_64-Linux.AppImage} & Linux x86\_64 安装包。 \\
+3 & \seqsplit{BioMed-QAgent-1.0.0.zip} & 纯构建产物，不包含运行环境。使用前需自行安装并配置 Python、uv 和 pnpm。 \\
+4 & \seqsplit{biomed-qagent-main.pdf} & 系统架构图。 \\
+5 & \seqsplit{qwen调用凭证.png} & Qwen 调用凭证。 \\
+6 & \seqsplit{video.mp4} & 系统演示视频。 \\
 \bottomrule
 \end{tabularx}
 \end{table}
