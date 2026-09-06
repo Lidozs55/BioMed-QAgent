@@ -73,7 +73,7 @@ BioMed QAgent 侧以正式发布作为成功条件，数据表必须连同来源
 
 表~\ref{tab:metrics} 给出统一指标。两个质量维度对四个观察单元采用同一套评分规则，每个案例按“覆盖评分、可审计性评分、交付形态与来源定位、成本与边界”四步展开。
 
-\textbf{需求覆盖}：按本案例的任务条目清单逐项评分，完整交付计 1 分，部分交付计 0.5 分，完全缺失计 0 分，以得分占条目总数的比例计分。条目清单来自各案例的任务要求（样例1 为七项，见 \ref{subsec:gold1-artifact-compare} 节；样例6 的条目清单随其评分表给出）。比例不低于 $2/3$ 为高，不低于 $1/2$ 且低于 $2/3$ 为中，低于 $1/2$ 为低。
+\textbf{需求覆盖}：按本案例的任务条目清单逐项评分，完整交付计 1 分，部分交付计 0.5 分，完全缺失计 0 分，以得分占条目总数的比例计分。条目清单来自各案例的任务要求（样例1 为七项，见 \ref{subsec:gold1-artifact-compare} 节；样例6 为六项，见 \ref{subsec:gold6-artifact-compare} 节的评分标准）。比例不低于 $2/3$ 为高，不低于 $1/2$ 且低于 $2/3$ 为中，低于 $1/2$ 为低。
 
 \textbf{证据可审计性}：统一使用六项清单：来源标注、记录级定位、文件清单、处理方法、质量检查和原始证据。对四组交付逐一评分，每项 0--1 分（完整记 1，完全缺失记 0，部分满足按完备程度取中间值），取六项均值，再按同一分档映射：不低于 0.67 为高，不低于 0.50 且低于 0.67 为中，低于 0.50 为低。
 
@@ -122,16 +122,18 @@ token 消耗 & 模型调用的 token 总量 & 模型用量记录 \\
 样例1 & max & \BMQ{} & 成功发布 & \textbf{30~min} & \textbf{4{,}182~K} & 高 & 高 \\
 样例1 & max & \QDR{} & 完成交付 & 35~min & 4{,}474~K & 高 & 高 \\
 \addlinespace
-样例6 & flash & \BMQ{} & 成功发布 & \textbf{98.9~min} & \textbf{6{,}915~K} & 高 & 高 \\
+样例6 & flash & \BMQ{} & 成功发布 & \textbf{98.9~min} & \textbf{6{,}915~K} & 中 & 高 \\
 样例6 & flash & \QDR{} & 完成交付 & 175~min & 67{,}912~K & 高 & 高 \\
 样例6 & max & \BMQ{} & 成功发布 & 78.0~min & 7{,}511~K & 高 & 高 \\
-样例6 & max & \QDR{} & 完成交付 & \textbf{46~min} & \textbf{5{,}160~K} & 边界 & 高 \\
+样例6 & max & \QDR{} & 完成交付 & \textbf{46~min} & \textbf{5{,}160~K} & 高 & 高 \\
 \bottomrule
 \end{xltabular}
 
+表~\ref{tab:factorial-efficiency} 的覆盖列按 \ref{sec:comparison-metrics} 节的条目清单计分：样例1 四组得 6--6.5/7，均为高；样例6 四组得 3.5--5.5/6，其中 flash · \BMQ{} 为中，其余为高，逐项判定见 \ref{subsec:gold6-artifact-compare} 节的评分标准。可审计性列按六项清单计分，四组均为高。
+
 总体上，八个单元均形成可检查的交付物。BioMed QAgent 的四个单元均完成正式发布，并将数据、表结构、来源和质量结果作为一个整体交付。样例1 flash 中，BioMed QAgent 用时 26 分钟、消耗 5{,}952 K token，约为 Qoder（168 分钟、52{,}940 K）的 $1/6.5$ 与 $1/8.9$；max 档两者成本接近（30 对 35 分钟、4{,}182 对 4{,}474 K）。样例6 flash 中，BioMed QAgent 用时 98.9 分钟、消耗 6{,}915 K token，约为 Qoder（175 分钟、67{,}912 K）的 $1/1.8$ 与 $1/9.8$；样例6 max 中 Qoder 更快也更省（46 对 78 分钟、5{,}160 对 7{,}511 K）。
 
-样例1 的总量差距主要由交付规模贡献：BioMed QAgent flash 交付 1 个研究，Qoder 交付 16 个研究并含单研究差异分析与跨研究元分析。样例1 为大批量数据处理工作，运行时长对性能和网速敏感；文中样例1 的测试均在同一网络环境和同一机器上运行，以控制这一波动。按交付研究数归一，Qoder 每研究约 10.5 分钟、3.3M token，低于 BioMed QAgent 的 26 分钟、6.0M token；max 档归一后同样是 Qoder 更低（约 8.8 对 15 分钟）。样例6 中 Qoder 的交付量不小于 BioMed QAgent（主表 10{,}682 行外加维表），其 flash 档成本差距不受交付规模影响。两个案例的成本对比见图~\ref{fig:sample-efficiency}。
+样例1 的总量差距主要由交付规模贡献：BioMed QAgent flash 交付 1 个研究，Qoder 交付 16 个研究并含单研究差异分析与跨研究元分析。样例1 为大批量数据处理工作，运行时长对性能和网速敏感；文中样例1 的测试均在同一网络环境和同一机器上运行，以控制这一波动。按交付研究数归一，Qoder 每研究约 10.5 分钟、3.3M token，低于 BioMed QAgent 的 26 分钟、6.0M token；max 档归一后同样是 Qoder 更低（约 8.8 对 15 分钟、1.1 对 2.1M token）。样例6 中 Qoder 的交付量不小于 BioMed QAgent（主表 10{,}682 行外加维表），其 flash 档成本差距不受交付规模影响。两个案例的成本对比见图~\ref{fig:sample-efficiency}。
 
 \begin{figure}[htbp]
   \centering
@@ -140,7 +142,7 @@ token 消耗 & 模型调用的 token 总量 & 模型用量记录 \\
   \label{fig:sample-efficiency}
 \end{figure}
 
-图~\ref{fig:sample-efficiency} 中，按总量统计时两个案例的 flash 档 BioMed QAgent 均低于 Qoder，max 档互有高低。样例1 的总量差距主要由交付规模贡献——Qoder flash 纳入 16 个研究、max 纳入 4 个，而 BioMed QAgent 两档各发布 1 个研究；摊薄到单个研究后，Qoder 更低（flash 约 10.5 对 26 分钟、3.3 对 6.0M token，max 约 8.8 对 30 分钟、1.1 对 4.2M token），样例1 的总量优势在按交付研究数归一后不再成立。样例6 不存在这一统计标准问题：Qoder 的交付量不小于 BioMed QAgent（主表 10{,}682 行外加维表，无法按研究数折算），故其 flash 档的总量差距不受交付规模影响，更接近同等交付规模下的执行效率差异。
+图~\ref{fig:sample-efficiency} 中，按总量统计时两个案例的 flash 档 BioMed QAgent 均低于 Qoder，max 档互有高低。样例1 的总量差距主要由交付规模贡献——Qoder flash 纳入 16 个研究、max 纳入 4 个，而 BioMed QAgent 两档各发布 1 个研究；摊薄到单个研究后，Qoder 更低（flash 约 10.5 对 26 分钟、3.3 对 6.0M token，max 约 8.8 对 15 分钟、1.1 对 2.1M token），样例1 的总量优势在按交付研究数归一后不再成立。样例6 不存在这一统计标准问题：Qoder 的交付量不小于 BioMed QAgent（主表 10{,}682 行外加维表，无法按研究数折算），故其 flash 档的总量差距不受交付规模影响，更接近同等交付规模下的执行效率差异。
 
 \subsection{样例1：表达组学数据整合}\label{subsec:gold1-artifact-compare}
 
@@ -175,7 +177,34 @@ max · \QDR{} & 4 & 443~行 & 4~个研究宽表 & 4~个研究宽表 & URL、MD5 
 \subsection{样例6：文献活性与图表证据}\label{subsec:gold6-artifact-compare}
 
 
-样例6 的需求覆盖与证据可审计性两项评分沿用 \ref{sec:comparison-metrics} 节的统一框架。在此之外，本案例对 Qoder flash 与 max 两份离线导出另设一个案例特有的补充维度——结构化覆盖与复用性（$X$），由模式分解、标识符归一、单位归一、可复用维表、清单完整性和拒绝记录六项等权组成，每项 0--1 分取均值，分档沿用统一阈值；该维度仅用于解释两份导出在数据组织上的差异。表~\ref{tab:gold6-qoder-subscores} 列出 $X$ 与证据可审计性（$Y$）的子项得分。
+样例6 的需求覆盖与证据可审计性两项评分沿用 \ref{sec:comparison-metrics} 节的统一框架。
+
+\textbf{评分标准。}需求覆盖按六项任务条目评价，条目由任务描述原文逐项派生：E1 论文记录，从公开论文中定位 EGFR 突变体抑制实验数据并保留论文标识；E2 变异谱，记录涉及 wild-type、L858R、T790M 或 L858R/T790M 突变体；E3 实验对象标注，每条记录保留实验对象（细胞系或表达体系）；E4 图表曲线数据，图表中的剂量--反应曲线数据；E5 补充材料，补充表格中的数据及材料定位；E6 定位与置信度，每条记录保留论文、图表或表格定位、单位和抽取置信度。四组交付均按上述条目逐项核对交付物与证据包计分，结果见表~\ref{tab:gold6-rubric}。
+
+\begin{xltabular}{\linewidth}{>{\hsize=0.9\hsize}L>{\hsize=0.775\hsize}L>{\hsize=0.775\hsize}L>{\hsize=0.775\hsize}L>{\hsize=0.775\hsize}L}
+\caption{样例6 需求覆盖的条目化评分（每项满分 1，合计满分 6）}\label{tab:gold6-rubric}\\
+\toprule
+\textbf{条目} & \textbf{flash · \BMQ{}} & \textbf{flash · \QDR{}} & \textbf{max · \BMQ{}} & \textbf{max · \QDR{}} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{条目} & \textbf{flash · \BMQ{}} & \textbf{flash · \QDR{}} & \textbf{max · \BMQ{}} & \textbf{max · \QDR{}} \\
+\midrule
+\endhead
+E1 论文记录 & 1 & 1 & 1 & 1 \\
+E2 变异谱 & 1 & 1 & 1 & 1 \\
+E3 实验对象标注 & 0.5 & 1 & 1 & 1 \\
+E4 图表曲线数据 & 0 & 0.5 & 0 & 0.5 \\
+E5 补充材料 & 0 & 1 & 0.5 & 0.5 \\
+E6 定位与置信度 & 1 & 1 & 1 & 1 \\
+\midrule
+\textbf{合计（分档）} & \textbf{3.5/6（中）} & \textbf{5.5/6（高）} & \textbf{4.5/6（高）} & \textbf{5/6（高）} \\
+\bottomrule
+\end{xltabular}
+
+计分中的关键判定如下。E4：BioMed QAgent 两档运行的正式发布物中，图表系列表与图表点表均为不含数据行的空表——受治理视觉通道未产生可采纳的图表数值，系统按图表证据门禁拒绝以估计值补齐，该条目记 0；\QDR{} flash 从多剂量表格聚合出 7 条曲线、16 个点（交付自述为表格数值聚合而非像素数字化），记 0.5；\QDR{} max 对 6 条剂量--反应曲线完成识别并如实标注未数字化，记 0.5。E5：BioMed QAgent flash 的补充材料登记表为空，记 0；max 登记并解析了 1 件补充材料 PDF（含成员级 SHA-256），记 0.5；\QDR{} flash 保留 473 条补充材料访问记录及未解析清单，记 1；\QDR{} max 以图件与补充表格核验清单记录识别状态、未取回材料本体，记 0.5。E3：BioMed QAgent flash 的实验表中 32/43 条实验对象字段为表格行片段而非规范标注，按部分交付记 0.5；其余三组实验对象或变异标注完整，记 1。该评分以任务条目为分母，衡量交付对条目的满足程度，不度量来源查找完备性。
+
+在此之外，本案例对 Qoder flash 与 max 两份离线导出另设一个案例特有的补充维度——结构化覆盖与复用性（$X$），由模式分解、标识符归一、单位归一、可复用维表、清单完整性和拒绝记录六项等权组成，每项 0--1 分取均值，分档沿用统一阈值；该维度仅用于解释两份导出在数据组织上的差异，不进入表~\ref{tab:factorial-efficiency} 的覆盖列，覆盖列取值来自本节上方的条目化评分。表~\ref{tab:gold6-qoder-subscores} 列出 $X$ 与证据可审计性（$Y$）的子项得分。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.65\hsize}L>{\hsize=0.65\hsize}L>{\hsize=0.65\hsize}L>{\hsize=1.05\hsize}L>{\hsize=2.00\hsize}L}
 \caption{样例6 Qoder 离线导出的补充评价（$X$ 为结构化覆盖与复用性，案例特有维度；$Y$ 为证据可审计性，子项为统一六项清单在本案例的细化）}\label{tab:gold6-qoder-2x2}\\
@@ -213,7 +242,7 @@ max & 0.500 & 0.758 & 覆盖中档下界--高可审计 & 主表结构紧凑、�
 \bottomrule
 \end{xltabular}
 
-Qoder flash 的结构化覆盖与可审计性均为高；Qoder max 的可审计性为高，结构化覆盖为 0.500，恰在中档下界。表~\ref{tab:factorial-efficiency} 中该单元覆盖列的“边界”即取自这一补充评分。表~\ref{tab:gold6-artifacts} 再从交付结构与证据组织两个方面比较四组产品。
+Qoder flash 的结构化覆盖与可审计性均为高；Qoder max 的可审计性为高，结构化覆盖为 0.500，恰在中档下界。表~\ref{tab:gold6-artifacts} 再从交付结构与证据组织两个方面比较四组产品。
 
 \begin{xltabular}{\linewidth}{>{\hsize=0.55\hsize}L>{\hsize=1.15\hsize}L>{\hsize=1.15\hsize}L>{\hsize=1.15\hsize}L}
 \caption{样例6 四组数据产品的结构与证据组织}\label{tab:gold6-artifacts}\\
@@ -232,7 +261,7 @@ max · \QDR{} & 6{,}439~行事实表、来源登记与方法日志 & 清单 5/5 
 \bottomrule
 \end{xltabular}
 
-\textbf{交付形态与数据组织。}两份 Qoder 主表都包含记录编号、突变体、化合物、ChEMBL 标识、活性类型、纳摩尔值、细胞系、来源数据库、检索日期、抽取方法和置信度等核心字段。flash 主表为 $10{,}682\times109$，还提供 pXC 值（活性浓度的负对数，如 pIC50 一类）、跨源一致性、化合物身份解析、证据文本以及表格行列坐标；max 主表为 $6{,}439\times35$，结构更紧凑，并额外纳入 145 条 GtoPdb 策展记录。flash 还把单剂量筛选、非浓度指标、排除记录、拒绝候选、补充材料访问、未解析附件和参考维表拆为独立文件，说明其高覆盖得分来自结构分解和复用能力，而非单纯文件数量。
+\textbf{交付形态与数据组织。}两份 Qoder 主表都包含记录编号、突变体、化合物、ChEMBL 标识、活性类型、纳摩尔值、细胞系、来源数据库、检索日期、抽取方法和置信度等核心字段。flash 主表为 $10{,}682\times109$，还提供 pXC 值（活性浓度的负对数，如 pIC50 一类）、跨源一致性、化合物身份解析、证据文本以及表格行列坐标；max 主表为 $6{,}439\times35$，结构更紧凑，并额外纳入 145 条 GtoPdb（IUPHAR/BPS Guide to Pharmacology Database，药理学指南数据库）策展记录。flash 还把单剂量筛选、非浓度指标、排除记录、拒绝候选、补充材料访问、未解析附件和参考维表拆为独立文件，说明其结构化覆盖维度（$X$）的高分来自结构分解和复用能力，而非单纯文件数量。
 
 \textbf{来源定位与质量证据。}来源粒度进一步区分了两套产品。flash 的 10{,}682 条事实对应 10{,}215 个不同来源位置，包括 ChEMBL 活性标识、表格行列坐标、证据文本和补充材料工作表定位；max 的 6{,}439 条事实只有 11 个不同的来源定位值，其中 6{,}285 行共享同一说明。因此，两者来源字段均非空，但 flash 更接近记录级定位，max 更接近来源批次级定位。
 
