@@ -10,7 +10,7 @@
  *
  * Outputs (docs/latex/figures/):
  * - fig-samples-efficiency-comparison.pdf : 样例1/样例6 × flash/max × BMQ/Qoder cost chart
- * - fig-gold-cost-overview-samples.pdf    : 十样例成本总览
+ *   (ten-case overview figure removed: table 5.1 already carries the exact numbers)
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -77,30 +77,6 @@ fig.tight_layout()
 fig.savefig("${figDir}/fig-samples-efficiency-comparison.pdf", bbox_inches="tight")
 plt.close(fig)
 
-# ---- Figure 2: ten-case cost overview ----
-names = ["样例1","样例2","样例3","样例4","样例5","样例6","样例7","样例8","样例9","样例10"]
-dur   = [57.2, 19.2, 31.1, 8.5, 28.8, 98.9, 36.2, 45.9, 351.2, 108.5]
-tok   = [20.91, 1.40, 5.10, 1.86, 3.87, 6.92, 6.35, 10.65, 8.53, 23.17]
-colors = [BLUE]*9 + [RED]
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 6))
-y = np.arange(len(names))[::-1]
-for ax, vals, title, unit, fmt in [
-    (ax1, dur, "运行时长", "分钟", lambda v: f"{v:g}"),
-    (ax2, tok, "Token 消耗", "百万", lambda v: f"{v:.1f}"),
-]:
-    bars = ax.barh(y, vals, color=colors, height=0.62)
-    ax.set_yticks(y); ax.set_yticklabels(names, fontsize=10)
-    top = max(vals)
-    ax.set_xlim(0, top*1.18)
-    ax.set_title(f"{title}（{unit}）", fontsize=13, fontweight="bold")
-    ax.grid(axis="x", alpha=0.3, linestyle="--")
-    for bar, v in zip(bars, vals):
-        ax.text(v + top*0.015, bar.get_y()+bar.get_height()/2, fmt(v),
-                va="center", fontsize=9)
-fig.suptitle("十样例运行成本总览（样例10 未发布阻塞）", fontsize=14, fontweight="bold", y=1.00)
-fig.tight_layout()
-fig.savefig("${figDir}/fig-gold-cost-overview-samples.pdf", bbox_inches="tight")
-plt.close(fig)
 print("figures written")
 `;
 
@@ -111,4 +87,3 @@ execFileSync("uv", ["run", "--with", "matplotlib", "--with", "numpy", "python", 
   cwd: root,
 });
 console.log("done:", path.join(figDir, "fig-samples-efficiency-comparison.pdf"));
-console.log("done:", path.join(figDir, "fig-gold-cost-overview-samples.pdf"));
