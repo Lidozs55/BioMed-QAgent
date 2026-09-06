@@ -112,7 +112,7 @@
 % --------------------------------------------------------------
 \setlength{\parindent}{2em}
 \setlength{\parskip}{0pt}
-\linespread{1.15}
+\linespread{1.2}
 \emergencystretch=3em
 
 % --------------------------------------------------------------
