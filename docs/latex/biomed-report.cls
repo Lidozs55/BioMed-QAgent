@@ -14,7 +14,7 @@
 \LoadClass[
   UTF8,
   scheme=chinese,
-  zihao=5,
+  11pt,
   oneside,
   openany
 ]{ctexbook}
