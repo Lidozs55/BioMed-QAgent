@@ -61,6 +61,7 @@ import {
   type DelimitedRow,
 } from "../text.js";
 import {
+  type GeoSampleMetadata,
   parseGeoSeriesMatrixSamples,
   parseGeoSoftSamplesFromFile,
   writeSampleMetadata,
@@ -982,18 +983,78 @@ export class GeoExpressionAdapter extends SourceAdapter {
       ? statistics.sample_ids.map(String)
       : [];
     const expectedSamples = new Set(sampleIds);
-    const observedSamples = new Set(
-      samples.map((sample) => sample.source_sample_alias ?? sample.sample_id),
-    );
-    if (
-      expectedSamples.size !== observedSamples.size ||
-      [...expectedSamples].some((sampleId) => !observedSamples.has(sampleId))
-    ) {
-      throw new AdapterError(
-        "GEO metadata sample IDs do not match expression sample IDs: " +
-          `metadata=${JSON.stringify([...observedSamples].sort())}, ` +
-          `expression=${JSON.stringify([...expectedSamples].sort())}`,
+    if (parameters.format === "series_matrix") {
+      const observedSamples = new Set(
+        samples.map((sample) => sample.source_sample_alias ?? sample.sample_id),
       );
+      if (
+        expectedSamples.size !== observedSamples.size ||
+        [...expectedSamples].some((sampleId) => !observedSamples.has(sampleId))
+      ) {
+        throw new AdapterError(
+          "GEO metadata sample IDs do not match expression sample IDs: " +
+            `metadata=${JSON.stringify([...observedSamples].sort())}, ` +
+            `expression=${JSON.stringify([...expectedSamples].sort())}`,
+        );
+      }
+    } else {
+      // ADR-044 supplementary/tximport carriers: expression column headers are
+      // author-chosen names. Reconcile against SOFT sample titles (exact),
+      // falling back to alias/GSM for files that use registered IDs as
+      // headers. Columns without registered metadata keep their rows with
+      // sample_group=unknown and an explicit warning — never silently dropped.
+      const byKey = new Map<string, GeoSampleMetadata>();
+      for (const sample of samples) {
+        for (const key of [sample.title, sample.source_sample_alias, sample.sample_id]) {
+          if (key !== null && key.trim() !== "" && !byKey.has(key.trim())) {
+            byKey.set(key.trim(), sample);
+          }
+        }
+      }
+      const matched = new Map<string, GeoSampleMetadata>();
+      const unmappedColumns: string[] = [];
+      for (const column of sampleIds) {
+        const hit = byKey.get(column.trim());
+        if (hit === undefined) {
+          unmappedColumns.push(column);
+        } else if (!matched.has(hit.sample_id)) {
+          matched.set(hit.sample_id, hit);
+        }
+      }
+      if (matched.size === 0) {
+        throw new AdapterError(
+          "supplementary expression columns match no SOFT sample title/alias/ID: " +
+            `expression=${JSON.stringify([...expectedSamples].sort())}, ` +
+            `metadata=${JSON.stringify([...byKey.keys()].sort())}`,
+        );
+      }
+      const reference = samples[0]!;
+      const synthesized: GeoSampleMetadata[] = unmappedColumns.map((column) => ({
+        sample_id: column,
+        source_sample_alias: column,
+        title: column,
+        organism: reference.organism,
+        platform_id: null,
+        sample_group: "unknown",
+        sample_group_raw: "no registered sample metadata (supplementary-only column)",
+        pairing_id: null,
+        group_rule_id: "geo.suppl-unmapped.v1",
+      }));
+      if (unmappedColumns.length > 0) {
+        warnings.push(
+          `supplementary matrix has ${unmappedColumns.length} expression column(s) without ` +
+            `registered sample metadata; rows kept with sample_group=unknown: ` +
+            JSON.stringify(unmappedColumns),
+        );
+      }
+      const unmappedMetadata = samples.filter((sample) => !matched.has(sample.sample_id));
+      if (unmappedMetadata.length > 0) {
+        warnings.push(
+          `${unmappedMetadata.length} registered sample(s) have no expression column in this ` +
+            `supplementary matrix: ${JSON.stringify(unmappedMetadata.map((sample) => sample.sample_id))}`,
+        );
+      }
+      samples = [...matched.values(), ...synthesized];
     }
     const supportingPath = join(
       outputDir,
