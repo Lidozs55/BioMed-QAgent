@@ -43,11 +43,17 @@
 对 skill/tool 文本是严格照办的（per-GSE 独立 build、probe 映射强制等规则全部被执行），
 提示路线的执行风险可控。
 
-## 验收（round3，人工判读）
+## 验收（round3 = r5，2026-10-12 已复跑，通过）
 
-新 task、原 TOPIC 原文复跑 gold1：发布 ≥2 系列（gene 级 + probe/suppl 级补充均可），
-最终报告不再出现"仅单系列"作为无条件完成。若 round3 仍只查一次窄查询，再回落到
-确定性放宽阶梯方案（原设计存 git 历史）。
+新 task `task_ts_6ba028e5…`、冻结 prompt 原文复跑（qwen3.8-flash，与 r3/r4 同模型
+单变量对照；dev@f495aba9）。**通过**：发布 2 个正式 Publication（GSE31192 +
+GSE26910，均 GPL570 基因级），首轮检索即为宽查询（`breast cancer tumor normal`，
+max_results=200），后续同义词族补查，vetting 6 个候选（含参考集 GSE318780），
+最终报告无单系列局限。墙钟 69.9 min、峰值 414k tokens、压缩 2 次。
+参考三系列未全中的遗留属产品级阻塞（RNA-seq 补充矩阵无正式载体路径：
+series matrix 元数据壳 + extract_core_archive 拒收 agent 资产；cohort_filters
+不过滤行），对应下方 P3/ADR 范畴，非提示层问题。完整证据：
+`data/gold-runs/f495aba9-gold1-qwen38flash-r5/`（closure/runs-log/事件流/产物）。
 
 ## 门禁
 
