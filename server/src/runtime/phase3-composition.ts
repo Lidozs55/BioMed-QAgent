@@ -44,6 +44,7 @@ import {
   type PermissionPolicyStore,
 } from "../agent/permissions/index.js";
 import { createCoreAcquisitionProviders } from "../dataset/acquisition/provider-catalog.js";
+import { createGeoSupplementaryListingResolver } from "../dataset/acquisition/expression-providers.js";
 import { EXTENDED_PROVIDER_IDS } from "../dataset/acquisition/extended-providers.js";
 import { extractRegisteredZipMembers } from "../dataset/archive/zip-members.js";
 import { parseRegisteredArchiveMembers } from "../dataset/archive/member-parsers.js";
@@ -458,10 +459,14 @@ export function createPhase3AcquisitionRuntime(options: {
   chemblMaxRecords?: number;
 }): CoreAcquisitionRuntime {
   const registry = new CoreAcquisitionRegistry();
-  for (const provider of createCoreAcquisitionProviders({
-    chembl_max_compounds: options.chemblMaxCompounds ?? DEFAULT_RUNTIME_LIMITS.chembl_max_compounds,
-    chembl_max_records: options.chemblMaxRecords ?? DEFAULT_RUNTIME_LIMITS.chembl_max_records,
-  })) registry.registerProvider(provider);
+  for (const provider of createCoreAcquisitionProviders(
+    {
+      chembl_max_compounds: options.chemblMaxCompounds ?? DEFAULT_RUNTIME_LIMITS.chembl_max_compounds,
+      chembl_max_records: options.chemblMaxRecords ?? DEFAULT_RUNTIME_LIMITS.chembl_max_records,
+    },
+    // ADR-044: GEO supplementary carriers are listing-enumerated server-side.
+    { resolveSupplementaryListing: createGeoSupplementaryListingResolver(options.client) },
+  )) registry.registerProvider(provider);
   return new CoreAcquisitionRuntime({
     ...options,
     sourceAssetRegistry: options.sourceAssetRegistry ?? new SourceAssetRegistry(options.taskId, options.taskRoot),

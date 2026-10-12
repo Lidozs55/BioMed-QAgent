@@ -298,6 +298,34 @@ export function fixedBiomedicalAcquisitionParameters(options: {
       `${options.providerId} does not accept binding parameters; this is a fixed provider — put its identifier in binding.accession and any cross-cutting study context in top-level spec.entities`,
     );
   }
+  if (options.providerId === GEO_FILES_PROVIDER_ID) {
+    // ADR-044: derive the server-vocabulary file selection from the declared
+    // adapter format; agents never name files (FORBIDDEN_PARAMETER_KEY bans
+    // filename-style keys and this derivation keeps it that way).
+    const format = options.bindingParameters.format;
+    const fileClass = format === "supplementary_matrix" || format === "tximport_counts"
+      ? "supplementary"
+      : "series_matrix";
+    const parameters: Record<string, JsonValue> = {
+      source: options.source,
+      accession: options.accession,
+      entities: options.entities,
+      file_class: fileClass,
+    };
+    const supplementIndex = options.bindingParameters.supplement_index;
+    if (supplementIndex !== undefined) {
+      if (fileClass !== "supplementary") {
+        throw new TypeError(
+          "supplement_index is only applicable when the binding format resolves to a supplementary carrier",
+        );
+      }
+      if (typeof supplementIndex !== "number" || !Number.isInteger(supplementIndex) || supplementIndex < 1) {
+        throw new TypeError("supplement_index must be a positive integer");
+      }
+      parameters.supplement_index = supplementIndex;
+    }
+    return parameters;
+  }
   return {
     source: options.source,
     accession: options.accession,

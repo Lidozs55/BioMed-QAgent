@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory is the single index for all architecture decisions through ADR-043.
+This directory is the single index for all architecture decisions through ADR-044.
 ADR-001-016 were extracted verbatim from the legacy top-level index; the original
 discussion history, rejected designs and pitfalls remain in
 [legacy-decisions-and-lessons.md](legacy-decisions-and-lessons.md). ADRs explain why a
@@ -59,6 +59,7 @@ in [migration/README.md](../migration/README.md) as historical evidence.
 | [ADR-041](041-remove-build-domain.md) | Remove Build; resume from events and verified checkpoints | Accepted |
 | [ADR-042](042-production-host-port-and-single-instance.md) | Use OS-assigned port fallback and one production instance per user | Accepted |
 | [ADR-043](043-exact-only-chart-values.md) | Formal chart coordinates require explicit numeric sources; visual estimates never publish | Accepted |
+| [ADR-044](044-verified-canonical-acquisition.md) | Verified canonical acquisition: server-enumerated supplementary carriers (`file_class` + `supplement_index`), no agent filenames | Accepted |
 
 New records use the next available three-digit number and the sections `Status`,
 `Context`, `Decision`, and `Consequences`. A superseding ADR must link both ways;

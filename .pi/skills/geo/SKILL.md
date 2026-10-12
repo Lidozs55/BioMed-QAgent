@@ -79,3 +79,23 @@ different dataset, do not retry the same accession.
 - Two-stage failure judgment: (a) file has no data table (empty series
   matrix) → switch to soft/suppl, the source is still usable; (b) accession
   has no parseable expression data at all → replace the dataset.
+
+## RNA-seq supplementary carriers (ADR-044)
+
+Many RNA-seq series ship a **metadata-only series matrix** (empty
+`!series_matrix_table_begin` block, `!Sample_data_row_count "0"`); the real
+expression table is a supplementary file. Core acquires such carriers
+formally — no agent download is needed or accepted:
+
+- Binding `parameters.format` = `supplementary_matrix` (parsed matrix,
+  `delimiter: ","` for CSV files) or `tximport_counts` — Core derives the
+  supplementary file class from the format automatically.
+- `parameters.supplement_index` (optional, default 1) selects which entry of
+  the series' `suppl/` directory listing to acquire. The listing order is
+  what `list_geo_supplementary_files` returns — call it first, count the
+  position (1-based) of the file you want, then declare that index. Agents
+  cannot name files; the server resolves the filename.
+- Still declare value scale/semantics/unit honestly from the file itself
+  (TPM → `tpm_unstranded` family units; counts → `estimated_count`).
+- Sample metadata for these series comes from the family SOFT via
+  `metadata_files` (task-owned asset), as with any non-matrix carrier.

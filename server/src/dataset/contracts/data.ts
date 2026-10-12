@@ -461,6 +461,10 @@ export interface AdapterParams {
   is_normalized: boolean;
   platform_ids: string[];
   delimiter: string;
+  /** ADR-044: 1-based index into the server-enumerated GEO suppl listing
+   * (Core resolves the filename; agents never name files). Supplementary
+   * carrier formats only. */
+  supplement_index?: number;
 }
 
 const ADAPTER_PARAMS_KEYS = [
@@ -472,6 +476,7 @@ const ADAPTER_PARAMS_KEYS = [
   "is_normalized",
   "platform_ids",
   "delimiter",
+  "supplement_index",
 ] as const;
 
 export function parseAdapterParams(value: unknown): AdapterParams {
@@ -510,6 +515,17 @@ export function parseAdapterParams(value: unknown): AdapterParams {
   if (delimiter !== "auto" && format !== "supplementary_matrix") {
     throw new TypeError("delimiter is only applicable to supplementary_matrix format");
   }
+  const supplementIndex = (() => {
+    if (record.supplement_index === undefined) return undefined;
+    const value = record.supplement_index;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
+      throw new TypeError("AdapterParams.supplement_index must be an integer in [1, 1000]");
+    }
+    return value;
+  })();
+  if (supplementIndex !== undefined && format === "series_matrix") {
+    throw new TypeError("supplement_index is only applicable to supplementary_matrix/tximport_counts formats");
+  }
   return {
     schema_version: parseSchemaVersion(record),
     format,
@@ -527,6 +543,7 @@ export function parseAdapterParams(value: unknown): AdapterParams {
         ? false
         : assertBoolean(record.is_normalized, "AdapterParams.is_normalized"),
     platform_ids: platformIds,
+    supplement_index: supplementIndex,
     delimiter,
   };
 }
