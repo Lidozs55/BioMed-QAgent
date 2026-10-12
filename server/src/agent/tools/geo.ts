@@ -244,18 +244,30 @@ export function createSearchGeoTool(options: GeoToolsOptions): BioMedAgentTool {
     name: "search_geo",
     label: "Search GEO",
     description:
-      "Search NCBI GEO for GSE series records. " +
-      "Parameters: ``query`` (required, search keyword like 'METTL5' or " +
-      "'pancreatic cancer') — ``term`` is accepted as a legacy alias; " +
-      "``max_results`` (optional, default 20). " +
-      "Returns JSON with source, count, and structured GSE records " +
-      "(accession, title, summary, sample_count, platform, etc.).",
+      "Search NCBI GEO for GSE series records. Queries are a literal AND " +
+      "of every word (NCBI ESearch translation), so each extra word " +
+      "shrinks the pool: start with a few broad terms (disease + tissue + " +
+      "the key contrast, e.g. 'breast cancer normal') and keep methodology " +
+      "words (paired, matched, profiling, array) out of the first query. " +
+      "Check ``total_count`` in the response: below ~50 the query is too " +
+      "narrow, not the data scarce — re-query dropping the narrowing words " +
+      "or swapping synonym families (tumor/tumour, paired/matched/adjacent, " +
+      "expression/transcriptome). Pass ``max_results`` up to 200 when " +
+      "scanning a broad pool (default 20 truncates; eligible series can " +
+      "rank 50+). Never conclude that no other qualified datasets exist " +
+      "from one narrow query. Parameters: ``query`` (required, search " +
+      "keyword) — ``term`` is accepted as a legacy alias; ``max_results`` " +
+      "(optional, default 20). Returns JSON with source, total_count, and " +
+      "structured GSE records (accession, title, summary, sample_count, " +
+      "platform, etc.).",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "GEO search keyword, e.g. 'METTL5' or 'pancreatic cancer'.",
+          description:
+            "GEO search keyword, e.g. 'METTL5' or 'pancreatic cancer'. " +
+            "Few broad terms first — every word is ANDed literally.",
         },
         max_results: {
           type: "number",
