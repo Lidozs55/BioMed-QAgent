@@ -10,6 +10,31 @@ enumerate files with `list_geo_supplementary_files`, download with
 `download_geo`, and fetch probe-to-gene annotations with
 `download_geo_platform_annotation`.
 
+## Search strategy
+
+`search_geo` queries are a literal AND of every word (ESearch translation):
+each added word shrinks the pool, and a small hit count means the query is
+too narrow — not that eligible series are scarce.
+
+- First query: few broad terms — disease + tissue + the key contrast
+  (e.g. `breast cancer normal`). Keep methodology words (paired, matched,
+  adjacent, profiling, array) out of the first round.
+- Read `total_count` from the response. Below ~50: re-query without the
+  narrowing words, or swap synonym families (tumor/tumour,
+  paired/matched/adjacent, expression/transcriptome). Example: for a
+  breast-cancer tumor/normal integration task, `breast cancer tumor normal
+  paired expression profiling` matches ~29 series and misses most eligible
+  ones; the synonym-expanded variant without `profiling` matches ~400.
+- Broad pools: pass `max_results` up to 200 — eligible series can rank 50+
+  and the default 20 truncates them.
+- Never conclude "no other qualified dataset exists" from a single narrow
+  query.
+- Integration ("多源"/multi-source) requests target **≥2 qualified series**;
+  when the best available platform ships no annotation table, degrade that
+  series to a probe-level build (`gene_expression.probe_release.v1`)
+  instead of dropping it — one gene-level series plus one probe-level
+  series is a valid integration shape.
+
 ## Vetting (mandatory before any build)
 
 For each candidate GSE, call `describe_geo` and check that the sample
