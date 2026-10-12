@@ -123,6 +123,9 @@ export interface AcquisitionProviderRevisionFacts {
   readonly canonical_accession: string;
   readonly provider_snapshot_identity: string;
   readonly provider_revision_token: string | null;
+  /** ADR-044: server-resolved carrier filename for listing-enumerated
+   * acquisitions (e.g. GEO supplementary); null for fixed-path carriers. */
+  readonly resolved_filename?: string | null;
 }
 
 export interface AcquisitionProviderHandler {
@@ -233,6 +236,7 @@ function trustedProviderRevisionFacts(
     typeof value.canonical_accession !== "string" || value.canonical_accession.trim() === ""
     || typeof value.provider_snapshot_identity !== "string" || value.provider_snapshot_identity.trim() === ""
     || (value.provider_revision_token !== null && typeof value.provider_revision_token !== "string")
+    || (value.resolved_filename !== undefined && value.resolved_filename !== null && typeof value.resolved_filename !== "string")
   ) {
     throw new TypeError("registered acquisition provider revision facts are invalid");
   }
@@ -242,6 +246,9 @@ function trustedProviderRevisionFacts(
     provider_revision_token: value.provider_revision_token === null
       ? null
       : value.provider_revision_token.normalize("NFC").trim(),
+    resolved_filename: value.resolved_filename === undefined || value.resolved_filename === null
+      ? null
+      : value.resolved_filename.normalize("NFC").trim(),
   });
 }
 

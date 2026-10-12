@@ -66,6 +66,18 @@ const ALLOWED_BACKTICK_TOKENS = new Set([
   "preview_core_asset",
   // extract_registered_paper_chart_evidence request parameter name (field, not a tool)
   "supplementary_asset_ids",
+  // geo search/response and ADR-044 supplementary-carrier field and format
+  // names referenced by geo guidance (identifiers, not tools)
+  "total_count",
+  "max_results",
+  "supplement_index",
+  "supplementary_matrix",
+  "tximport_counts",
+  "delimiter",
+  "tpm_unstranded",
+  "estimated_count",
+  // GEO ESearch query literal quoted by the search-strategy example (word, not a tool)
+  "profiling",
 ]);
 
 const SKILL_NAME = /^[a-z][a-z0-9_-]*$/;
