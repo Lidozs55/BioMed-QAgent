@@ -706,7 +706,52 @@ describe("explicit SOFT metadata (Python metadata_path parity)", () => {
           outputDir,
           { metadataPath: soft },
         ),
-      ).rejects.toThrow(/do not match expression sample IDs/);
+      ).rejects.toThrow(/match no SOFT sample title\/alias\/ID/);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  test("supplementary columns reconcile by SOFT title; unmapped columns stay unknown (ADR-044)", async () => {
+    const outputDir = scratchDir();
+    try {
+      // GSE267442-shaped: SOFT registers 2 samples whose titles are the
+      // author column names; the matrix carries one extra unregistered column.
+      const matrix = path.join(outputDir, "all-tpm.tsv");
+      writeFixtureFile(matrix, "gene_id\t428258_T\t428258_N\t428152_T\nTP53\t9.1\t8.2\t7.3\n");
+      const soft = path.join(outputDir, "family.soft");
+      writeFixtureFile(
+        soft,
+        "^SAMPLE = GSM8266836\n!Sample_title = 428258_T\n!Sample_organism_ch1 = Homo sapiens\n" +
+        "^SAMPLE = GSM8266835\n!Sample_title = 428258_N\n!Sample_organism_ch1 = Homo sapiens\n",
+      );
+      const batch = await runAdapter(
+        matrix,
+        params({
+          format: "supplementary_matrix",
+          value_semantics: "normalized_expression",
+          value_scale: "linear",
+          expression_unit: "tpm_unstranded",
+          is_normalized: true,
+        }),
+        outputDir,
+        { metadataPath: soft },
+      );
+      const sampleMetadata = parseCsv(
+        readFileSync(
+          path.join(outputDir, "supporting", "binding_geo_sample_metadata.csv"),
+          "utf8",
+        ),
+      );
+      expect(
+        sampleMetadata.map((row) => [row.sample_id, row.sample_group, row.group_rule_id]),
+      ).toEqual([
+        ["GSM8266836", "unknown", "geo.sample-group.v1"],
+        ["GSM8266835", "unknown", "geo.sample-group.v1"],
+        ["428152_T", "unknown", "geo.suppl-unmapped.v1"],
+      ]);
+      expect(batch.warnings.join("\n")).toMatch(/1 expression column\(s\) without registered sample metadata.*428152_T/);
+      expect(batch.statistics.row_count).toBe(3);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
