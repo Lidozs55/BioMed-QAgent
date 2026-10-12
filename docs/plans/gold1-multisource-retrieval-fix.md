@@ -59,3 +59,19 @@ series matrix 元数据壳 + extract_core_archive 拒收 agent 资产；cohort_f
 
 改动触及 `server/src/`（两个文件均纯文本字符串）：lint/typecheck + server 定向测试
 （phase5 geo-tools 契约有 description 快照时同步更新）；skill md 改动跑 docs:check。
+
+## P3 补充载体路径（原"产品级阻塞"，2026-10-13 已实施并验收）
+
+ADR-044《Verified canonical acquisition》（docs/adr/044）+ SOFT title 对账修复
+（dev@e268cce6）：`file_class`（由 adapter format 推导）+ `supplement_index`
+（服务端枚举列表的 1 基序号；agent 永远不能报文件名——`filename` 在
+`FORBIDDEN_PARAMETER_KEY` 黑名单里，设计保住该不变量）。SOFT 三级对账
+（title→alias→GSM）；无注册元数据的列保留行、`sample_group=unknown`。
+
+**验收链**：GSE267442 打样八阶段全绿（pub_gse267442_gene_tpm_v1，证据
+`data/gold-runs/e268cce6-gold1-suppl-pilot-v2/`）→ gold1 round4（r6，冻结
+prompt，20 分钟双 publication：GSE267442 + **参考集成员 GSE318780**，双
+publication 哈希复核全过，参考集命中 0/3→1/3，证据
+`data/gold-runs/e268cce6-gold1-qwen38flash-r6/`）。遗留：
+`gene_expression.long.v2` 无分组列/metadata artifact（schema 层独立事项）；
+GSE113865 池内可选未选、GSE42568 文本检索不可达。
